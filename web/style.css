@@ -487,5 +487,12 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 
 /* Cuenta de solo Música: sin salidas a Fotos ni Archivos (el servidor tampoco los entrega). */
 .music-only #mtabs-exit, .music-only .side-foot { display: none; }
-.head-btns { display: flex; gap: 8px; flex: none; }
-.section-head .head-btns .btn { margin-top: 12px; }
+/* Opciones excluyentes dentro del diálogo (tipo de acceso al crear un usuario). */
+.ask-choice { display: grid; gap: 8px; }
+.ask-choice[hidden] { display: none; }
+.ask-option { display: flex; align-items: center; gap: 12px; min-height: 52px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius-sm); cursor: pointer; }
+.ask-option:has(input:checked) { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 12%, transparent); }
+.ask-option input { flex: none; width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.ask-option span { display: grid; }
+.ask-option small { font-size: .82rem; }
+.ask-option small { font-weight: 400; }

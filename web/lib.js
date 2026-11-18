@@ -87,7 +87,8 @@ $('#toast-close').onclick = () => ($('#toast').hidden = true);
 // Diálogo de confirmación o nombre (reemplaza confirm/prompt del navegador)
 
 // input: valor inicial del campo (null = sin campo); label y type para pedir algo distinto de un nombre (p. ej. una contraseña).
-export function ask({ heading, text = '', input = null, ok = 'Aceptar', danger = false, cancel = 'Cancelar', label = 'Nombre', type = 'text' }) {
+// choices: opciones excluyentes [{ value, label, hint }] (la primera viene elegida); con ellas se devuelve { text, choice }.
+export function ask({ heading, text = '', input = null, ok = 'Aceptar', danger = false, cancel = 'Cancelar', label = 'Nombre', type = 'text', choices = null }) {
   const d = $('#ask');
   $('#ask-title').textContent = heading;
   $('#ask-text').textContent = text;
@@ -99,6 +100,13 @@ export function ask({ heading, text = '', input = null, ok = 'Aceptar', danger =
   inp.type = type;
   inp.autocomplete = type === 'password' ? 'new-password' : 'off';
   $('#ask-label').textContent = label;
+  const group = $('#ask-choice');
+  group.hidden = !choices;
+  group.setAttribute('aria-label', choices ? 'Tipo de acceso' : '');
+  group.replaceChildren(...(choices ?? []).map((c, i) => {
+    const radio = el('input', { type: 'radio', name: 'ask-choice', value: c.value, checked: i === 0 });
+    return el('label', { className: 'ask-option' }, radio, el('span', {}, el('b', { textContent: c.label }), el('small', { className: 'muted', textContent: c.hint })));
+  }));
   $('#ask-cancel').textContent = cancel;
   $('#ask-ok').textContent = ok;
   $('#ask-ok').className = `btn ${danger ? 'danger' : 'primary'}`;
@@ -106,7 +114,11 @@ export function ask({ heading, text = '', input = null, ok = 'Aceptar', danger =
   d.showModal();
   if (input != null) inp.focus();
   return new Promise((resolve) => {
-    d.onclose = () => resolve(d.returnValue === 'ok' ? (input != null ? inp.value.trim() : true) : null);
+    d.onclose = () => {
+      if (d.returnValue !== 'ok') return resolve(null);
+      const text = input != null ? inp.value.trim() : true;
+      resolve(choices ? { text, choice: group.querySelector('input:checked')?.value } : text);
+    };
   });
 }
 // Enter en el campo acepta: el envío implícito del formulario usaría su primer botón, que es Cancelar.

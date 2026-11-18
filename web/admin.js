@@ -74,15 +74,19 @@ function alerts(s, sp) {
 
 // Usuarios
 
-// Dos niveles: acceso completo (fotos, archivos y música) o invitado de solo música.
-async function newUser(musicOnly) {
-  const name = await ask({
-    heading: musicOnly ? 'Nuevo invitado de música' : 'Nuevo usuario',
-    text: `${musicOnly ? 'Solo podrá entrar a Música: escuchar, armar playlists y pedir descargas. ' : 'Tendrá sus propias fotos y archivos, además de la música. '}El nombre va en minúsculas, con números, - o _.`,
-    input: '', label: 'Usuario', ok: 'Siguiente',
+// Al crear la cuenta se elige su nivel; después se cambia desde el menú del usuario.
+async function newUser() {
+  const who = await ask({
+    heading: 'Nuevo usuario', text: 'El nombre va en minúsculas, con números, - o _.', input: '', label: 'Usuario', ok: 'Siguiente',
+    choices: [
+      { value: 'full', label: 'Acceso completo', hint: 'Sus propias fotos y archivos, y la música.' },
+      { value: 'music', label: 'Solo música', hint: 'Escuchar, armar playlists y pedir descargas.' },
+    ],
   });
-  if (!name) return;
-  const pass = await ask({ heading: `Contraseña de ${name}`, text: 'Mínimo 8 caracteres. Compártela con esa persona por un medio seguro.', input: '', label: 'Contraseña', type: 'password', ok: musicOnly ? 'Crear invitado' : 'Crear usuario' });
+  if (!who?.text) return;
+  const name = who.text;
+  const musicOnly = who.choice === 'music';
+  const pass = await ask({ heading: `Contraseña de ${name}`, text: 'Mínimo 8 caracteres. Compártela con esa persona por un medio seguro.', input: '', label: 'Contraseña', type: 'password', ok: 'Crear usuario' });
   if (pass) send('/api/admin/users', json('POST', { name, pass, musicOnly }), `Listo: ${name} ya puede entrar${musicOnly ? ', solo a Música' : ''}.`);
 }
 
@@ -118,14 +122,10 @@ function userMenu(u, anchor) {
 
 function usersSection(s) {
   const online = (u) => !u.disabled && u.seen && Date.now() / 1000 - u.seen < 120;
-  const add = el('button', { className: 'btn primary small' }, icon('plus'), 'Usuario');
-  add.setAttribute('aria-label', 'Nuevo usuario con acceso completo');
-  add.onclick = () => newUser(false);
-  const guest = el('button', { className: 'btn secondary small' }, icon('music'), 'Invitado');
-  guest.setAttribute('aria-label', 'Nuevo invitado de solo música');
-  guest.onclick = () => newUser(true);
+  const add = el('button', { className: 'btn primary small' }, icon('plus'), 'Nuevo usuario');
+  add.onclick = newUser;
   return [
-    el('div', { className: 'section-head' }, heading('Usuarios', `${s.users.filter(online).length} en línea de ${s.users.length}`), el('span', { className: 'head-btns' }, guest, add)),
+    el('div', { className: 'section-head' }, heading('Usuarios', `${s.users.filter(online).length} en línea de ${s.users.length}`), add),
     el('ul', { className: 'list' }, s.users.map((u) => el('li', { className: `row-wrap${u.disabled ? ' off' : ''}` },
       usageRow(u.musicOnly ? 'audio' : 'image', u.musicOnly ? 'music' : 'user', joinText(u.name, u.admin && 'administrador', u.musicOnly && 'solo música'),
         joinText(u.disabled ? 'Desactivado' : ago(u.seen), plural(u.sessions, 'sesión', 'sesiones'), size(u.bytes)),
