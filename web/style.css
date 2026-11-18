@@ -37,6 +37,9 @@ body { font-size: 16px; line-height: 1.45; -webkit-text-size-adjust: 100%; min-h
 h1, h2, p { margin: 0; }
 a { color: inherit; }
 .muted { color: var(--muted); }
+/* Sin barras de desplazamiento en ninguna pantalla: se sigue desplazando con el dedo, la rueda o el teclado. */
+* { scrollbar-width: none; }
+*::-webkit-scrollbar { display: none; }
 .ellipsis { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
@@ -185,7 +188,7 @@ body:has(#upbar:not([hidden])) { --up-h: 52px; } /* lo último de la vista no qu
 @media (max-width: 899px) { .tracks.covers .num { display: none; } } /* en celular la carátula ocupa el lugar del número */
 li[draggable=true] { cursor: grab; }
 
-.shelf { display: flex; gap: 12px; overflow-x: auto; padding: 4px var(--gutter) 8px; scroll-snap-type: x proximity; scroll-padding-left: var(--gutter); scrollbar-width: thin; }
+.shelf { display: flex; gap: 12px; overflow-x: auto; padding: 4px var(--gutter) 8px; scroll-snap-type: x proximity; scroll-padding-left: var(--gutter); }
 .shelf > .card { flex: 0 0 132px; scroll-snap-align: start; }
 @media (min-width: 900px) { .shelf > .card { flex-basis: 168px; } }
 
@@ -346,7 +349,8 @@ body.has-player.player-tucked:not(.music) .player-tab { display: grid; }
 .toggle[aria-pressed=true] { color: var(--accent); }
 .toggle[aria-pressed=true]::after { content: ""; position: absolute; bottom: 2px; width: 5px; height: 5px; border-radius: 50%; background: currentColor; } /* no depender solo del color */
 
-.tabs { display: flex; height: calc(var(--tabs-h) + var(--safe-b)); padding-bottom: var(--safe-b);
+.tabs { --tabs-b: max(calc(var(--safe-b) - 18px), 0px); /* el indicador de inicio del iPhone cabe en menos que todo el inset */
+  display: flex; height: calc(var(--tabs-h) + var(--tabs-b)); padding-bottom: var(--tabs-b);
   background: color-mix(in srgb, var(--bg) 85%, transparent); border-top: 1px solid var(--line);
   backdrop-filter: saturate(160%) blur(20px); -webkit-backdrop-filter: saturate(160%) blur(20px); }
 .tabs a { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
