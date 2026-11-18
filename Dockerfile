@@ -11,6 +11,6 @@ RUN apk add --no-cache vips-tools vips-heif ffmpeg tzdata
 COPY --from=build /palobox /usr/local/bin/palobox
 ENV DATA_DIR=/data TZ=America/Bogota
 EXPOSE 8080
-# Mismo usuario que breynerciro en el servidor: los archivos quedan a su nombre y Samba los ve.
+# Mismo UID que el dueño de los datos en el servidor: los archivos quedan a su nombre y Samba los ve.
 USER 1000:1000
 ENTRYPOINT ["palobox"]

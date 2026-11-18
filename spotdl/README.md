@@ -4,7 +4,7 @@ Servicio propio (no la imagen oficial de spotDL) que recibe enlaces de Spotify, 
 resuelve con [spotDL](https://spotdl.github.io/spotify-downloader/) y deja los MP3 en
 `/data/media/musica/{artista}/{álbum}/{título}.mp3`. La app Go lo consulta como proxy
 autenticado; el servicio no publica puerto, solo se alcanza por la red de compose y exige
-el token del módulo en cada petición (ver `../modules.go`).
+el token del módulo en cada petición (ver `../internal/module/module.go`).
 
 ## API que consume la interfaz (a través de la app)
 

@@ -1,11 +1,16 @@
-# La imagen se compila en el PC de desarrollo y llega con ./deploy.sh; el servidor no guarda código.
+# Dos formas de usarlo: `docker compose up -d --build` con el código al lado, o ./deploy.sh,
+# que compila en el PC de desarrollo y solo envía las imágenes (el servidor no guarda código).
+# ADMIN, DATA_PATH y TZ salen de .env (ver .env.example).
 services:
   palobox:
     image: palobox
+    build: .
     restart: unless-stopped
     ports: ["127.0.0.1:8080:8080"] # solo para tailscale serve (HTTPS en *.ts.net); ni la LAN ni el tailnet llegan directo
-    volumes: ["/srv/data:/data"]
+    volumes: ["${DATA_PATH:-/srv/data}:/data"]
     environment:
+      ADMIN: ${ADMIN:-admin} # usuario que ve el panel de administrador
+      TZ: ${TZ:-America/Bogota}
       SPOTDL_URL: http://spotdl:8801 # descargas de Spotify; sin el servicio, la sección queda oculta
       SPOTDL_TOKEN_FILE: /run/secrets/spotdl_token # sin token la sección también queda oculta
     secrets: [spotdl_token]
@@ -22,15 +27,16 @@ services:
   # No publica puerto: solo lo alcanza la app por la red de compose, y con su token.
   spotdl:
     image: palobox-spotdl
+    build: ./spotdl
     restart: unless-stopped
     user: "1000:1000" # mismos dueños que la app y Samba
     # Solo la biblioteca y su propio estado: no ve la base de la app ni los archivos de los usuarios.
     volumes:
-      - /srv/data/media/musica:/data/media/musica
-      - /srv/data/.palobox/spotdl:/data/.palobox/spotdl
+      - ${DATA_PATH:-/srv/data}/media/musica:/data/media/musica
+      - ${DATA_PATH:-/srv/data}/.palobox/spotdl:/data/.palobox/spotdl
     secrets: [spotdl_token]
     environment:
-      TZ: America/Bogota
+      TZ: ${TZ:-America/Bogota}
       TOKEN_FILE: /run/secrets/spotdl_token
       # Opcionales, para cuando YouTube pida credenciales:
       # SPOTIFY_CLIENT_ID: ""

@@ -2,5 +2,6 @@
 secrets/
 *.key
 .env
+.claude/
 **/__pycache__/
 /palobox

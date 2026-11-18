@@ -148,7 +148,7 @@ func main() {
 	}
 	a.spotdl.Module = module.Load("SPOTDL", "El servicio de descargas de Spotify")
 	if a.auth.Admin = os.Getenv("ADMIN"); a.auth.Admin == "" {
-		a.auth.Admin = "breyner"
+		a.auth.Admin = "admin"
 	}
 	if len(os.Args) == 4 && os.Args[1] == "adduser" {
 		if err := a.auth.AddUser(os.Args[2], os.Args[3]); err != nil {
