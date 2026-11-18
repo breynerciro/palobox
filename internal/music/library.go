@@ -1,7 +1,7 @@
 package music
 
-// Biblioteca compartida por todos los usuarios y de solo lectura: la llena spotDL
-// o se copia por Samba a media/musica.
+// Biblioteca compartida por todos los usuarios: la llena spotDL o se copia por Samba a media/musica.
+// La app solo la toca para unir álbumes partidos y borrar canciones duplicadas (dedupe.go).
 // shortcut: reproducción directa, sin transcodificar: cada dispositivo reproduce solo los formatos que soporta.
 
 import (
