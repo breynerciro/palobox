@@ -8,7 +8,7 @@
   --line: #2c2c3f;
   --text: #f4f5fa;
   --muted: #a3a8ba;          /* 8,1:1 sobre --bg */
-  --accent: #b98aff;         /* 7,6:1 sobre --bg; violeta del logo */
+  --accent: #4fb6c6;         /* 8,3:1 sobre --bg; cyan sereno: se nota sin gritar */
   --on-accent: #0a0a12;
   --danger: #ff8a8a;
   --success: #4ade9a;
@@ -16,7 +16,7 @@
   --t-folder: #b98aff;
   --t-image: #ff86a2;
   --t-video: #fb923c;
-  --t-audio: #3fe6fb;
+  --t-audio: #4fb6c6; /* igual al acento: dos cyan parecidos se verían como un error */
   --t-doc: #60a5fa;
 
   --radius: 14px;
