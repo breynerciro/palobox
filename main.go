@@ -20,6 +20,8 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+
+	"palobox/internal/media"
 )
 
 //go:embed web
@@ -48,7 +50,8 @@ CREATE INDEX IF NOT EXISTS plays_user ON plays(user_id, path);`
 type app struct {
 	db      *sql.DB
 	data    string
-	sem     chan struct{} // miniaturas simultáneas: el servidor tiene 2 núcleos
+	sem     chan struct{} // procesos pesados simultáneos (ffmpeg, vips): el servidor tiene 2 núcleos
+	thumbs  media.Thumbs
 	loginMu sync.Mutex
 	upMu    sync.Map   // id de subida -> *sync.Mutex: un POST o PATCH a la vez por subida
 	finMu   sync.Mutex // una foto a la vez pasa de "¿duplicado?" a quedar en el índice
@@ -78,7 +81,8 @@ func open(data string) (*app, error) {
 	}
 	// Bases creadas antes del panel de administrador; falla sin daño si la columna ya existe.
 	db.Exec(`ALTER TABLE users ADD COLUMN seen INTEGER NOT NULL DEFAULT 0`)
-	a := &app{db: db, data: data, sem: make(chan struct{}, 2)}
+	sem := make(chan struct{}, 2)
+	a := &app{db: db, data: data, sem: sem, thumbs: media.Thumbs{Dir: filepath.Join(data, ".palobox", "thumbs"), Sem: sem}}
 	// Subidas abandonadas hace más de una semana.
 	if es, err := os.ReadDir(a.tmp("")); err == nil {
 		for _, e := range es {

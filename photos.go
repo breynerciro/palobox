@@ -56,7 +56,7 @@ func (a *app) photo(w http.ResponseWriter, r *http.Request, u user) error {
 		}
 		http.ServeFile(w, r, src)
 	case v == "t", v == "p" && kind == "image":
-		dst, err := a.thumb(sha, src, kind, v)
+		dst, err := a.thumbs.Get(sha, src, kind, v)
 		if err != nil {
 			return err
 		}
@@ -77,7 +77,7 @@ func (a *app) photoDelete(w http.ResponseWriter, r *http.Request, u user) error 
 		return err
 	}
 	for _, v := range []string{"t", "p"} {
-		os.Remove(filepath.Join(a.data, ".palobox", "thumbs", sha+"_"+v+".jpg"))
+		os.Remove(a.thumbs.Path(sha, v))
 	}
 	_, err := a.db.Exec(`DELETE FROM media WHERE id = ? AND user_id = ?`, r.PathValue("id"), u.id)
 	return err

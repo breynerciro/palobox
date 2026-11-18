@@ -13,19 +13,12 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
+
+	"palobox/internal/media"
 )
 
-var mediaLibs = map[string]func(string) bool{
-	"musica": func(name string) bool {
-		switch strings.ToLower(filepath.Ext(name)) {
-		case ".mp3", ".m4a", ".aac", ".flac", ".wav", ".ogg", ".opus":
-			return true
-		}
-		return false
-	},
-}
+var mediaLibs = map[string]func(string) bool{"musica": media.IsAudio}
 
 // mediaPath resuelve la ruta pedida dentro de la biblioteca ?lib= y devuelve su filtro de archivos.
 func (a *app) mediaPath(r *http.Request) (string, func(string) bool, error) {
@@ -54,36 +47,6 @@ func (a *app) mediaRaw(w http.ResponseWriter, r *http.Request, u user) error {
 	return nil
 }
 
-var coverRe = regexp.MustCompile(`(?i)^(cover|folder|front)\.(jpe?g|png|webp)$`)
-
-// coverSource busca la imagen de una carpeta: cover.jpg / folder.jpg o la carátula de su primer
-// audio. Un artista (solo subcarpetas) usa la de su primer álbum: depth dice cuántos niveles bajar.
-func coverSource(dir string, keep func(string) bool, depth int) (src, kind string) {
-	es, _ := os.ReadDir(dir)
-	for _, e := range es {
-		if e.IsDir() || strings.HasPrefix(e.Name(), ".") {
-			continue
-		}
-		if coverRe.MatchString(e.Name()) {
-			return filepath.Join(dir, e.Name()), "image"
-		}
-		if src == "" && keep(e.Name()) {
-			src = filepath.Join(dir, e.Name())
-		}
-	}
-	if src != "" || depth == 0 {
-		return src, "audio"
-	}
-	for _, e := range es {
-		if e.IsDir() && !strings.HasPrefix(e.Name(), ".") {
-			if src, kind = coverSource(filepath.Join(dir, e.Name()), keep, depth-1); src != "" {
-				return src, kind
-			}
-		}
-	}
-	return "", ""
-}
-
 // mediaThumb devuelve la portada de una canción o carpeta; 404 si no hay.
 func (a *app) mediaThumb(w http.ResponseWriter, r *http.Request, u user) error {
 	p, keep, err := a.mediaPath(r)
@@ -96,7 +59,7 @@ func (a *app) mediaThumb(w http.ResponseWriter, r *http.Request, u user) error {
 		return err
 	}
 	if st.IsDir() {
-		if p, kind = coverSource(p, keep, 1); p == "" {
+		if p, kind = media.CoverSource(p, keep, 1); p == "" {
 			return fs.ErrNotExist
 		}
 		if st, err = os.Stat(p); err != nil {
@@ -106,7 +69,7 @@ func (a *app) mediaThumb(w http.ResponseWriter, r *http.Request, u user) error {
 		return fs.ErrNotExist
 	}
 	sum := sha256.Sum256(fmt.Appendf(nil, "%s|%d|%d", p, st.Size(), st.ModTime().UnixNano()))
-	dst, err := a.thumb(hex.EncodeToString(sum[:]), p, kind, "t")
+	dst, err := a.thumbs.Get(hex.EncodeToString(sum[:]), p, kind, "t")
 	if err != nil {
 		return err
 	}

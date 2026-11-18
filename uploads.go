@@ -29,6 +29,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"palobox/internal/media"
 )
 
 // maxUpload es el tamaño máximo de una subida: el tamaño lo declara el cliente.
@@ -280,7 +282,7 @@ func (a *app) finalize(u user, m upMeta, part string) (dup bool, err error) {
 	// La fecha (vips/ffmpeg, hasta 15 s) solo lee el .part propio: va fuera del candado para
 	// que las subidas en paralelo no esperen en fila.
 	kind := mediaKind(m.Name)
-	taken := takenAt(part, kind)
+	taken := media.TakenAt(part, kind)
 	if taken.IsZero() {
 		taken = time.UnixMilli(m.Mtime)
 	}
@@ -302,7 +304,7 @@ func (a *app) finalize(u user, m upMeta, part string) (dup bool, err error) {
 		os.Remove(dst) // sin fila en el índice el archivo quedaría huérfano
 		return false, err
 	}
-	go a.thumb(sha, dst, kind, "t") // si falla, se reintenta al pedir la miniatura
+	go a.thumbs.Get(sha, dst, kind, "t") // si falla, se reintenta al pedir la miniatura
 	return false, nil
 }
 
