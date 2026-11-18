@@ -236,7 +236,7 @@ async function linkView(link) {
 // El servicio decide los estados: queued/downloading corren, error se puede reintentar y
 // finished ya no es una fila sino un aviso que se muestra una vez y se borra.
 const ACTIVE = { queued: 'En cola', downloading: 'Descargando' };
-function jobRow(j, repaint) {
+export function jobRow(j, repaint) {
   const active = j.status in ACTIVE;
   const again = j.attempts > 1; // un reintento: solo las canciones que fallaron
   const title = j.title || 'Descarga de Spotify';

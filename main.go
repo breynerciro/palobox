@@ -49,13 +49,15 @@ func open(data string) (*app, error) {
 	}
 	sem := make(chan struct{}, 2) // procesos pesados simultáneos (ffmpeg, vips): el servidor tiene 2 núcleos
 	thumbs := media.Thumbs{Dir: filepath.Join(data, ".palobox", "thumbs"), Sem: sem}
+	au := &auth.Service{DB: db}
+	lib := &music.Library{DB: db, Data: data, Sem: sem, Thumbs: thumbs}
 	return &app{
-		auth:    &auth.Service{DB: db},
-		admin:   &admin.Handler{DB: db, Data: data},
+		auth:    au,
+		admin:   &admin.Handler{DB: db, Data: data, Auth: au, Music: lib},
 		files:   &files.Handler{Data: data},
 		photos:  &photos.Handler{DB: db, Data: data, Thumbs: thumbs},
 		uploads: uploads.New(db, data, thumbs),
-		music:   &music.Library{DB: db, Data: data, Sem: sem, Thumbs: thumbs},
+		music:   lib,
 		spotdl:  &spotdl.Handler{},
 	}, nil
 }
@@ -69,6 +71,14 @@ func (a *app) routes() http.Handler {
 		return httpx.WriteJSON(w, 200, map[string]any{"name": u.Name, "admin": u.Admin})
 	}))
 	mux.HandleFunc("GET /api/admin", auth(a.admin.Stats))
+	mux.HandleFunc("POST /api/admin/users", auth(a.admin.CreateUser))
+	mux.HandleFunc("PUT /api/admin/users/{name}/password", auth(a.admin.SetPassword))
+	mux.HandleFunc("PUT /api/admin/users/{name}/disabled", auth(a.admin.SetDisabled))
+	mux.HandleFunc("DELETE /api/admin/users/{name}", auth(a.admin.DeleteUser))
+	mux.HandleFunc("DELETE /api/admin/users/{name}/sessions", auth(a.admin.CloseUserSessions))
+	mux.HandleFunc("DELETE /api/admin/sessions/{id}", auth(a.admin.CloseSession))
+	mux.HandleFunc("POST /api/admin/music/reindex", auth(a.admin.Reindex))
+	mux.HandleFunc("GET /api/admin/spotdl", auth(a.spotdl.Health))
 	mux.HandleFunc("POST /api/uploads", auth(a.uploads.Start))
 	mux.HandleFunc("PATCH /api/uploads/{id}", auth(a.uploads.Part))
 	mux.HandleFunc("GET /api/photos", auth(a.photos.List))

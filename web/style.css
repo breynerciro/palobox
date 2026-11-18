@@ -449,3 +449,5 @@ body.has-player.player-tucked:not(.music) .player-tab { display: grid; }
 .type.online { position: relative; }
 .type.online::after { content: ""; position: absolute; right: -2px; bottom: -2px; width: 12px; height: 12px; border-radius: 50%;
   background: var(--success); border: 2px solid var(--surface); } /* el texto de la fila también dice "En línea ahora" */
+.alerts { margin-top: 8px; margin-bottom: 8px; }
+.row-wrap.off .row-text { opacity: .55; } /* cuenta desactivada; el texto también lo dice */

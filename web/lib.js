@@ -86,7 +86,8 @@ $('#toast-close').onclick = () => ($('#toast').hidden = true);
 
 // Diálogo de confirmación o nombre (reemplaza confirm/prompt del navegador)
 
-export function ask({ heading, text = '', input = null, ok = 'Aceptar', danger = false }) {
+// input: valor inicial del campo (null = sin campo); label y type para pedir algo distinto de un nombre (p. ej. una contraseña).
+export function ask({ heading, text = '', input = null, ok = 'Aceptar', danger = false, cancel = 'Cancelar', label = 'Nombre', type = 'text' }) {
   const d = $('#ask');
   $('#ask-title').textContent = heading;
   $('#ask-text').textContent = text;
@@ -94,7 +95,11 @@ export function ask({ heading, text = '', input = null, ok = 'Aceptar', danger =
   const inp = $('#ask-input');
   inp.hidden = input == null;
   inp.value = input ?? '';
-  inp.placeholder = input != null ? 'Nombre' : '';
+  inp.placeholder = input != null ? label : '';
+  inp.type = type;
+  inp.autocomplete = type === 'password' ? 'new-password' : 'off';
+  $('#ask-label').textContent = label;
+  $('#ask-cancel').textContent = cancel;
   $('#ask-ok').textContent = ok;
   $('#ask-ok').className = `btn ${danger ? 'danger' : 'primary'}`;
   d.returnValue = '';

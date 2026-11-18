@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"palobox/internal/httpx"
@@ -28,6 +29,22 @@ type Library struct {
 	Thumbs media.Thumbs
 	idxMu  sync.Mutex // un recorrido del índice a la vez
 	idxAt  time.Time  // último recorrido completo; lo protege idxMu
+
+	// Para el panel de administrador, legibles sin esperar a idxMu.
+	scanning atomic.Bool
+	scanned  atomic.Int64 // fin del último recorrido completo, en segundos
+	removed  atomic.Int64 // canciones duplicadas borradas desde que arrancó la app
+}
+
+// Status resume la biblioteca para el panel de administrador.
+func (l *Library) Status() (map[string]any, error) {
+	var tracks, albums, artists int
+	var secs float64
+	var bytes int64
+	err := l.DB.QueryRow(`SELECT COUNT(*), COUNT(DISTINCT album_dir), COUNT(DISTINCT artist_dir), COALESCE(SUM(dur), 0), COALESCE(SUM(size), 0) FROM tracks`).
+		Scan(&tracks, &albums, &artists, &secs, &bytes)
+	return map[string]any{"tracks": tracks, "albums": albums, "artists": artists, "seconds": int64(secs), "bytes": bytes,
+		"scanning": l.scanning.Load(), "scanned": l.scanned.Load(), "removed": l.removed.Load()}, err
 }
 
 // Reindex fuerza un recorrido del disco sin esperar el intervalo entre recorridos.

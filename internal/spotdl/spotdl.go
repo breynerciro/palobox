@@ -5,6 +5,7 @@
 package spotdl
 
 import (
+	"errors"
 	"net/http"
 	"regexp"
 	"strings"
@@ -115,4 +116,22 @@ func (h *Handler) Retry(w http.ResponseWriter, r *http.Request, u httpx.User) er
 	}
 	job.Mine = job.Owner == u.Name || u.Admin
 	return httpx.WriteJSON(w, 200, job)
+}
+
+// Health es el estado del servicio para el panel de administrador: si responde, versiones y trabajos activos.
+func (h *Handler) Health(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	if !u.Admin {
+		return httpx.Error(403, "solo para el administrador")
+	}
+	if h.Module.URL == "" {
+		return httpx.WriteJSON(w, 200, map[string]any{"enabled": false})
+	}
+	out := map[string]any{}
+	if err := h.Module.Do(u, "GET", "/health", nil, &out); err != nil {
+		var he httpx.Err
+		errors.As(err, &he)
+		return httpx.WriteJSON(w, 200, map[string]any{"enabled": true, "ok": false, "error": he.Msg})
+	}
+	out["enabled"] = true
+	return httpx.WriteJSON(w, 200, out)
 }

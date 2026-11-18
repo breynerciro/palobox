@@ -137,7 +137,9 @@ func (l *Library) relocate(old, keep string, move bool) {
 	_, err := os.Stat(dst)
 	switch {
 	case err == nil:
-		err = os.Remove(src)
+		if err = os.Remove(src); err == nil {
+			l.removed.Add(1)
+		}
 	case move && errors.Is(err, fs.ErrNotExist):
 		did = "movido a " + keep
 		err = os.Rename(src, dst)

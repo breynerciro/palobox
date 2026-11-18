@@ -280,3 +280,125 @@ func TestInterfazRevalida(t *testing.T) {
 		t.Fatalf("con la misma huella debe responder 304, no %d", res.StatusCode)
 	}
 }
+
+// Control del administrador: usuarios, sesiones y registro de entradas.
+func TestAdminControl(t *testing.T) {
+	data := t.TempDir()
+	a, err := open(data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.auth.Admin = "ana"
+	for _, n := range []string{"ana", "luis"} {
+		if err := a.auth.AddUser(n, "clave-segura"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := httptest.NewServer(a.routes())
+	defer srv.Close()
+	newClient := func() client {
+		jar, _ := cookiejar.New(nil)
+		return client{t, srv.URL, &http.Client{Jar: jar}}
+	}
+	ana, luis, pepe := newClient(), newClient(), newClient()
+	if luis.login("luis", "mala") != 401 || ana.login("ana", "clave-segura") != 200 || luis.login("luis", "clave-segura") != 200 {
+		t.Fatal("login")
+	}
+	me := func(c client) int { code, _, _ := c.do("GET", "/api/me", nil); return code }
+	put := func(path string, v any) int { code, _, _ := ana.do("PUT", path, mustJSON(v)); return code }
+
+	// Solo el administrador.
+	for _, r := range [][2]string{{"POST", "/api/admin/users"}, {"DELETE", "/api/admin/users/ana"}, {"POST", "/api/admin/music/reindex"}, {"GET", "/api/admin/spotdl"}} {
+		if code, _, _ := luis.do(r[0], r[1], mustJSON(map[string]string{"name": "x", "pass": "clave-segura"})); code != 403 {
+			t.Fatalf("%s %s sin ser admin: %d", r[0], r[1], code)
+		}
+	}
+
+	// Crear usuarios.
+	create := func(name, pass string) int {
+		code, _, _ := ana.do("POST", "/api/admin/users", mustJSON(map[string]string{"name": name, "pass": pass}))
+		return code
+	}
+	if create("pepe", "clave-de-pepe") != 200 || create("pepe", "clave-de-pepe") != 409 || create("../x", "clave-de-pepe") != 400 || create("otro", "corta") != 400 {
+		t.Fatal("crear usuario")
+	}
+	if pepe.login("pepe", "clave-de-pepe") != 200 {
+		t.Fatal("el usuario creado debe poder entrar")
+	}
+
+	// El panel lista sesiones y entradas, incluida la fallida.
+	_, m, raw := ana.do("GET", "/api/admin", nil)
+	ss, _ := m["sessions"].([]any)
+	ls, _ := m["logins"].([]any)
+	current := 0
+	for _, s := range ss {
+		if s.(map[string]any)["current"] == true {
+			current++
+		}
+	}
+	if len(ss) != 3 || current != 1 || len(ls) != 4 || m["failed24h"].(float64) != 1 || m["music"] == nil {
+		t.Fatalf("panel: %s", raw)
+	}
+
+	// Desactivar saca al usuario y no lo deja entrar; al administrador no se le puede hacer.
+	if put("/api/admin/users/pepe/disabled", map[string]bool{"disabled": true}) != 200 || me(pepe) != 401 || pepe.login("pepe", "clave-de-pepe") != 403 {
+		t.Fatal("desactivar")
+	}
+	if put("/api/admin/users/ana/disabled", map[string]bool{"disabled": true}) != 400 || put("/api/admin/users/nadie/disabled", map[string]bool{"disabled": true}) != 404 {
+		t.Fatal("desactivar al admin o a alguien que no existe")
+	}
+	if put("/api/admin/users/pepe/disabled", map[string]bool{"disabled": false}) != 200 || pepe.login("pepe", "clave-de-pepe") != 200 {
+		t.Fatal("reactivar")
+	}
+
+	// Cambiar la contraseña cierra sus sesiones; la del admin que se la cambia a sí mismo sigue abierta.
+	if put("/api/admin/users/pepe/password", map[string]string{"pass": "nueva-clave"}) != 200 || me(pepe) != 401 ||
+		pepe.login("pepe", "clave-de-pepe") != 401 || pepe.login("pepe", "nueva-clave") != 200 {
+		t.Fatal("cambiar contraseña")
+	}
+	if put("/api/admin/users/ana/password", map[string]string{"pass": "otra-clave"}) != 200 || me(ana) != 200 {
+		t.Fatal("cambiar la propia contraseña no debe cerrar la sesión actual")
+	}
+
+	// Cerrar una sesión puntual o todas las de un usuario.
+	_, m, _ = ana.do("GET", "/api/admin", nil)
+	for _, s := range m["sessions"].([]any) {
+		if s := s.(map[string]any); s["user"] == "luis" {
+			ana.do("DELETE", fmt.Sprintf("/api/admin/sessions/%v", s["id"]), nil)
+		}
+	}
+	if me(luis) != 401 || me(pepe) != 200 {
+		t.Fatal("cerrar una sesión")
+	}
+	if code, _, _ := ana.do("DELETE", "/api/admin/users/pepe/sessions", nil); code != 200 || me(pepe) != 401 {
+		t.Fatal("cerrar las sesiones de un usuario")
+	}
+
+	// Borrar: sin files la carpeta queda; con files=1 se va. Al admin no se le borra.
+	for _, n := range []string{"pepe", "luis"} {
+		os.MkdirAll(filepath.Join(data, n, "archivos"), 0o755)
+	}
+	if code, _, _ := ana.do("DELETE", "/api/admin/users/pepe?files=1", nil); code != 200 || pepe.login("pepe", "nueva-clave") != 401 {
+		t.Fatal("borrar usuario")
+	}
+	if _, err := os.Stat(filepath.Join(data, "pepe")); !os.IsNotExist(err) {
+		t.Fatal("con files=1 la carpeta debe borrarse")
+	}
+	if code, _, _ := ana.do("DELETE", "/api/admin/users/luis", nil); code != 200 {
+		t.Fatal("borrar sin archivos")
+	}
+	if _, err := os.Stat(filepath.Join(data, "luis", "archivos")); err != nil {
+		t.Fatal("sin files la carpeta debe quedar")
+	}
+	if code, _, _ := ana.do("DELETE", "/api/admin/users/ana", nil); code != 400 {
+		t.Fatal("el admin no se puede borrar")
+	}
+
+	// Biblioteca y descargas.
+	if code, _, _ := ana.do("POST", "/api/admin/music/reindex", nil); code != 200 {
+		t.Fatal("reindexar")
+	}
+	if _, m, _ := ana.do("GET", "/api/admin/spotdl", nil); m["enabled"] != false {
+		t.Fatalf("sin servicio de descargas: %v", m)
+	}
+}

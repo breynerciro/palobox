@@ -164,6 +164,8 @@ func (l *Library) Sync() {
 	if time.Since(l.idxAt) < idxEvery {
 		return
 	}
+	l.scanning.Store(true)
+	defer l.scanning.Store(false)
 	root := l.musicRoot()
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		log.Print("índice de música: ", err)
@@ -236,6 +238,7 @@ func (l *Library) Sync() {
 	}
 	l.dedupe()
 	l.idxAt = time.Now()
+	l.scanned.Store(l.idxAt.Unix())
 }
 
 // fresh actualiza el índice antes de responder, sin hacer esperar más de 2 s por una biblioteca recién copiada.

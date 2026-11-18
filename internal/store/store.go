@@ -29,7 +29,8 @@ CREATE TABLE IF NOT EXISTS playlists(id INTEGER PRIMARY KEY, user_id INTEGER NOT
 CREATE TABLE IF NOT EXISTS playlist_tracks(playlist_id INTEGER NOT NULL, path TEXT NOT NULL, pos INTEGER NOT NULL, PRIMARY KEY(playlist_id, path));
 CREATE TABLE IF NOT EXISTS plays(user_id INTEGER NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS plays_user ON plays(user_id, path);
-CREATE TABLE IF NOT EXISTS saved(user_id INTEGER NOT NULL, kind TEXT NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(user_id, kind, path));`
+CREATE TABLE IF NOT EXISTS saved(user_id INTEGER NOT NULL, kind TEXT NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(user_id, kind, path));
+CREATE TABLE IF NOT EXISTS logins(at INTEGER NOT NULL, name TEXT NOT NULL, ok INTEGER NOT NULL, ip TEXT NOT NULL, agent TEXT NOT NULL);`
 
 // Open crea las carpetas internas de data/.palobox y abre la base con el esquema al día.
 func Open(data string) (*sql.DB, error) {
@@ -47,6 +48,12 @@ func Open(data string) (*sql.DB, error) {
 	}
 	// Bases creadas antes del panel de administrador; falla sin daño si la columna ya existe.
 	db.Exec(`ALTER TABLE users ADD COLUMN seen INTEGER NOT NULL DEFAULT 0`)
+	// Columnas del control de usuarios y sesiones; mismas reglas que la anterior.
+	for _, col := range []string{"users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
+		"sessions ADD COLUMN created INTEGER NOT NULL DEFAULT 0", "sessions ADD COLUMN seen INTEGER NOT NULL DEFAULT 0",
+		"sessions ADD COLUMN ip TEXT NOT NULL DEFAULT ''", "sessions ADD COLUMN agent TEXT NOT NULL DEFAULT ''"} {
+		db.Exec(`ALTER TABLE ` + col)
+	}
 	// Índices anteriores al género: la columna nace vacía y mtime = -1 hace que Sync vuelva a leer las etiquetas.
 	if _, err := db.Exec(`ALTER TABLE tracks ADD COLUMN genre TEXT NOT NULL DEFAULT ''`); err == nil {
 		db.Exec(`UPDATE tracks SET mtime = -1`)
