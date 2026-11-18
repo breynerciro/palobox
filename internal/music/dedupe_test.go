@@ -211,6 +211,24 @@ func TestSencilloConOtraDuracionPasaAlAlbum(t *testing.T) {
 	}
 }
 
+// "Desde Abajo" tiene 5 pistas: se llama como la canción pero es álbum, así que rige el límite de 3 s.
+func TestAlbumQueSeLlamaComoLaCancionNoEsSencillo(t *testing.T) {
+	files := map[string]time.Time{"Alcolirykoz/Otro Disco/Desde Abajo.mp3": antes}
+	for _, n := range []string{"Desde Abajo", "A", "B", "C", "D"} {
+		files["Alcolirykoz/Desde Abajo/"+n+".mp3"] = antes
+	}
+	l := biblioteca(t, files)
+	l.Sync()
+	l.exec(t, `UPDATE tracks SET dur = 232`)
+	l.exec(t, `UPDATE tracks SET dur = 244 WHERE path = 'Alcolirykoz/Desde Abajo/Desde Abajo.mp3'`)
+	l.dedupe()
+	for rel := range files {
+		if !existe(l, rel) {
+			t.Fatalf("no debía borrarse %s", rel)
+		}
+	}
+}
+
 // Entre dos álbumes sigue el límite de 3 s: 12 s de diferencia son dos canciones distintas.
 func TestDosAlbumesConOtraDuracionNoSeTocan(t *testing.T) {
 	files := map[string]time.Time{"Alcolirykoz/Uno/Changó.mp3": antes, "Alcolirykoz/Dos/Changó.mp3": antes}

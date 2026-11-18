@@ -575,14 +575,15 @@ def filter_plan(songs, index):
         artists = {norm(a) for a in [song.get("artist"), *(song.get("artists") or [])] if norm(a)}
         title = norm(song.get("name"))
         paths = {p for a in artists for p in index.get((a, title), ())}
-        # spotDL nombra la carpeta del sencillo como la canción.
-        single = norm(song.get("album_name")) == title
+        # spotDL nombra la carpeta del sencillo como la canción; Spotify solo llama sencillo a un
+        # lanzamiento de 1 a 3 canciones, así que un álbum que se llama como una de ellas no lo es.
+        single = norm(song.get("album_name")) == title and (song.get("tracks_count") or 0) <= 3
         found = any(
             t and norm(t["title"]) == title and artists & {norm(a) for a in t["artists"]}
             and (
                 abs(t["duration"] - (song.get("duration") or 0)) <= 3
                 and t["total"] >= (song.get("tracks_count") or 0)
-                or single and norm(os.path.basename(os.path.dirname(p))) != title
+                or single and (norm(os.path.basename(os.path.dirname(p))) != title or t["total"] > 3)
             )
             for p, t in ((p, read(p)) for p in sorted(paths))
         )

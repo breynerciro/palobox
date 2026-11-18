@@ -102,7 +102,8 @@ func (l *Library) dropDuplicates(all []idxTrack) {
 		}
 	}
 	// spotDL nombra la carpeta del sencillo como la canción: el álbum gana siempre, aunque tenga una sola pista.
-	single := func(t idxTrack) bool { return fold(path.Base(t.album)) == fold(t.title) }
+	// Spotify solo llama sencillo a un lanzamiento de 1 a 3 canciones: un álbum que se llama como una de ellas no lo es.
+	single := func(t idxTrack) bool { return fold(path.Base(t.album)) == fold(t.title) && size[t.album] <= 3 }
 	for _, g := range groups {
 		sort.Slice(g, func(i, j int) bool {
 			if a, b := single(g[i]), single(g[j]); a != b {

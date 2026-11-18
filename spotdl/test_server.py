@@ -211,6 +211,16 @@ class FiltroTest(unittest.TestCase):
     def test_llega_album_con_otra_duracion_y_esta_otro_album(self):
         self.assertEqual(self.filtrar([("Penyair", "Otro Disco", "Nada", 232, 12)], self.cancion(dur=244, pistas=12)), "baja")
 
+    def test_album_que_se_llama_como_la_cancion_no_es_sencillo(self):
+        c = self.cancion(nombre="Desde Abajo", dur=244, pistas=19)
+        c["album_name"] = "Desde Abajo"
+        self.assertEqual(self.filtrar([("Penyair", "Otro Disco", "Desde Abajo", 232, 12)], c), "baja")
+
+    def test_llega_sencillo_y_en_disco_esta_un_album_que_se_llama_como_la_cancion(self):
+        c = self.cancion(nombre="Desde Abajo", dur=244)
+        c["album_name"] = "Desde Abajo"
+        self.assertEqual(self.filtrar([("Penyair", "Desde Abajo", "Desde Abajo", 232, 5)], c), "salta")
+
     def test_otro_artista(self):
         self.assertEqual(self.filtrar([("Otro", "La Ley del Todo", "Nada", 180, 12)], self.cancion()), "baja")
 
