@@ -87,7 +87,7 @@ func (l *Library) mergeAlbums(all []idxTrack) {
 }
 
 // dropDuplicates borra la misma canción repetida en otro álbum del mismo artista y se queda
-// con la del álbum con más pistas (en empate, la más antigua).
+// con la del álbum con más pistas; en empate, la que no está en carpeta de sencillo y luego la más antigua.
 func (l *Library) dropDuplicates(all []idxTrack) {
 	size := map[string]int{}
 	groups := map[string][]idxTrack{}
@@ -99,10 +99,15 @@ func (l *Library) dropDuplicates(all []idxTrack) {
 			groups[k] = append(groups[k], t)
 		}
 	}
+	// spotDL nombra la carpeta del sencillo como la canción: así un álbum a medio bajar le gana al sencillo.
+	single := func(t idxTrack) bool { return fold(path.Base(t.album)) == fold(t.title) }
 	for _, g := range groups {
 		sort.Slice(g, func(i, j int) bool {
 			if a, b := size[g[i].album], size[g[j].album]; a != b {
 				return a > b
+			}
+			if a, b := single(g[i]), single(g[j]); a != b {
+				return b
 			}
 			return g[i].mtime < g[j].mtime
 		})

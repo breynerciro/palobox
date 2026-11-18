@@ -92,6 +92,21 @@ func TestSencilloPasaAlAlbum(t *testing.T) {
 	}
 }
 
+// Álbum a medio bajar: una sola pista, empata con el sencillo y es más nuevo; igual gana el álbum.
+func TestAlbumAMedioBajarGana(t *testing.T) {
+	const sencillo, delAlbum = "Penyair/Nada/Nada.mp3", "Penyair/La Ley del Todo/Nada.mp3"
+	l := biblioteca(t, map[string]time.Time{sencillo: antes, delAlbum: despues})
+	l.Sync()
+	l.exec(t, `UPDATE tracks SET dur = 200`)
+	l.dedupe()
+	if existe(l, sencillo) || !existe(l, delAlbum) {
+		t.Fatal("debía quedar la versión del álbum")
+	}
+	if got := l.lista(t, `SELECT path FROM tracks`); got != delAlbum {
+		t.Fatalf("índice: %s", got)
+	}
+}
+
 func TestAlbumPartidoSeUne(t *testing.T) {
 	l := biblioteca(t, map[string]time.Time{
 		"Penyair/La Ley del Todo/A.mp3": despues,
