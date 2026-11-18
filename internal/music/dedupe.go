@@ -88,6 +88,8 @@ func (l *Library) mergeAlbums(all []idxTrack) {
 
 // dropDuplicates borra la misma canción repetida en otro álbum del mismo artista y se queda
 // con la que no está en carpeta de sencillo; en empate, la del álbum con más pistas y luego la más antigua.
+// Son la misma si duran ±3 s, o a cualquier duración si una es sencillo y la otra no (radio edit,
+// otra intro); entre dos álbumes se exige la duración para no mezclar dos "Intro" distintas.
 func (l *Library) dropDuplicates(all []idxTrack) {
 	size := map[string]int{}
 	groups := map[string][]idxTrack{}
@@ -100,7 +102,8 @@ func (l *Library) dropDuplicates(all []idxTrack) {
 		}
 	}
 	// spotDL nombra la carpeta del sencillo como la canción: el álbum gana siempre, aunque tenga una sola pista.
-	single := func(t idxTrack) bool { return fold(path.Base(t.album)) == fold(t.title) }
+	// Spotify solo llama sencillo a un lanzamiento de 1 a 3 canciones: un álbum que se llama como una de ellas no lo es.
+	single := func(t idxTrack) bool { return fold(path.Base(t.album)) == fold(t.title) && size[t.album] <= 3 }
 	for _, g := range groups {
 		sort.Slice(g, func(i, j int) bool {
 			if a, b := single(g[i]), single(g[j]); a != b {
@@ -115,7 +118,7 @@ func (l *Library) dropDuplicates(all []idxTrack) {
 	next:
 		for _, t := range g {
 			for _, k := range kept {
-				if k.album != t.album && math.Abs(k.dur-t.dur) <= 3 {
+				if k.album != t.album && (math.Abs(k.dur-t.dur) <= 3 || single(k) != single(t)) {
 					l.relocate(t.path, k.path, false)
 					continue next
 				}
