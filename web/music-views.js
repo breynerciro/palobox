@@ -42,7 +42,26 @@ const gone = (what) => empty('alert', what, 'Puede que se haya movido o borrado 
 
 // Inicio
 
-const shelf = (text, cards) => cards.length > 0 && frag(heading(text), el('div', { className: 'shelf' }, cards));
+const shelf = (text, cards) => cards.length > 0 && frag(heading(text), scroller(el('div', { className: 'shelf' }, cards)));
+
+// scroller pone flechas ‹ › a los lados de una fila horizontal, para el mouse (sin barra de desplazamiento no hay cómo arrastrarla).
+// Cada flecha se esconde cuando ya no hay más hacia ese lado; en pantallas táctiles el CSS las oculta.
+function scroller(row) {
+  const arrow = (dir, glyph, label) => {
+    const b = el('button', { className: 'icon-btn shelf-arrow ' + dir, tabIndex: -1 }, icon(glyph)); // el teclado ya recorre las tarjetas con Tab
+    b.setAttribute('aria-label', label);
+    b.onclick = () => row.scrollBy({ left: (dir === 'left' ? -1 : 1) * row.clientWidth * 0.8, behavior: 'smooth' });
+    return b;
+  };
+  const left = arrow('left', 'back', 'Anterior'), right = arrow('right', 'next', 'Siguiente');
+  const update = () => {
+    left.hidden = row.scrollLeft < 4;
+    right.hidden = row.scrollLeft + row.clientWidth > row.scrollWidth - 4;
+  };
+  row.addEventListener('scroll', update, { passive: true });
+  new ResizeObserver(update).observe(row); // también corre al montarse la vista
+  return el('div', { className: 'shelf-wrap' }, row, left, right);
+}
 
 async function homeView() {
   const d = await library();

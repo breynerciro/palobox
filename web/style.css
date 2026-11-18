@@ -189,8 +189,19 @@ body:has(#upbar:not([hidden])) { --up-h: 52px; } /* lo último de la vista no qu
 li[draggable=true] { cursor: grab; }
 
 .shelf { display: flex; gap: 12px; overflow-x: auto; padding: 4px var(--gutter) 8px; scroll-snap-type: x proximity; scroll-padding-left: var(--gutter); }
-.shelf > .card { flex: 0 0 132px; scroll-snap-align: start; }
-@media (min-width: 900px) { .shelf > .card { flex-basis: 168px; } }
+.shelf > .card { flex: 0 0 var(--card-w); scroll-snap-align: start; }
+/* Flechas al estilo Spotify: aparecen al pasar el mouse por la fila, centradas en las carátulas. */
+.shelf-wrap { position: relative; --card-w: 132px; } /* lo comparten las tarjetas y la altura de las flechas */
+@media (min-width: 900px) { .shelf-wrap { --card-w: 168px; } }
+.shelf-arrow { position: absolute; top: calc(4px + var(--card-w) / 2); translate: 0 -50%; z-index: 2; width: 36px; min-height: 36px;
+  border-radius: 50%; background: rgb(0 0 0 / .7); color: #fff; opacity: 0; transition: opacity var(--fast), background var(--fast); }
+.shelf-arrow:hover { background: rgb(0 0 0 / .85); }
+.shelf-arrow svg { width: 20px; height: 20px; }
+.shelf-arrow.left { left: 8px; }
+.shelf-arrow.right { right: 8px; }
+.shelf-arrow[hidden] { display: none; }
+.shelf-wrap:hover .shelf-arrow { opacity: 1; }
+@media (hover: none) { .shelf-arrow { display: none; } } /* en el celular se desliza con el dedo */
 
 .quick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 4px var(--gutter) 0; }
 @media (min-width: 900px) { .quick { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
