@@ -454,6 +454,48 @@ function dragEnd(e) {
 }
 bar.addEventListener('pointerup', dragEnd);
 bar.addEventListener('pointercancel', dragEnd); // el navegador tomó el gesto (desplazamiento vertical en Música)
+// Pantalla completa: deslizar hacia abajo la cierra y vuelve a la barra pequeña.
+const np = $('#np');
+let npDrag = null; // { id, x, y, t, on }
+np.addEventListener('pointerdown', (e) => {
+  if (e.isPrimary && e.pointerType !== 'mouse' && !e.target.closest('input')) npDrag = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, on: false };
+});
+np.addEventListener('pointermove', (e) => {
+  if (npDrag?.id !== e.pointerId) return;
+  const dy = e.clientY - npDrag.y;
+  if (!npDrag.on) {
+    if (Math.hypot(e.clientX - npDrag.x, dy) < 12) return; // todavía puede ser un toque
+    if (dy < Math.abs(e.clientX - npDrag.x) * 1.5) return (npDrag = null); // hacia arriba o de lado
+    npDrag.on = true;
+    np.setPointerCapture(e.pointerId);
+  }
+  slideTo(np, `translateY(${Math.max(0, dy)}px)`, '');
+});
+async function npEnd(e) {
+  if (npDrag?.id !== e.pointerId) return;
+  const { on, y, t } = npDrag;
+  npDrag = null;
+  if (!on) return;
+  swallowUntil = e.timeStamp + 400; // el botón donde empezó el gesto no se activa
+  const dy = e.clientY - y;
+  if (e.type === 'pointerup' && (dy > np.offsetHeight / 4 || (dy > 60 && dy / (e.timeStamp - t) > 0.5))) {
+    const ms = reduce.matches ? 0 : 200;
+    slideTo(np, 'translateY(100%)', '', ms);
+    await sleep(ms);
+    np.close();
+    return slideTo(np, '', '');
+  }
+  slideTo(np, '', '', 200);
+}
+np.addEventListener('pointerup', npEnd);
+np.addEventListener('pointercancel', npEnd);
+np.addEventListener('click', (e) => {
+  if (e.timeStamp > swallowUntil) return;
+  swallowUntil = 0;
+  e.stopPropagation();
+  e.preventDefault();
+}, true);
+
 bar.addEventListener('click', (e) => {
   if (e.timeStamp > swallowUntil) return;
   swallowUntil = 0;
