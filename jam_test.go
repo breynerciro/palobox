@@ -4,7 +4,10 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -149,5 +152,50 @@ func TestJam(t *testing.T) {
 	}
 	if _, m = cmd(ana, "anatelefono", map[string]any{"op": "play"}); len(room(m)["members"].([]any)) != 1 {
 		t.Fatalf("la sala sigue con ana: %v", m)
+	}
+}
+
+// Prueba del flujo continuo: una sola respuesta con varias canciones seguidas, sin las etiquetas ID3.
+func TestStreamTest(t *testing.T) {
+	a, data, ana, _ := musicSetup(t)
+	// Tres MP3 con etiqueta ID3v2 delante (30 bytes), el cuadro de información de LAME (417 bytes a 128 kbps
+	// y 44,1 kHz, que declara la duración del archivo) y 700 bytes de «audio».
+	for i, name := range []string{"uno", "dos", "tres"} {
+		id3 := append([]byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 20}, make([]byte, 20)...)
+		info := make([]byte, 417)
+		copy(info, []byte{0xFF, 0xFB, 0x90, 0x00})
+		copy(info[36:], "Info")
+		body := []byte(strings.Repeat(string(rune('a'+i)), 700))
+		os.WriteFile(filepath.Join(data, "media", "musica", name+".mp3"), append(append(id3, info...), body...), 0o644)
+	}
+	ana.do("GET", "/api/music", nil)
+	a.music.DB.Exec(`UPDATE tracks SET dur = 70 WHERE path IN ('uno.mp3', 'dos.mp3', 'tres.mp3')`) // los de mentira no tienen duración
+
+	list := func() string {
+		_, _, raw := ana.do("GET", "/api/music/stream-test?list=1&seed=5", nil)
+		return string(raw)
+	}
+	if l := list(); strings.Count(l, `"title"`) != 3 || l != list() {
+		t.Fatalf("la lista debe traer las tres y ser la misma para la misma semilla: %s", l)
+	}
+	if code, _, _ := (client{t, ana.base, &http.Client{}}).do("GET", "/api/music/stream-test?seed=5", nil); code != 401 {
+		t.Fatalf("sin sesión: %d", code)
+	}
+
+	// El audio llega como emisión (sin tamaño) y empieza por el cuerpo de una canción, no por su etiqueta.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, "GET", ana.base+"/api/music/stream-test?seed=5", nil)
+	res, err := ana.c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	first := make([]byte, 100) // lo que cabe en el colchón inicial: llega sin esperar
+	if _, err := io.ReadFull(res.Body, first); err != nil {
+		t.Fatal(err)
+	}
+	if res.Header.Get("Content-Type") != "audio/mpeg" || res.ContentLength != -1 || strings.Trim(string(first), string(first[:1])) != "" || !strings.Contains("abc", string(first[:1])) {
+		t.Fatalf("flujo: %q %d %q", res.Header.Get("Content-Type"), res.ContentLength, first)
 	}
 }

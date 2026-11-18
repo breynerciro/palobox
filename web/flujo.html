@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Prueba de flujo continuo · PaloBox</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 24px 16px calc(env(safe-area-inset-bottom) + 24px); background: #0a0a12; color: #f4f5fa;
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif; max-width: 560px; margin-inline: auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 8px; }
+  p, li { color: #b9bcc9; }
+  button { font: inherit; font-weight: 600; min-height: 48px; padding: 0 20px; border: 0; border-radius: 999px; background: #4fb6c6; color: #06181c; width: 100%; }
+  audio { width: 100%; margin: 16px 0 8px; }
+  ol { padding-left: 24px; }
+  li.on { color: #4fb6c6; font-weight: 600; }
+  #estado { font-weight: 600; color: #f4f5fa; }
+  pre { white-space: pre-wrap; font-size: .8rem; color: #b9bcc9; background: #14141f; padding: 12px; border-radius: 10px; }
+</style>
+</head>
+<body>
+<h1>Prueba de flujo continuo</h1>
+<p>Comprueba si el iPhone pasa de una canción a otra con la pantalla bloqueada cuando todo llega por un solo audio. Son 8 canciones de 45 segundos cada una.</p>
+<ol>
+  <li>Toca <b>Reproducir prueba</b> y espera a que suene.</li>
+  <li>Bloquea el teléfono (o sal a otra app) y déjalo así unos 3 minutos.</li>
+  <li>Fíjate si la música cambia de canción cada 45 segundos sin detenerse.</li>
+  <li>Vuelve a esta página y revisa el registro de abajo.</li>
+</ol>
+<button id="go">Reproducir prueba</button>
+<audio id="a" controls playsinline></audio>
+<p id="estado">Sin iniciar.</p>
+<ol id="lista"></ol>
+<pre id="log"></pre>
+<script>
+const $ = (s) => document.querySelector(s);
+const a = $('#a');
+const CORTE = 45;
+let pistas = [];
+let actual = -1;
+try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+const hora = () => new Date().toLocaleTimeString('es-CO', { hour12: false });
+const log = (t) => { $('#log').textContent += `${hora()}  ${t}\n`; };
+
+$('#go').onclick = async () => {
+  const seed = Math.floor(Math.random() * 1e9);
+  const r = await fetch(`/api/music/stream-test?list=1&seed=${seed}`).catch(() => null);
+  if (!r || !r.ok) {
+    $('#estado').textContent = r && r.status === 401 ? 'Primero inicia sesión en PaloBox en este mismo navegador y vuelve a esta página.' : 'No se pudo pedir la lista de canciones.';
+    return;
+  }
+  pistas = await r.json();
+  $('#lista').replaceChildren(...pistas.map((p) => Object.assign(document.createElement('li'), { textContent: `${p.title} · ${p.artist}` })));
+  actual = -1;
+  $('#log').textContent = '';
+  a.src = `/api/music/stream-test?seed=${seed}`;
+  a.play().then(() => log('empezó a sonar')).catch((e) => log('no pudo empezar: ' + e.message));
+};
+
+// El cambio de canción se deduce de la posición del flujo; si este código corre con la pantalla bloqueada,
+// el título de la pantalla de bloqueo también cambia.
+a.ontimeupdate = () => {
+  const i = Math.min(pistas.length - 1, Math.floor(a.currentTime / CORTE));
+  if (i === actual || i < 0) return;
+  actual = i;
+  [...$('#lista').children].forEach((li, k) => li.classList.toggle('on', k === i));
+  $('#estado').textContent = `Sonando ${i + 1} de ${pistas.length}: ${pistas[i].title}`;
+  log(`canción ${i + 1}: «${pistas[i].title}» · pantalla ${document.visibilityState === 'visible' ? 'encendida en esta página' : 'bloqueada o en otra app'}`);
+  if ('mediaSession' in navigator) {
+    navigator.mediaSession.metadata = new MediaMetadata({ title: pistas[i].title, artist: pistas[i].artist, album: 'Prueba de flujo continuo' });
+  }
+};
+for (const ev of ['pause', 'waiting', 'stalled', 'ended', 'error']) {
+  a.addEventListener(ev, () => log(`${ev} en el segundo ${Math.round(a.currentTime)}${ev === 'error' && a.error ? ' (' + a.error.message + ')' : ''}`));
+}
+document.addEventListener('visibilitychange', () => log(document.visibilityState === 'visible' ? 'volviste a la página' : 'saliste de la página o bloqueaste'));
+</script>
+</body>
+</html>
