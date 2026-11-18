@@ -16,6 +16,7 @@ export async function api(path, opts) {
 function showLogin() {
   reset();
   forget();
+  $('#view').replaceChildren(); // lo del usuario anterior no debe verse mientras carga el siguiente
   $('#app').hidden = true;
   $('#login').hidden = false;
   $('#u').focus();

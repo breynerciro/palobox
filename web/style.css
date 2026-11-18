@@ -472,3 +472,5 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .stat-num { font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .stat-card.warn { border-color: color-mix(in srgb, var(--danger) 60%, transparent); }
 .stat-card.warn .stat-num { color: var(--danger); }
+.section-head.sub .section-title { font-size: .95rem; margin-top: 16px; margin-bottom: 8px; }
+.section-head.sub .btn { margin-top: 6px; }

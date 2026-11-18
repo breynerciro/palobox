@@ -22,7 +22,7 @@ function ago(sec) {
 
 // device resume el navegador y el sistema a partir del User-Agent: «Chrome en Android».
 function device(ua) {
-  if (!ua) return 'dispositivo sin registrar'; // sesiones abiertas antes de que se guardara el navegador
+  if (!ua) return 'Dispositivo sin registrar'; // sesiones abiertas antes de que se guardara el navegador
   const os = [[/iPhone/, 'iPhone'], [/iPad/, 'iPad'], [/Android/, 'Android'], [/Windows/, 'Windows'], [/Mac OS X/, 'Mac'], [/CrOS/, 'ChromeOS'], [/Linux/, 'Linux']].find(([re]) => re.test(ua))?.[1];
   const br = [[/Edg\//, 'Edge'], [/OPR\//, 'Opera'], [/Firefox\/|FxiOS/, 'Firefox'], [/Chrome\/|CriOS/, 'Chrome'], [/Safari\//, 'Safari'], [/curl|Go-http|python/i, 'Script']].find(([re]) => re.test(ua))?.[1];
   return os ? `${br ?? 'Navegador'} en ${os}` : br ?? 'Dispositivo desconocido';
@@ -125,14 +125,28 @@ function usersSection(s) {
   ];
 }
 
+// Sesiones agrupadas por usuario (las tuyas primero), cada grupo con su botón para cerrarlas todas.
 function sessionsSection(s) {
-  return [
-    heading('Sesiones abiertas', s.sessions.length),
-    el('ul', { className: 'list' }, s.sessions.map((x) => el('li', { className: 'row-wrap' },
-      usageRow('doc', 'user', `${x.user} · ${device(x.agent)}`,
-        joinText(x.current ? 'Esta sesión' : x.seen ? `Activa ${since(x.seen)}` : 'Sin actividad registrada', x.ip, x.created && `desde ${fmtDate(x.created * 1000)}`)),
-      !x.current && iconBtn('x', `Cerrar la sesión de ${x.user} en ${device(x.agent)}`, () => send(`/api/admin/sessions/${x.id}`, { method: 'DELETE' }, 'Sesión cerrada.'))))),
-  ];
+  const groups = new Map();
+  for (const x of s.sessions) groups.set(x.user, [...(groups.get(x.user) ?? []), x]);
+  const mine = s.sessions.find((x) => x.current)?.user;
+  const users = [...groups.keys()].sort((a, b) => (b === mine) - (a === mine) || groups.get(b)[0].seen - groups.get(a)[0].seen);
+  const out = [heading('Sesiones abiertas', `${s.sessions.length} de ${plural(users.length, 'usuario', 'usuarios')}`)];
+  if (!users.length) out.push(el('p', { className: 'muted note', textContent: 'No hay sesiones abiertas.' }));
+  for (const name of users) {
+    const list = groups.get(name);
+    const all = name !== mine && list.length > 1 && el('button', { className: 'btn secondary small' }, 'Cerrar todas');
+    if (all) all.onclick = () => send(`/api/admin/users/${encodeURIComponent(name)}/sessions`, { method: 'DELETE' }, `${name} tendrá que volver a entrar.`);
+    out.push(el('div', { className: 'section-head sub' }, el('h3', { className: 'section-title' }, name, el('span', { textContent: plural(list.length, 'sesión', 'sesiones') })), all),
+      el('ul', { className: 'list' }, list.map((x) => el('li', { className: 'row-wrap' },
+        usageRow('doc', 'user', device(x.agent),
+          joinText(x.current ? 'Esta sesión' : x.seen ? `Activa ${since(x.seen)}` : 'Sin actividad registrada', x.ip, x.created && `desde ${fmtDate(x.created * 1000)}`)),
+        !x.current && iconBtn('x', `Cerrar la sesión de ${name} en ${device(x.agent)}`, (b) => {
+          b.closest('li').remove(); // se va de una vez; el repintado confirma
+          send(`/api/admin/sessions/${x.id}`, { method: 'DELETE' }, 'Sesión cerrada.');
+        })))));
+  }
+  return out;
 }
 
 function loginsSection(s) {

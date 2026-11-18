@@ -12,7 +12,7 @@ import { adminView } from './admin.js';
 
 let lastHash = ''; // de dónde se entró a Administración, para volver ahí
 let lastCloud = '#/fotos'; // última sección fuera de Música: a ella vuelve «Nube»
-let lastView = ''; // vista pintada la última vez; evita el parpadeo al buscar mientras se escribe
+let lastView = ''; // vista pintada la última vez: repintarla (buscar mientras se escribe, una acción del panel) no muestra el esqueleto
 const MUSIC = { '': 'inicio', buscar: 'buscar', biblioteca: 'biblioteca' }; // vistas raíz de Música; el resto son páginas de detalle
 
 window.addEventListener('hashchange', () => !$('#app').hidden && render());
@@ -67,7 +67,8 @@ async function renderView() {
   const view = $('#view');
   const viewKey = `${tab}/${section ?? path}`;
   view.setAttribute('aria-busy', 'true');
-  if (!(section === 'buscar' && lastView === viewKey)) view.replaceChildren(skeleton(tab));
+  // Repintar la misma vista deja la anterior hasta que llega la nueva: sin parpadeo y sin perder el desplazamiento.
+  if (lastView !== viewKey || !view.childElementCount) view.replaceChildren(skeleton(tab));
   lastView = viewKey;
   try {
     const node = tab === 'fotos' ? await photosView() : admin ? await adminView(path) : music ? await musicView(path) : await filesView(path);
