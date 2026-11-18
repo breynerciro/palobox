@@ -169,7 +169,10 @@ Probado contra 30 canciones al azar de la biblioteca: 24 venían de canales veri
 
 - La marca de verificado la da yt-dlp (`channel_is_verified`). Si YouTube o yt-dlp dejan de entregarla, todo
   lo que no sea «Topic» fallaría como «no disponible»: se apaga con `SPOTDL_OFFICIAL=0`.
-- No se intenta el siguiente candidato: una canción sin fuente oficial hay que ponerla a mano.
+- **Segunda oportunidad**: si el video elegido no es oficial (o spotDL no encontró nada), se busca la canción
+  en YouTube y se toma, entre los videos de un canal verificado del propio artista cuyo título la nombre, el
+  de duración más parecida, sin tope de diferencia. Puede ser la versión del videoclip: «La Típica» dura 2:42
+  en el álbum y 3:17 en el canal de AlcolirykoZ. Sin ninguna, la canción queda como «no disponible».
 
 ## Velocidad
 
