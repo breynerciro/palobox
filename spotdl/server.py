@@ -480,9 +480,10 @@ def kill_group(proc):
 
 def permanent(kind, message):
     """Fallos que reintentar no arregla: sin resultados en el proveedor (LookupError de
-    Downloader.search) o yt-dlp sin datos del video. Lo demás (YT-DLP download error, ffmpeg,
-    metadatos, red) suele ceder al reintentar."""
-    return kind == "LookupError" or (kind == "AudioProviderError" and message.startswith("No metadata found"))
+    Downloader.search), yt-dlp sin datos del video, o un video que no es de un canal oficial
+    (spotdl_fast.py). Lo demás (YT-DLP download error, ffmpeg, metadatos, red) suele ceder al reintentar."""
+    return kind == "LookupError" or (
+        kind == "AudioProviderError" and message.startswith(("No metadata found", "Unofficial source")))
 
 
 def failures_from(path, names=None):

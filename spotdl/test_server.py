@@ -790,6 +790,21 @@ class CacheTest(unittest.TestCase):
         fast(None, "a", limit=50)  # con más argumentos no se guarda
         self.assertEqual([c[0] for c in calls], ["a", "b", "a"])
 
+    def test_solo_fuentes_oficiales(self):
+        import spotdl_fast
+        self.assertTrue(spotdl_fast.official({"channel": "Carin Leon", "channel_is_verified": True}))
+        self.assertTrue(spotdl_fast.official({"channel": "Noiseferatu - Topic"}))  # audio oficial de YouTube Music
+        self.assertFalse(spotdl_fast.official({"channel": "AmericaEnlaces"}))  # el karaoke «Tono bajo»
+        self.assertFalse(spotdl_fast.official({"channel": None, "channel_is_verified": None}))
+        datos = {"channel": "AmericaEnlaces"}
+        meta = spotdl_fast.only_official(lambda _self, url, download=False: datos, ValueError)
+        with self.assertRaises(ValueError) as e:
+            meta(None, "https://www.youtube.com/watch?v=x")
+        # Así lo escribe spotDL en --save-errors; el servicio no lo reintenta.
+        self.assertTrue(server.permanent("AudioProviderError", str(e.exception)))
+        datos["channel_is_verified"] = True
+        self.assertEqual(meta(None, "u", True), datos)
+
 
 if __name__ == "__main__":
     unittest.main()
