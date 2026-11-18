@@ -1,8 +1,8 @@
-package main
-
-// Panel del administrador: quién usa la app y cuánto consume el servidor.
+// Package admin es el panel del administrador: quién usa la app y cuánto consume el servidor.
+package admin
 
 import (
+	"database/sql"
 	"fmt"
 	"io/fs"
 	"net/http"
@@ -12,7 +12,14 @@ import (
 	"strings"
 	"syscall"
 	"time"
+
+	"palobox/internal/httpx"
 )
+
+type Handler struct {
+	DB   *sql.DB
+	Data string
+}
 
 func dirSize(root string) (n int64) {
 	filepath.WalkDir(root, func(_ string, d fs.DirEntry, err error) error {
@@ -26,9 +33,9 @@ func dirSize(root string) (n int64) {
 	return n
 }
 
-func (a *app) adminStats(w http.ResponseWriter, r *http.Request, u user) error {
-	if u.name != a.admin {
-		return httpErr{403, "solo para el administrador"}
+func (h *Handler) Stats(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	if !u.Admin {
+		return httpx.Error(403, "solo para el administrador")
 	}
 	type usage struct {
 		Name     string `json:"name"`
@@ -37,7 +44,7 @@ func (a *app) adminStats(w http.ResponseWriter, r *http.Request, u user) error {
 		Media    int    `json:"media"`
 		Bytes    int64  `json:"bytes"`
 	}
-	rows, err := a.db.Query(`SELECT u.name, u.seen,
+	rows, err := h.DB.Query(`SELECT u.name, u.seen,
 		(SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.expires > ?),
 		(SELECT COUNT(*) FROM media m WHERE m.user_id = u.id)
 		FROM users u ORDER BY u.seen DESC, u.name`, time.Now().Unix())
@@ -58,13 +65,13 @@ func (a *app) adminStats(w http.ResponseWriter, r *http.Request, u user) error {
 	}
 	// shortcut: recorre todo el disco en cada consulta; guardar en caché si el panel tarda más de un par de segundos.
 	for i := range users {
-		users[i].Bytes = dirSize(filepath.Join(a.data, users[i].Name))
+		users[i].Bytes = dirSize(filepath.Join(h.Data, users[i].Name))
 	}
 	other := []usage{} // carpetas que no son de un usuario: media, .palobox
-	es, _ := os.ReadDir(a.data)
+	es, _ := os.ReadDir(h.Data)
 	for _, e := range es {
 		if e.IsDir() && !isUser[e.Name()] {
-			other = append(other, usage{Name: e.Name(), Bytes: dirSize(filepath.Join(a.data, e.Name()))})
+			other = append(other, usage{Name: e.Name(), Bytes: dirSize(filepath.Join(h.Data, e.Name()))})
 		}
 	}
 
@@ -85,8 +92,8 @@ func (a *app) adminStats(w http.ResponseWriter, r *http.Request, u user) error {
 		}
 	}
 	var st syscall.Statfs_t
-	syscall.Statfs(a.data, &st)
-	return writeJSON(w, 200, map[string]any{
+	syscall.Statfs(h.Data, &st)
+	return httpx.WriteJSON(w, 200, map[string]any{
 		"users": users, "other": other,
 		"cpus": runtime.NumCPU(), "load": load, "uptime": int64(up),
 		"memTotal": mem["MemTotal:"], "memFree": mem["MemAvailable:"],

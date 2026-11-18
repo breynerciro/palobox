@@ -1,19 +1,28 @@
-package main
-
-// Fotos y videos.
+// Package photos es la galería de fotos y videos de cada usuario (tabla media).
+package photos
 
 import (
+	"database/sql"
 	"errors"
 	"io/fs"
 	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
+
+	"palobox/internal/httpx"
+	"palobox/internal/media"
 )
 
-func (a *app) photos(w http.ResponseWriter, r *http.Request, u user) error {
+type Handler struct {
+	DB     *sql.DB
+	Data   string
+	Thumbs media.Thumbs
+}
+
+func (h *Handler) List(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	// shortcut: devuelve todo el índice de una vez; paginar si la galería pasa de ~20.000 elementos.
-	rows, err := a.db.Query(`SELECT id, name, size, kind, taken, sha FROM media WHERE user_id = ? ORDER BY taken DESC, id DESC`, u.id)
+	rows, err := h.DB.Query(`SELECT id, name, size, kind, taken, sha FROM media WHERE user_id = ? ORDER BY taken DESC, id DESC`, u.ID)
 	if err != nil {
 		return err
 	}
@@ -38,16 +47,16 @@ func (a *app) photos(w http.ResponseWriter, r *http.Request, u user) error {
 		i.V = sha[:min(12, len(sha))]
 		out = append(out, i)
 	}
-	return writeJSON(w, 200, out)
+	return httpx.WriteJSON(w, 200, out)
 }
 
-func (a *app) photo(w http.ResponseWriter, r *http.Request, u user) error {
+func (h *Handler) Get(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	var sha, kind, path, name string
-	if err := a.db.QueryRow(`SELECT sha, kind, path, name FROM media WHERE id = ? AND user_id = ?`,
-		r.PathValue("id"), u.id).Scan(&sha, &kind, &path, &name); err != nil {
+	if err := h.DB.QueryRow(`SELECT sha, kind, path, name FROM media WHERE id = ? AND user_id = ?`,
+		r.PathValue("id"), u.ID).Scan(&sha, &kind, &path, &name); err != nil {
 		return err
 	}
-	src := filepath.Join(a.data, path)
+	src := filepath.Join(h.Data, path)
 	v := r.PathValue("v")
 	switch {
 	case v == "o":
@@ -56,7 +65,7 @@ func (a *app) photo(w http.ResponseWriter, r *http.Request, u user) error {
 		}
 		http.ServeFile(w, r, src)
 	case v == "t", v == "p" && kind == "image":
-		dst, err := a.thumbs.Get(sha, src, kind, v)
+		dst, err := h.Thumbs.Get(sha, src, kind, v)
 		if err != nil {
 			return err
 		}
@@ -68,17 +77,17 @@ func (a *app) photo(w http.ResponseWriter, r *http.Request, u user) error {
 	return nil
 }
 
-func (a *app) photoDelete(w http.ResponseWriter, r *http.Request, u user) error {
+func (h *Handler) Delete(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	var sha, path string
-	if err := a.db.QueryRow(`SELECT sha, path FROM media WHERE id = ? AND user_id = ?`, r.PathValue("id"), u.id).Scan(&sha, &path); err != nil {
+	if err := h.DB.QueryRow(`SELECT sha, path FROM media WHERE id = ? AND user_id = ?`, r.PathValue("id"), u.ID).Scan(&sha, &path); err != nil {
 		return err
 	}
-	if err := os.Remove(filepath.Join(a.data, path)); err != nil && !errors.Is(err, fs.ErrNotExist) {
+	if err := os.Remove(filepath.Join(h.Data, path)); err != nil && !errors.Is(err, fs.ErrNotExist) {
 		return err
 	}
 	for _, v := range []string{"t", "p"} {
-		os.Remove(a.thumbs.Path(sha, v))
+		os.Remove(h.Thumbs.Path(sha, v))
 	}
-	_, err := a.db.Exec(`DELETE FROM media WHERE id = ? AND user_id = ?`, r.PathValue("id"), u.id)
+	_, err := h.DB.Exec(`DELETE FROM media WHERE id = ? AND user_id = ?`, r.PathValue("id"), u.ID)
 	return err
 }

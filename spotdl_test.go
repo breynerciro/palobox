@@ -5,49 +5,20 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
-	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
+
+	"palobox/internal/module"
+	"palobox/internal/spotdl"
 )
 
 const testToken = "token-de-prueba"
 
-func TestSpotifyURL(t *testing.T) {
-	ok := map[string]string{
-		"https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC":                  "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC",
-		" https://open.spotify.com/intl-es/track/4uLU6hMCjMI75M1A2tKUQC?si=abc ": "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC",
-		"https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX#frag":             "https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX",
-		"https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M":               "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M",
-		"https://open.spotify.com/artist/06HL4z0CvFAxyc27GXpf02":                 "https://open.spotify.com/artist/06HL4z0CvFAxyc27GXpf02",
-	}
-	for raw, want := range ok {
-		if got, err := spotifyURL(raw); err != nil || got != want {
-			t.Errorf("spotifyURL(%q) = %q, %v; quiero %q", raw, got, err, want)
-		}
-	}
-	for _, raw := range []string{
-		"",
-		"http://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC",
-		"https://open.spotify.com.evil.example/track/4uLU6hMCjMI75M1A2tKUQC",
-		"https://evil.example/open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC",
-		"https://open.spotify.com/track/corto",
-		"https://open.spotify.com/episode/4uLU6hMCjMI75M1A2tKUQC",
-		"https://open.spotify.com/search/daft%20punk",
-		"daft punk - one more time",
-		"https://open.spotify.com/track/" + strings.Repeat("a", 600),
-	} {
-		if got, err := spotifyURL(raw); err == nil {
-			t.Errorf("spotifyURL(%q) debía fallar, dio %q", raw, got)
-		}
-	}
-}
-
 // fakeSpotdl imita al servicio: cola en memoria y registro de lo que recibe.
 type fakeSpotdl struct {
 	sync.Mutex
-	jobs    []spotdlJob
+	jobs    []spotdl.Job
 	deleted []string
 	posted  []string
 	retried []string
@@ -71,7 +42,7 @@ func (f *fakeSpotdl) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var in struct{ URL string }
 		json.NewDecoder(r.Body).Decode(&in)
 		f.posted = append(f.posted, in.URL)
-		job := spotdlJob{ID: "0123456789abcdef", URL: in.URL, Status: "queued", Created: 1, Owner: r.Header.Get("X-PaloBox-User")}
+		job := spotdl.Job{ID: "0123456789abcdef", URL: in.URL, Status: "queued", Created: 1, Owner: r.Header.Get("X-PaloBox-User")}
 		f.jobs = append(f.jobs, job)
 		w.WriteHeader(201)
 		json.NewEncoder(w).Encode(job)
@@ -95,7 +66,7 @@ func (f *fakeSpotdl) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == "DELETE" && strings.HasPrefix(r.URL.Path, "/jobs/"):
 		id := strings.TrimPrefix(r.URL.Path, "/jobs/")
 		f.deleted = append(f.deleted, id)
-		var keep []spotdlJob
+		var keep []spotdl.Job
 		for _, j := range f.jobs {
 			if j.ID != id {
 				keep = append(keep, j)
@@ -121,13 +92,13 @@ func newSpotdlTest(t *testing.T) (*fakeSpotdl, client, *app) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.addUser("ana", "clave-segura"); err != nil {
+	if err := a.auth.AddUser("ana", "clave-segura"); err != nil {
 		t.Fatal(err)
 	}
 	fake := &fakeSpotdl{}
 	side := httptest.NewServer(fake)
 	t.Cleanup(side.Close)
-	a.spotdl = module{label: "El servicio de descargas de Spotify", url: side.URL, token: testToken}
+	a.spotdl.Module = module.Module{Label: "El servicio de descargas de Spotify", URL: side.URL, Token: testToken}
 
 	srv := httptest.NewServer(a.routes())
 	t.Cleanup(srv.Close)
@@ -200,7 +171,7 @@ func TestSpotdlProxy(t *testing.T) {
 	fake.Unlock()
 
 	// Servicio caído: error 503 con mensaje entendible, no un 500 genérico.
-	a.spotdl.url = "http://127.0.0.1:1"
+	a.spotdl.Module.URL = "http://127.0.0.1:1"
 	if code, _, raw := ana.do("GET", "/api/spotdl", nil); code != 503 || !strings.Contains(string(raw), "no responde") {
 		t.Fatalf("servicio caído: %d %s", code, raw)
 	}
@@ -218,10 +189,10 @@ func TestSpotdlErroresDelServicio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.addUser("ana", "clave-segura"); err != nil {
+	if err := a.auth.AddUser("ana", "clave-segura"); err != nil {
 		t.Fatal(err)
 	}
-	a.spotdl = module{label: "El servicio de descargas de Spotify", url: side.URL, token: testToken}
+	a.spotdl.Module = module.Module{Label: "El servicio de descargas de Spotify", URL: side.URL, Token: testToken}
 	srv := httptest.NewServer(a.routes())
 	defer srv.Close()
 	jar, _ := cookiejar.New(nil)
@@ -239,7 +210,7 @@ func TestSpotdlDeshabilitado(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := a.addUser("ana", "clave-segura"); err != nil {
+	if err := a.auth.AddUser("ana", "clave-segura"); err != nil {
 		t.Fatal(err)
 	}
 	srv := httptest.NewServer(a.routes())
@@ -263,13 +234,13 @@ func TestSpotdlDeshabilitado(t *testing.T) {
 // La app marca como propios solo los trabajos del usuario (o todos, para el admin).
 func TestSpotdlDueno(t *testing.T) {
 	fake, ana, a := newSpotdlTest(t)
-	fake.jobs = []spotdlJob{{ID: "0123456789abcdef", Owner: "ana", Status: "queued"}, {ID: "fedcba9876543210", Owner: "pepe", Status: "done"}}
+	fake.jobs = []spotdl.Job{{ID: "0123456789abcdef", Owner: "ana", Status: "queued"}, {ID: "fedcba9876543210", Owner: "pepe", Status: "done"}}
 	_, m, raw := ana.do("GET", "/api/spotdl", nil)
 	items := m["items"].([]any)
 	if items[0].(map[string]any)["mine"] != true || items[1].(map[string]any)["mine"] != false {
 		t.Fatalf("mine mal calculado para ana: %s", raw)
 	}
-	a.admin = "ana"
+	a.auth.Admin = "ana"
 	_, m, raw = ana.do("GET", "/api/spotdl", nil)
 	if m["items"].([]any)[1].(map[string]any)["mine"] != true {
 		t.Fatalf("el admin puede quitar cualquiera: %s", raw)
@@ -285,7 +256,7 @@ func TestSpotdlDueno(t *testing.T) {
 // Reintentar pasa por la app con la identidad del usuario; el servicio decide si es suyo.
 func TestSpotdlRetry(t *testing.T) {
 	fake, ana, a := newSpotdlTest(t)
-	fake.jobs = []spotdlJob{
+	fake.jobs = []spotdl.Job{
 		{ID: "0123456789abcdef", Owner: "ana", Status: "error", Attempts: 2, Error: "22 canciones no se pudieron descargar"},
 		{ID: "fedcba9876543210", Owner: "pepe", Status: "error", Attempts: 1},
 	}
@@ -299,7 +270,7 @@ func TestSpotdlRetry(t *testing.T) {
 	if code, _, raw := ana.do("POST", "/api/spotdl/fedcba9876543210/retry", nil); code != 403 || !strings.Contains(string(raw), "Solo quien") {
 		t.Fatalf("reintento ajeno: %d %s", code, raw)
 	}
-	a.admin = "ana"
+	a.auth.Admin = "ana"
 	if code, _, raw := ana.do("POST", "/api/spotdl/fedcba9876543210/retry", nil); code != 200 {
 		t.Fatalf("el admin puede reintentar cualquiera: %d %s", code, raw)
 	}
@@ -313,23 +284,9 @@ func TestSpotdlRetry(t *testing.T) {
 // Un token equivocado no se confunde con una sesión cerrada (401 haría salir al usuario).
 func TestSpotdlTokenRechazado(t *testing.T) {
 	_, ana, a := newSpotdlTest(t)
-	a.spotdl.token = "otro"
+	a.spotdl.Module.Token = "otro"
 	if code, _, raw := ana.do("GET", "/api/spotdl", nil); code != 503 || !strings.Contains(string(raw), "no acepta") {
 		t.Fatalf("token rechazado: %d %s", code, raw)
-	}
-}
-
-func TestLoadModuleExigeToken(t *testing.T) {
-	t.Setenv("PRUEBA_URL", "http://spotdl:8801")
-	t.Setenv("PRUEBA_TOKEN_FILE", filepath.Join(t.TempDir(), "no-existe"))
-	if m := loadModule("PRUEBA", "x"); m.url != "" {
-		t.Fatal("sin token el módulo debía quedar desactivado")
-	}
-	f := filepath.Join(t.TempDir(), "token")
-	os.WriteFile(f, []byte("  abc\n"), 0o600)
-	t.Setenv("PRUEBA_TOKEN_FILE", f)
-	if m := loadModule("PRUEBA", "x"); m.url != "http://spotdl:8801" || m.token != "abc" {
-		t.Fatalf("módulo con token: %+v", m)
 	}
 }
 

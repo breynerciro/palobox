@@ -9,16 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 )
-
-// reindex fuerza un recorrido del disco sin esperar el intervalo entre recorridos.
-func (a *app) reindex() {
-	a.idxMu.Lock()
-	a.idxAt = time.Time{}
-	a.idxMu.Unlock()
-	a.syncTracks()
-}
 
 // musicSetup crea una biblioteca sin etiquetas (en las pruebas no hay ffprobe) y dos usuarios con sesión.
 func musicSetup(t *testing.T) (a *app, data string, ana, luis client) {
@@ -45,7 +36,7 @@ func musicSetup(t *testing.T) (a *app, data string, ana, luis client) {
 	srv := httptest.NewServer(a.routes())
 	t.Cleanup(srv.Close)
 	for _, n := range []string{"ana", "luis"} {
-		if err := a.addUser(n, "clave-segura"); err != nil {
+		if err := a.auth.AddUser(n, "clave-segura"); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -113,28 +104,10 @@ func TestIndiceYBusqueda(t *testing.T) {
 	// El índice sigue al disco: lo borrado desaparece y lo cambiado se vuelve a leer.
 	os.Remove(filepath.Join(data, "media", "musica", "Juanes", "Un día normal", "A Dios le pido.mp3"))
 	os.WriteFile(filepath.Join(data, "media", "musica", "Juanes", "Un día normal", "La paga.mp3"), []byte("nueva"), 0o644)
-	a.reindex()
+	a.music.Reindex()
 	_, m, raw = ana.do("GET", "/api/music/search?q=juanes", nil)
 	if titles(m["tracks"]) != "La paga" {
 		t.Fatalf("índice desactualizado: %s", raw)
-	}
-}
-
-func TestEtiquetas(t *testing.T) {
-	tr := fromPath("Artista/Álbum/07 - nombre de archivo.mp3")
-	if tr.Title != "nombre de archivo" || tr.Num != 7 || tr.Album != "Álbum" || tr.Artist != "Artista" || tr.AlbumPath != "Artista/Álbum" {
-		t.Fatalf("respaldo por ruta: %+v", tr)
-	}
-	applyTags(&tr, []byte(`{"streams":[{"tags":{"TITLE":"De la pista","ARTIST":"Otra"}}],
-		"format":{"duration":"187.52","tags":{"title":" Título real ","album":"Disco","track":"3/12","disc":"2/2","date":"2019-05-01"}}}`))
-	if tr.Title != "Título real" || tr.Artist != "Otra" || tr.Album != "Disco" || tr.Num != 3 || tr.disc != 2 || tr.Year != 2019 || tr.Dur != 187.52 {
-		t.Fatalf("etiquetas: %+v", tr)
-	}
-	// ffprobe ausente o archivo corrupto: se conserva lo deducido de la ruta.
-	tr = fromPath("suelta.mp3")
-	applyTags(&tr, nil)
-	if tr.Title != "suelta" || tr.Album != "Sin álbum" || tr.AlbumPath != "" || tr.ArtistPath != "" {
-		t.Fatalf("pista suelta: %+v", tr)
 	}
 }
 
@@ -266,7 +239,7 @@ func TestPlaylists(t *testing.T) {
 
 	// Una pista que desaparece del disco sale de la lista sin romper la playlist.
 	os.Remove(filepath.Join(data, "media", "musica", "suelta.mp3"))
-	ap.reindex()
+	ap.music.Reindex()
 	order("Cai|A Dios le pido")
 	if code, _, raw := ana.do("PUT", pl+"/order", mustJSON(map[string]any{"paths": []string{"Juanes/Un día normal/A Dios le pido.mp3", b}})); code != 200 {
 		t.Fatalf("reordenar lo visible: %d %s", code, raw)

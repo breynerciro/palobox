@@ -1,9 +1,8 @@
-package main
-
-// Música como app de streaming: índice de pistas con etiquetas, me gusta, playlists e historial.
+// Package music es la música como app de streaming: índice de pistas con etiquetas, me gusta, playlists e historial.
 // Álbum = carpeta que contiene las pistas; artista = carpeta de primer nivel. Las etiquetas solo
 // mejoran los nombres: sin ellas todo sale del nombre de archivo y de carpeta.
 // shortcut: un álbum repartido en subcarpetas (CD1, CD2) sale como álbumes separados; unirlos por etiqueta si molesta.
+package music
 
 import (
 	"context"
@@ -20,6 +19,10 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"palobox/internal/httpx"
+	"palobox/internal/media"
+	"palobox/internal/natsort"
 )
 
 type track struct {
@@ -66,13 +69,13 @@ type playlist struct {
 	Cover   string `json:"cover"` // carpeta del álbum de su primera pista
 }
 
-func (a *app) musicRoot() string { return filepath.Join(a.data, "media", "musica") }
+func (l *Library) musicRoot() string { return filepath.Join(l.Data, "media", "musica") }
 
 // musicRel valida que rel sea una pista real de la biblioteca, escrita en su forma canónica.
-func (a *app) musicRel(rel string) (string, error) {
-	root := a.musicRoot()
-	p := safe(root, rel)
-	if st, err := os.Stat(p); err != nil || st.IsDir() || !mediaLibs["musica"](p) {
+func (l *Library) musicRel(rel string) (string, error) {
+	root := l.musicRoot()
+	p := httpx.Safe(root, rel)
+	if st, err := os.Stat(p); err != nil || st.IsDir() || !media.IsAudio(p) {
 		return "", fs.ErrNotExist
 	}
 	// Con ".." o barras de más la ruta limpia difiere de la pedida: no se guarda nada que no sea exacto.
@@ -150,22 +153,22 @@ func applyTags(t *track, probe []byte) {
 const idxEvery = 20 * time.Second // el recorrido solo hace stat, pero no vale la pena en cada petición
 
 // syncTracks pone el índice al día con el disco: solo pasa por ffprobe lo nuevo o cambiado.
-func (a *app) syncTracks() {
-	if !a.idxMu.TryLock() { // ya hay un recorrido en curso: se responde con lo indexado hasta ahora
+func (l *Library) Sync() {
+	if !l.idxMu.TryLock() { // ya hay un recorrido en curso: se responde con lo indexado hasta ahora
 		return
 	}
-	defer a.idxMu.Unlock()
-	if time.Since(a.idxAt) < idxEvery {
+	defer l.idxMu.Unlock()
+	if time.Since(l.idxAt) < idxEvery {
 		return
 	}
-	root := a.musicRoot()
+	root := l.musicRoot()
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		log.Print("índice de música: ", err)
 		return
 	}
 	type stamp struct{ size, mtime int64 }
 	old := map[string]stamp{}
-	rows, err := a.db.Query(`SELECT path, size, mtime FROM tracks`)
+	rows, err := l.DB.Query(`SELECT path, size, mtime FROM tracks`)
 	if err != nil {
 		log.Print("índice de música: ", err)
 		return
@@ -190,7 +193,7 @@ func (a *app) syncTracks() {
 			}
 			return nil
 		}
-		if d.IsDir() || !mediaLibs["musica"](d.Name()) {
+		if d.IsDir() || !media.IsAudio(d.Name()) {
 			return nil
 		}
 		i, err := d.Info()
@@ -206,15 +209,15 @@ func (a *app) syncTracks() {
 			return nil
 		}
 		t := fromPath(rel)
-		a.sem <- struct{}{}
+		l.Sem <- struct{}{}
 		// Un archivo corrupto no puede detener el índice.
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		out, _ := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "a",
 			"-show_entries", "format=duration:format_tags:stream_tags", "-of", "json", p).Output()
 		cancel()
-		<-a.sem
+		<-l.Sem
 		applyTags(&t, out)
-		if _, err := a.db.Exec(`INSERT OR REPLACE INTO tracks(path, size, mtime, title, artist, album, album_dir, artist_dir, year, disc, num, dur, fold)
+		if _, err := l.DB.Exec(`INSERT OR REPLACE INTO tracks(path, size, mtime, title, artist, album, album_dir, artist_dir, year, disc, num, dur, fold)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, rel, now.size, now.mtime, t.Title, t.Artist, t.Album, t.AlbumPath, t.ArtistPath,
 			t.Year, t.disc, t.Num, t.Dur, fold(t.Title+" "+t.Artist+" "+t.Album)); err != nil {
 			log.Print("índice de música: ", err)
@@ -226,15 +229,15 @@ func (a *app) syncTracks() {
 		return
 	}
 	for rel := range old {
-		a.db.Exec(`DELETE FROM tracks WHERE path = ?`, rel)
+		l.DB.Exec(`DELETE FROM tracks WHERE path = ?`, rel)
 	}
-	a.idxAt = time.Now()
+	l.idxAt = time.Now()
 }
 
 // fresh actualiza el índice antes de responder, sin hacer esperar más de 2 s por una biblioteca recién copiada.
-func (a *app) fresh() {
+func (l *Library) fresh() {
 	done := make(chan struct{})
-	go func() { a.syncTracks(); close(done) }()
+	go func() { l.Sync(); close(done) }()
 	select {
 	case <-done:
 	case <-time.After(2 * time.Second):
@@ -245,8 +248,8 @@ const trackCols = `t.path, t.title, t.artist, t.album, t.album_dir, t.artist_dir
 const albumOrder = ` ORDER BY t.album_dir, t.disc, t.num, t.path`
 
 // tracks consulta pistas del índice; tail es el resto del SELECT (JOIN, WHERE, ORDER).
-func (a *app) tracks(tail string, args ...any) ([]track, error) {
-	rows, err := a.db.Query(`SELECT `+trackCols+` FROM tracks t `+tail, args...)
+func (l *Library) tracks(tail string, args ...any) ([]track, error) {
+	rows, err := l.DB.Query(`SELECT `+trackCols+` FROM tracks t `+tail, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -263,13 +266,13 @@ func (a *app) tracks(tail string, args ...any) ([]track, error) {
 }
 
 // albums agrupa el índice por carpeta y le suma lo que este usuario ha escuchado.
-func (a *app) albums(u user) ([]album, error) {
+func (l *Library) albums(u httpx.User) ([]album, error) {
 	type stat struct {
 		last  int64
 		plays int
 	}
 	heard := map[string]stat{}
-	rows, err := a.db.Query(`SELECT t.album_dir, MAX(p.at), COUNT(*) FROM plays p JOIN tracks t ON t.path = p.path WHERE p.user_id = ? GROUP BY t.album_dir`, u.id)
+	rows, err := l.DB.Query(`SELECT t.album_dir, MAX(p.at), COUNT(*) FROM plays p JOIN tracks t ON t.path = p.path WHERE p.user_id = ? GROUP BY t.album_dir`, u.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -280,7 +283,7 @@ func (a *app) albums(u user) ([]album, error) {
 		heard[dir] = s
 	}
 	rows.Close()
-	rows, err = a.db.Query(`SELECT album_dir, MIN(album), artist_dir, MAX(year), COUNT(*), SUM(dur), MAX(mtime) FROM tracks GROUP BY album_dir`)
+	rows, err = l.DB.Query(`SELECT album_dir, MIN(album), artist_dir, MAX(year), COUNT(*), SUM(dur), MAX(mtime) FROM tracks GROUP BY album_dir`)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +297,7 @@ func (a *app) albums(u user) ([]album, error) {
 		al.Artist, al.Played, al.Plays = al.ArtistPath, heard[al.Path].last, heard[al.Path].plays
 		out = append(out, al)
 	}
-	sort.Slice(out, func(i, j int) bool { return natLess(fold(out[i].Name), fold(out[j].Name)) })
+	sort.Slice(out, func(i, j int) bool { return natsort.Less(fold(out[i].Name), fold(out[j].Name)) })
 	return out, rows.Err()
 }
 
@@ -317,15 +320,15 @@ func artistsOf(albums []album) []artist {
 		ar.Plays += al.Plays
 		ar.Added, ar.Played = max(ar.Added, al.Added), max(ar.Played, al.Played)
 	}
-	sort.Slice(out, func(i, j int) bool { return natLess(fold(out[i].Name), fold(out[j].Name)) })
+	sort.Slice(out, func(i, j int) bool { return natsort.Less(fold(out[i].Name), fold(out[j].Name)) })
 	return out
 }
 
-func (a *app) playlists(u user) ([]playlist, error) {
-	rows, err := a.db.Query(`SELECT p.id, p.name, p.updated, COUNT(t.path),
+func (l *Library) playlists(u httpx.User) ([]playlist, error) {
+	rows, err := l.DB.Query(`SELECT p.id, p.name, p.updated, COUNT(t.path),
 		COALESCE((SELECT x.album_dir FROM playlist_tracks f JOIN tracks x ON x.path = f.path WHERE f.playlist_id = p.id ORDER BY f.pos LIMIT 1), '')
 		FROM playlists p LEFT JOIN playlist_tracks pt ON pt.playlist_id = p.id LEFT JOIN tracks t ON t.path = pt.path
-		WHERE p.user_id = ? GROUP BY p.id ORDER BY p.updated DESC, p.id DESC`, u.id)
+		WHERE p.user_id = ? GROUP BY p.id ORDER BY p.updated DESC, p.id DESC`, u.ID)
 	if err != nil {
 		return nil, err
 	}
@@ -342,23 +345,23 @@ func (a *app) playlists(u user) ([]playlist, error) {
 }
 
 // musicLib entrega de una vez lo que necesitan Inicio, Tu biblioteca y la barra lateral.
-func (a *app) musicLib(w http.ResponseWriter, r *http.Request, u user) error {
-	a.fresh()
-	albums, err := a.albums(u)
+func (l *Library) Lib(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	l.fresh()
+	albums, err := l.albums(u)
 	if err != nil {
 		return err
 	}
-	pls, err := a.playlists(u)
+	pls, err := l.playlists(u)
 	if err != nil {
 		return err
 	}
-	top, err := a.tracks(`JOIN (SELECT path, COUNT(*) c, MAX(at) m FROM plays WHERE user_id = ? GROUP BY path) p ON p.path = t.path
-		ORDER BY p.c DESC, p.m DESC LIMIT 20`, u.id)
+	top, err := l.tracks(`JOIN (SELECT path, COUNT(*) c, MAX(at) m FROM plays WHERE user_id = ? GROUP BY path) p ON p.path = t.path
+		ORDER BY p.c DESC, p.m DESC LIMIT 20`, u.ID)
 	if err != nil {
 		return err
 	}
 	likes := []string{}
-	rows, err := a.db.Query(`SELECT l.path FROM likes l JOIN tracks t ON t.path = l.path WHERE l.user_id = ?`, u.id)
+	rows, err := l.DB.Query(`SELECT l.path FROM likes l JOIN tracks t ON t.path = l.path WHERE l.user_id = ?`, u.ID)
 	if err != nil {
 		return err
 	}
@@ -368,13 +371,13 @@ func (a *app) musicLib(w http.ResponseWriter, r *http.Request, u user) error {
 		rows.Scan(&p)
 		likes = append(likes, p)
 	}
-	return writeJSON(w, 200, map[string]any{"albums": albums, "artists": artistsOf(albums), "playlists": pls, "likes": likes, "top": top})
+	return httpx.WriteJSON(w, 200, map[string]any{"albums": albums, "artists": artistsOf(albums), "playlists": pls, "likes": likes, "top": top})
 }
 
-func (a *app) musicAlbum(w http.ResponseWriter, r *http.Request, u user) error {
-	a.fresh()
+func (l *Library) Album(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	l.fresh()
 	dir := r.URL.Query().Get("path")
-	ts, err := a.tracks(`WHERE t.album_dir = ?`+albumOrder, dir)
+	ts, err := l.tracks(`WHERE t.album_dir = ?`+albumOrder, dir)
 	if err != nil {
 		return err
 	}
@@ -385,13 +388,13 @@ func (a *app) musicAlbum(w http.ResponseWriter, r *http.Request, u user) error {
 	for _, t := range ts {
 		year = max(year, t.Year)
 	}
-	return writeJSON(w, 200, map[string]any{"path": dir, "name": ts[0].Album, "artist": ts[0].ArtistPath, "artistPath": ts[0].ArtistPath, "year": year, "tracks": ts})
+	return httpx.WriteJSON(w, 200, map[string]any{"path": dir, "name": ts[0].Album, "artist": ts[0].ArtistPath, "artistPath": ts[0].ArtistPath, "year": year, "tracks": ts})
 }
 
-func (a *app) musicArtist(w http.ResponseWriter, r *http.Request, u user) error {
-	a.fresh()
+func (l *Library) Artist(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	l.fresh()
 	dir := r.URL.Query().Get("path")
-	ts, err := a.tracks(`WHERE t.artist_dir = ? ORDER BY t.year DESC, t.album_dir, t.disc, t.num, t.path`, dir)
+	ts, err := l.tracks(`WHERE t.artist_dir = ? ORDER BY t.year DESC, t.album_dir, t.disc, t.num, t.path`, dir)
 	if err != nil {
 		return err
 	}
@@ -399,12 +402,12 @@ func (a *app) musicArtist(w http.ResponseWriter, r *http.Request, u user) error 
 		return fs.ErrNotExist
 	}
 	// Sin historial todas empatan en cero y quedan las primeras pistas.
-	popular, err := a.tracks(`WHERE t.artist_dir = ? ORDER BY (SELECT COUNT(*) FROM plays p WHERE p.user_id = ? AND p.path = t.path) DESC,
-		t.year DESC, t.album_dir, t.disc, t.num, t.path LIMIT 5`, dir, u.id)
+	popular, err := l.tracks(`WHERE t.artist_dir = ? ORDER BY (SELECT COUNT(*) FROM plays p WHERE p.user_id = ? AND p.path = t.path) DESC,
+		t.year DESC, t.album_dir, t.disc, t.num, t.path LIMIT 5`, dir, u.ID)
 	if err != nil {
 		return err
 	}
-	all, err := a.albums(u)
+	all, err := l.albums(u)
 	if err != nil {
 		return err
 	}
@@ -415,18 +418,18 @@ func (a *app) musicArtist(w http.ResponseWriter, r *http.Request, u user) error 
 		}
 	}
 	sort.SliceStable(mine, func(i, j int) bool { return mine[i].Year > mine[j].Year })
-	return writeJSON(w, 200, map[string]any{"path": dir, "name": dir, "albums": mine, "tracks": ts, "popular": popular})
+	return httpx.WriteJSON(w, 200, map[string]any{"path": dir, "name": dir, "albums": mine, "tracks": ts, "popular": popular})
 }
 
 var likeEscape = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
 
 // musicSearch busca en el índice: cada palabra debe aparecer, sin importar tildes ni mayúsculas.
-func (a *app) musicSearch(w http.ResponseWriter, r *http.Request, u user) error {
-	a.fresh()
+func (l *Library) Search(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	l.fresh()
 	out := map[string]any{"tracks": []track{}, "albums": []album{}, "artists": []artist{}, "playlists": []playlist{}}
 	words := strings.Fields(fold(r.URL.Query().Get("q")))
 	if len(strings.Join(words, "")) < 2 {
-		return writeJSON(w, 200, out)
+		return httpx.WriteJSON(w, 200, out)
 	}
 	has := func(s string) bool {
 		s = fold(s)
@@ -443,11 +446,11 @@ func (a *app) musicSearch(w http.ResponseWriter, r *http.Request, u user) error 
 		args = append(args, "%"+likeEscape.Replace(w)+"%")
 	}
 	// fold empieza por el título: lo que coincide en el título sale antes que lo que coincide en el artista.
-	ts, err := a.tracks(`WHERE 1`+where+` ORDER BY instr(t.fold, ?), t.title LIMIT 30`, append(args, words[0])...)
+	ts, err := l.tracks(`WHERE 1`+where+` ORDER BY instr(t.fold, ?), t.title LIMIT 30`, append(args, words[0])...)
 	if err != nil {
 		return err
 	}
-	all, err := a.albums(u)
+	all, err := l.albums(u)
 	if err != nil {
 		return err
 	}
@@ -462,7 +465,7 @@ func (a *app) musicSearch(w http.ResponseWriter, r *http.Request, u user) error 
 			artists = append(artists, ar)
 		}
 	}
-	pls, err := a.playlists(u)
+	pls, err := l.playlists(u)
 	if err != nil {
 		return err
 	}
@@ -473,46 +476,46 @@ func (a *app) musicSearch(w http.ResponseWriter, r *http.Request, u user) error 
 		}
 	}
 	out["tracks"], out["albums"], out["artists"], out["playlists"] = ts, albums, artists, mine
-	return writeJSON(w, 200, out)
+	return httpx.WriteJSON(w, 200, out)
 }
 
 // Me gusta e historial
 
-func (a *app) likes(w http.ResponseWriter, r *http.Request, u user) error {
-	a.fresh()
-	ts, err := a.tracks(`JOIN likes l ON l.path = t.path WHERE l.user_id = ? ORDER BY l.at DESC, l.rowid DESC`, u.id)
+func (l *Library) Likes(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	l.fresh()
+	ts, err := l.tracks(`JOIN likes l ON l.path = t.path WHERE l.user_id = ? ORDER BY l.at DESC, l.rowid DESC`, u.ID)
 	if err != nil {
 		return err
 	}
-	return writeJSON(w, 200, ts)
+	return httpx.WriteJSON(w, 200, ts)
 }
 
-func (a *app) likePut(w http.ResponseWriter, r *http.Request, u user) error {
-	rel, err := a.musicRel(r.URL.Query().Get("path"))
+func (l *Library) LikePut(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	rel, err := l.musicRel(r.URL.Query().Get("path"))
 	if err != nil {
 		return err
 	}
-	_, err = a.db.Exec(`INSERT OR IGNORE INTO likes(user_id, path, at) VALUES(?, ?, ?)`, u.id, rel, time.Now().UnixMilli())
+	_, err = l.DB.Exec(`INSERT OR IGNORE INTO likes(user_id, path, at) VALUES(?, ?, ?)`, u.ID, rel, time.Now().UnixMilli())
 	return err
 }
 
 // likeDelete no valida contra el disco: debe poder quitarse el me gusta de una pista que ya no existe.
-func (a *app) likeDelete(w http.ResponseWriter, r *http.Request, u user) error {
-	_, err := a.db.Exec(`DELETE FROM likes WHERE user_id = ? AND path = ?`, u.id, r.URL.Query().Get("path"))
+func (l *Library) LikeDelete(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	_, err := l.DB.Exec(`DELETE FROM likes WHERE user_id = ? AND path = ?`, u.ID, r.URL.Query().Get("path"))
 	return err
 }
 
 // played registra una escucha; la interfaz la envía a los 30 s o al terminar la pista.
-func (a *app) played(w http.ResponseWriter, r *http.Request, u user) error {
+func (l *Library) Played(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	var in struct{ Path string }
-	if err := readJSON(w, r, &in); err != nil {
+	if err := httpx.ReadJSON(w, r, &in); err != nil {
 		return err
 	}
-	rel, err := a.musicRel(in.Path)
+	rel, err := l.musicRel(in.Path)
 	if err != nil {
 		return err
 	}
-	_, err = a.db.Exec(`INSERT INTO plays(user_id, path, at) VALUES(?, ?, ?)`, u.id, rel, time.Now().UnixMilli())
+	_, err = l.DB.Exec(`INSERT INTO plays(user_id, path, at) VALUES(?, ?, ?)`, u.ID, rel, time.Now().UnixMilli())
 	return err
 }
 
@@ -520,61 +523,61 @@ func (a *app) played(w http.ResponseWriter, r *http.Request, u user) error {
 
 func playlistName(w http.ResponseWriter, r *http.Request) (string, error) {
 	var in struct{ Name string }
-	if err := readJSON(w, r, &in); err != nil {
+	if err := httpx.ReadJSON(w, r, &in); err != nil {
 		return "", err
 	}
 	name := strings.TrimSpace(in.Name)
 	if name == "" || len(name) > 100 {
-		return "", httpErr{400, "Escribe un nombre de hasta 100 caracteres."}
+		return "", httpx.Error(400, "Escribe un nombre de hasta 100 caracteres.")
 	}
 	return name, nil
 }
 
 // ownPlaylist devuelve el id de la playlist de la ruta solo si es de este usuario; si no, 404.
-func (a *app) ownPlaylist(r *http.Request, u user) (int64, error) {
+func (l *Library) ownPlaylist(r *http.Request, u httpx.User) (int64, error) {
 	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
 	if err != nil {
 		return 0, fs.ErrNotExist
 	}
-	return id, a.db.QueryRow(`SELECT id FROM playlists WHERE id = ? AND user_id = ?`, id, u.id).Scan(&id)
+	return id, l.DB.QueryRow(`SELECT id FROM playlists WHERE id = ? AND user_id = ?`, id, u.ID).Scan(&id)
 }
 
-func (a *app) touchPlaylist(id int64) {
-	a.db.Exec(`UPDATE playlists SET updated = ? WHERE id = ?`, time.Now().UnixMilli(), id)
+func (l *Library) touchPlaylist(id int64) {
+	l.DB.Exec(`UPDATE playlists SET updated = ? WHERE id = ?`, time.Now().UnixMilli(), id)
 }
 
-func (a *app) playlistCreate(w http.ResponseWriter, r *http.Request, u user) error {
+func (l *Library) PlaylistCreate(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	name, err := playlistName(w, r)
 	if err != nil {
 		return err
 	}
-	res, err := a.db.Exec(`INSERT INTO playlists(user_id, name, updated) VALUES(?, ?, ?)`, u.id, name, time.Now().UnixMilli())
+	res, err := l.DB.Exec(`INSERT INTO playlists(user_id, name, updated) VALUES(?, ?, ?)`, u.ID, name, time.Now().UnixMilli())
 	if err != nil {
 		return err
 	}
 	id, _ := res.LastInsertId()
-	return writeJSON(w, 200, map[string]any{"id": id, "name": name})
+	return httpx.WriteJSON(w, 200, map[string]any{"id": id, "name": name})
 }
 
-func (a *app) playlistGet(w http.ResponseWriter, r *http.Request, u user) error {
-	id, err := a.ownPlaylist(r, u)
+func (l *Library) PlaylistGet(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	id, err := l.ownPlaylist(r, u)
 	if err != nil {
 		return err
 	}
-	a.fresh()
+	l.fresh()
 	var name string
-	if err := a.db.QueryRow(`SELECT name FROM playlists WHERE id = ?`, id).Scan(&name); err != nil {
+	if err := l.DB.QueryRow(`SELECT name FROM playlists WHERE id = ?`, id).Scan(&name); err != nil {
 		return err
 	}
-	ts, err := a.tracks(`JOIN playlist_tracks pt ON pt.path = t.path WHERE pt.playlist_id = ? ORDER BY pt.pos, pt.rowid`, id)
+	ts, err := l.tracks(`JOIN playlist_tracks pt ON pt.path = t.path WHERE pt.playlist_id = ? ORDER BY pt.pos, pt.rowid`, id)
 	if err != nil {
 		return err
 	}
-	return writeJSON(w, 200, map[string]any{"id": id, "name": name, "tracks": ts})
+	return httpx.WriteJSON(w, 200, map[string]any{"id": id, "name": name, "tracks": ts})
 }
 
-func (a *app) playlistRename(w http.ResponseWriter, r *http.Request, u user) error {
-	id, err := a.ownPlaylist(r, u)
+func (l *Library) PlaylistRename(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	id, err := l.ownPlaylist(r, u)
 	if err != nil {
 		return err
 	}
@@ -582,66 +585,66 @@ func (a *app) playlistRename(w http.ResponseWriter, r *http.Request, u user) err
 	if err != nil {
 		return err
 	}
-	_, err = a.db.Exec(`UPDATE playlists SET name = ?, updated = ? WHERE id = ?`, name, time.Now().UnixMilli(), id)
+	_, err = l.DB.Exec(`UPDATE playlists SET name = ?, updated = ? WHERE id = ?`, name, time.Now().UnixMilli(), id)
 	return err
 }
 
-func (a *app) playlistDelete(w http.ResponseWriter, r *http.Request, u user) error {
-	id, err := a.ownPlaylist(r, u)
+func (l *Library) PlaylistDelete(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	id, err := l.ownPlaylist(r, u)
 	if err != nil {
 		return err
 	}
-	if _, err := a.db.Exec(`DELETE FROM playlist_tracks WHERE playlist_id = ?`, id); err != nil {
+	if _, err := l.DB.Exec(`DELETE FROM playlist_tracks WHERE playlist_id = ?`, id); err != nil {
 		return err
 	}
-	_, err = a.db.Exec(`DELETE FROM playlists WHERE id = ?`, id)
+	_, err = l.DB.Exec(`DELETE FROM playlists WHERE id = ?`, id)
 	return err
 }
 
-func (a *app) playlistAdd(w http.ResponseWriter, r *http.Request, u user) error {
-	id, err := a.ownPlaylist(r, u)
+func (l *Library) PlaylistAdd(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	id, err := l.ownPlaylist(r, u)
 	if err != nil {
 		return err
 	}
 	var in struct{ Path string }
-	if err := readJSON(w, r, &in); err != nil {
+	if err := httpx.ReadJSON(w, r, &in); err != nil {
 		return err
 	}
-	rel, err := a.musicRel(in.Path)
+	rel, err := l.musicRel(in.Path)
 	if err != nil {
 		return err
 	}
-	res, err := a.db.Exec(`INSERT OR IGNORE INTO playlist_tracks(playlist_id, path, pos)
+	res, err := l.DB.Exec(`INSERT OR IGNORE INTO playlist_tracks(playlist_id, path, pos)
 		VALUES(?, ?, (SELECT COALESCE(MAX(pos), -1) + 1 FROM playlist_tracks WHERE playlist_id = ?))`, id, rel, id)
 	if err != nil {
 		return err
 	}
 	n, _ := res.RowsAffected()
-	a.touchPlaylist(id)
-	return writeJSON(w, 200, map[string]any{"added": n == 1}) // false: ya estaba en la playlist
+	l.touchPlaylist(id)
+	return httpx.WriteJSON(w, 200, map[string]any{"added": n == 1}) // false: ya estaba en la playlist
 }
 
-func (a *app) playlistRemove(w http.ResponseWriter, r *http.Request, u user) error {
-	id, err := a.ownPlaylist(r, u)
+func (l *Library) PlaylistRemove(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	id, err := l.ownPlaylist(r, u)
 	if err != nil {
 		return err
 	}
-	_, err = a.db.Exec(`DELETE FROM playlist_tracks WHERE playlist_id = ? AND path = ?`, id, r.URL.Query().Get("path"))
-	a.touchPlaylist(id)
+	_, err = l.DB.Exec(`DELETE FROM playlist_tracks WHERE playlist_id = ? AND path = ?`, id, r.URL.Query().Get("path"))
+	l.touchPlaylist(id)
 	return err
 }
 
 // playlistOrder deja las pistas en el orden recibido; todas deben estar ya en la playlist.
-func (a *app) playlistOrder(w http.ResponseWriter, r *http.Request, u user) error {
-	id, err := a.ownPlaylist(r, u)
+func (l *Library) PlaylistOrder(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	id, err := l.ownPlaylist(r, u)
 	if err != nil {
 		return err
 	}
 	var in struct{ Paths []string }
-	if err := readJSON(w, r, &in); err != nil {
+	if err := httpx.ReadJSON(w, r, &in); err != nil {
 		return err
 	}
-	tx, err := a.db.Begin()
+	tx, err := l.DB.Begin()
 	if err != nil {
 		return err
 	}
@@ -653,7 +656,7 @@ func (a *app) playlistOrder(w http.ResponseWriter, r *http.Request, u user) erro
 			return err
 		}
 		if n, _ := res.RowsAffected(); n != 1 {
-			return httpErr{400, "El orden no coincide con la playlist."}
+			return httpx.Error(400, "El orden no coincide con la playlist.")
 		}
 	}
 	// Dentro de la transacción: desde otra conexión esperaría el candado de escritura que esta tiene tomado.

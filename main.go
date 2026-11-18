@@ -1,11 +1,9 @@
-// PaloBox: fotos, videos y archivos personales en un solo binario.
-// Los originales se guardan tal cual en carpetas normales bajo DATA_DIR;
-// SQLite solo lleva el índice, así que los archivos siguen accesibles sin la app.
+// PaloBox: fotos, videos, archivos personales y música en un solo binario.
+// Este archivo solo arma las piezas de internal/ y define las rutas.
 package main
 
 import (
 	"crypto/sha256"
-	"database/sql"
 	"embed"
 	"encoding/hex"
 	"fmt"
@@ -16,129 +14,91 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"sync"
 	"time"
 
-	_ "modernc.org/sqlite"
-
+	"palobox/internal/admin"
+	"palobox/internal/auth"
+	"palobox/internal/files"
+	"palobox/internal/httpx"
 	"palobox/internal/media"
+	"palobox/internal/module"
+	"palobox/internal/music"
+	"palobox/internal/photos"
+	"palobox/internal/spotdl"
+	"palobox/internal/store"
+	"palobox/internal/uploads"
 )
 
 //go:embed web
 var webFS embed.FS
 
-const schema = `
-CREATE TABLE IF NOT EXISTS users(id INTEGER PRIMARY KEY, name TEXT UNIQUE NOT NULL, pass BLOB NOT NULL, seen INTEGER NOT NULL DEFAULT 0);
-CREATE TABLE IF NOT EXISTS sessions(token TEXT PRIMARY KEY, user_id INTEGER NOT NULL, expires INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS media(
-	id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, sha TEXT NOT NULL, name TEXT NOT NULL,
-	size INTEGER NOT NULL, kind TEXT NOT NULL, taken INTEGER NOT NULL, path TEXT NOT NULL,
-	UNIQUE(user_id, sha));
-CREATE INDEX IF NOT EXISTS media_taken ON media(user_id, taken DESC);
-CREATE TABLE IF NOT EXISTS tracks(
-	path TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime INTEGER NOT NULL,
-	title TEXT NOT NULL, artist TEXT NOT NULL, album TEXT NOT NULL, album_dir TEXT NOT NULL, artist_dir TEXT NOT NULL,
-	year INTEGER NOT NULL, disc INTEGER NOT NULL, num INTEGER NOT NULL, dur REAL NOT NULL, fold TEXT NOT NULL);
-CREATE INDEX IF NOT EXISTS tracks_album ON tracks(album_dir);
-CREATE INDEX IF NOT EXISTS tracks_artist ON tracks(artist_dir);
-CREATE TABLE IF NOT EXISTS likes(user_id INTEGER NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(user_id, path));
-CREATE TABLE IF NOT EXISTS playlists(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, name TEXT NOT NULL, updated INTEGER NOT NULL);
-CREATE TABLE IF NOT EXISTS playlist_tracks(playlist_id INTEGER NOT NULL, path TEXT NOT NULL, pos INTEGER NOT NULL, PRIMARY KEY(playlist_id, path));
-CREATE TABLE IF NOT EXISTS plays(user_id INTEGER NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL);
-CREATE INDEX IF NOT EXISTS plays_user ON plays(user_id, path);`
-
 type app struct {
-	db      *sql.DB
-	data    string
-	sem     chan struct{} // procesos pesados simultáneos (ffmpeg, vips): el servidor tiene 2 núcleos
-	thumbs  media.Thumbs
-	loginMu sync.Mutex
-	upMu    sync.Map   // id de subida -> *sync.Mutex: un POST o PATCH a la vez por subida
-	finMu   sync.Mutex // una foto a la vez pasa de "¿duplicado?" a quedar en el índice
-	spotdl  module     // descargas de Spotify (servicio spotDL); sin url = sección desactivada
-	admin   string     // usuario que ve el panel de administrador
-	idxMu   sync.Mutex // un recorrido del índice de música a la vez
-	idxAt   time.Time  // último recorrido completo; lo protege idxMu
-}
-
-type user struct {
-	id   int64
-	name string
+	auth    *auth.Service
+	admin   *admin.Handler
+	files   *files.Handler
+	photos  *photos.Handler
+	uploads *uploads.Handler
+	music   *music.Library
+	spotdl  *spotdl.Handler // sin Module.URL = sección desactivada
 }
 
 func open(data string) (*app, error) {
-	for _, d := range []string{"tmp", "thumbs"} {
-		if err := os.MkdirAll(filepath.Join(data, ".palobox", d), 0o755); err != nil {
-			return nil, err
-		}
-	}
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(data, ".palobox", "db.sqlite")+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	db, err := store.Open(data)
 	if err != nil {
 		return nil, err
 	}
-	if _, err := db.Exec(schema); err != nil {
-		return nil, err
-	}
-	// Bases creadas antes del panel de administrador; falla sin daño si la columna ya existe.
-	db.Exec(`ALTER TABLE users ADD COLUMN seen INTEGER NOT NULL DEFAULT 0`)
-	sem := make(chan struct{}, 2)
-	a := &app{db: db, data: data, sem: sem, thumbs: media.Thumbs{Dir: filepath.Join(data, ".palobox", "thumbs"), Sem: sem}}
-	// Subidas abandonadas hace más de una semana.
-	if es, err := os.ReadDir(a.tmp("")); err == nil {
-		for _, e := range es {
-			if i, err := e.Info(); err == nil && time.Since(i.ModTime()) > 7*24*time.Hour {
-				os.Remove(a.tmp(e.Name()))
-			}
-		}
-	}
-	return a, nil
+	sem := make(chan struct{}, 2) // procesos pesados simultáneos (ffmpeg, vips): el servidor tiene 2 núcleos
+	thumbs := media.Thumbs{Dir: filepath.Join(data, ".palobox", "thumbs"), Sem: sem}
+	return &app{
+		auth:    &auth.Service{DB: db},
+		admin:   &admin.Handler{DB: db, Data: data},
+		files:   &files.Handler{Data: data},
+		photos:  &photos.Handler{DB: db, Data: data, Thumbs: thumbs},
+		uploads: uploads.New(db, data, thumbs),
+		music:   &music.Library{DB: db, Data: data, Sem: sem, Thumbs: thumbs},
+		spotdl:  &spotdl.Handler{},
+	}, nil
 }
-
-func (a *app) isAdmin(u user) bool           { return u.name == a.admin }
-func (a *app) tmp(name string) string        { return filepath.Join(a.data, ".palobox", "tmp", name) }
-func (a *app) dir(u user, sub string) string { return filepath.Join(a.data, u.name, sub) }
-
-// safe une rel bajo base sin dejar salir de base: limpiar "/"+rel elimina todos los "..".
-func safe(base, rel string) string { return filepath.Join(base, filepath.Clean("/"+rel)) }
 
 func (a *app) routes() http.Handler {
 	mux := http.NewServeMux()
-	mux.HandleFunc("POST /api/login", a.login)
-	mux.HandleFunc("POST /api/logout", a.logout)
-	mux.HandleFunc("GET /api/me", a.auth(func(w http.ResponseWriter, r *http.Request, u user) error {
-		return writeJSON(w, 200, map[string]any{"name": u.name, "admin": a.isAdmin(u)})
+	auth := a.auth.Wrap
+	mux.HandleFunc("POST /api/login", a.auth.Login)
+	mux.HandleFunc("POST /api/logout", a.auth.Logout)
+	mux.HandleFunc("GET /api/me", auth(func(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+		return httpx.WriteJSON(w, 200, map[string]any{"name": u.Name, "admin": u.Admin})
 	}))
-	mux.HandleFunc("GET /api/admin", a.auth(a.adminStats))
-	mux.HandleFunc("POST /api/uploads", a.auth(a.upStart))
-	mux.HandleFunc("PATCH /api/uploads/{id}", a.auth(a.upPart))
-	mux.HandleFunc("GET /api/photos", a.auth(a.photos))
-	mux.HandleFunc("GET /api/photos/{id}/{v}", a.auth(a.photo))
-	mux.HandleFunc("DELETE /api/photos/{id}", a.auth(a.photoDelete))
-	mux.HandleFunc("GET /api/files", a.auth(a.filesList))
-	mux.HandleFunc("GET /api/files/raw", a.auth(a.filesRaw))
-	mux.HandleFunc("POST /api/files/mkdir", a.auth(a.mkdir))
-	mux.HandleFunc("DELETE /api/files", a.auth(a.filesDelete))
-	mux.HandleFunc("GET /api/media/raw", a.auth(a.mediaRaw))
-	mux.HandleFunc("GET /api/media/thumb", a.auth(a.mediaThumb))
-	mux.HandleFunc("GET /api/music", a.auth(a.musicLib))
-	mux.HandleFunc("GET /api/music/album", a.auth(a.musicAlbum))
-	mux.HandleFunc("GET /api/music/artist", a.auth(a.musicArtist))
-	mux.HandleFunc("GET /api/music/search", a.auth(a.musicSearch))
-	mux.HandleFunc("GET /api/music/likes", a.auth(a.likes))
-	mux.HandleFunc("PUT /api/music/likes", a.auth(a.likePut))
-	mux.HandleFunc("DELETE /api/music/likes", a.auth(a.likeDelete))
-	mux.HandleFunc("POST /api/music/plays", a.auth(a.played))
-	mux.HandleFunc("POST /api/music/playlists", a.auth(a.playlistCreate))
-	mux.HandleFunc("GET /api/music/playlists/{id}", a.auth(a.playlistGet))
-	mux.HandleFunc("PATCH /api/music/playlists/{id}", a.auth(a.playlistRename))
-	mux.HandleFunc("DELETE /api/music/playlists/{id}", a.auth(a.playlistDelete))
-	mux.HandleFunc("POST /api/music/playlists/{id}/tracks", a.auth(a.playlistAdd))
-	mux.HandleFunc("DELETE /api/music/playlists/{id}/tracks", a.auth(a.playlistRemove))
-	mux.HandleFunc("PUT /api/music/playlists/{id}/order", a.auth(a.playlistOrder))
-	mux.HandleFunc("GET /api/spotdl", a.auth(a.spotdlList))
-	mux.HandleFunc("POST /api/spotdl", a.auth(a.spotdlAdd))
-	mux.HandleFunc("DELETE /api/spotdl/{id}", a.auth(a.spotdlDelete))
-	mux.HandleFunc("POST /api/spotdl/{id}/retry", a.auth(a.spotdlRetry))
+	mux.HandleFunc("GET /api/admin", auth(a.admin.Stats))
+	mux.HandleFunc("POST /api/uploads", auth(a.uploads.Start))
+	mux.HandleFunc("PATCH /api/uploads/{id}", auth(a.uploads.Part))
+	mux.HandleFunc("GET /api/photos", auth(a.photos.List))
+	mux.HandleFunc("GET /api/photos/{id}/{v}", auth(a.photos.Get))
+	mux.HandleFunc("DELETE /api/photos/{id}", auth(a.photos.Delete))
+	mux.HandleFunc("GET /api/files", auth(a.files.List))
+	mux.HandleFunc("GET /api/files/raw", auth(a.files.Raw))
+	mux.HandleFunc("POST /api/files/mkdir", auth(a.files.Mkdir))
+	mux.HandleFunc("DELETE /api/files", auth(a.files.Delete))
+	mux.HandleFunc("GET /api/media/raw", auth(a.music.Raw))
+	mux.HandleFunc("GET /api/media/thumb", auth(a.music.Thumb))
+	mux.HandleFunc("GET /api/music", auth(a.music.Lib))
+	mux.HandleFunc("GET /api/music/album", auth(a.music.Album))
+	mux.HandleFunc("GET /api/music/artist", auth(a.music.Artist))
+	mux.HandleFunc("GET /api/music/search", auth(a.music.Search))
+	mux.HandleFunc("GET /api/music/likes", auth(a.music.Likes))
+	mux.HandleFunc("PUT /api/music/likes", auth(a.music.LikePut))
+	mux.HandleFunc("DELETE /api/music/likes", auth(a.music.LikeDelete))
+	mux.HandleFunc("POST /api/music/plays", auth(a.music.Played))
+	mux.HandleFunc("POST /api/music/playlists", auth(a.music.PlaylistCreate))
+	mux.HandleFunc("GET /api/music/playlists/{id}", auth(a.music.PlaylistGet))
+	mux.HandleFunc("PATCH /api/music/playlists/{id}", auth(a.music.PlaylistRename))
+	mux.HandleFunc("DELETE /api/music/playlists/{id}", auth(a.music.PlaylistDelete))
+	mux.HandleFunc("POST /api/music/playlists/{id}/tracks", auth(a.music.PlaylistAdd))
+	mux.HandleFunc("DELETE /api/music/playlists/{id}/tracks", auth(a.music.PlaylistRemove))
+	mux.HandleFunc("PUT /api/music/playlists/{id}/order", auth(a.music.PlaylistOrder))
+	mux.HandleFunc("GET /api/spotdl", auth(a.spotdl.List))
+	mux.HandleFunc("POST /api/spotdl", auth(a.spotdl.Add))
+	mux.HandleFunc("DELETE /api/spotdl/{id}", auth(a.spotdl.Delete))
+	mux.HandleFunc("POST /api/spotdl/{id}/retry", auth(a.spotdl.Retry))
 	web, _ := fs.Sub(webFS, "web")
 	// Huella de la interfaz: la app instalada la compara para saber si debe recargarse.
 	h := sha256.New()
@@ -183,18 +143,18 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	a.spotdl = loadModule("SPOTDL", "El servicio de descargas de Spotify")
-	if a.admin = os.Getenv("ADMIN"); a.admin == "" {
-		a.admin = "breyner"
+	a.spotdl.Module = module.Load("SPOTDL", "El servicio de descargas de Spotify")
+	if a.auth.Admin = os.Getenv("ADMIN"); a.auth.Admin == "" {
+		a.auth.Admin = "breyner"
 	}
 	if len(os.Args) == 4 && os.Args[1] == "adduser" {
-		if err := a.addUser(os.Args[2], os.Args[3]); err != nil {
+		if err := a.auth.AddUser(os.Args[2], os.Args[3]); err != nil {
 			log.Fatal(err)
 		}
 		fmt.Println("usuario listo:", os.Args[2])
 		return
 	}
-	go a.syncTracks() // el primer recorrido de una biblioteca grande tarda: que empiece antes de la primera visita
+	go a.music.Sync() // el primer recorrido de una biblioteca grande tarda: que empiece antes de la primera visita
 	log.Println("escuchando en :8080, datos en", data)
 	// Sin ReadTimeout ni WriteTimeout: hay subidas grandes y reproducción de audio y video.
 	srv := &http.Server{Addr: ":8080", Handler: a.routes(), ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute}
