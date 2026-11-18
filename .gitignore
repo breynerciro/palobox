@@ -1,0 +1,6 @@
+# Secretos: el token de spotDL vive solo en el servidor.
+secrets/
+*.key
+.env
+**/__pycache__/
+/palobox

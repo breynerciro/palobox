@@ -1,0 +1,16 @@
+FROM golang:1.27-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY . .
+RUN CGO_ENABLED=0 go build -o /palobox .
+
+FROM alpine:3.22
+# vips: miniaturas y fechas de fotos (incluye HEIC). ffmpeg: miniaturas y fechas de videos.
+RUN apk add --no-cache vips-tools vips-heif ffmpeg tzdata
+COPY --from=build /palobox /usr/local/bin/palobox
+ENV DATA_DIR=/data TZ=America/Bogota
+EXPOSE 8080
+# Mismo usuario que breynerciro en el servidor: los archivos quedan a su nombre y Samba los ve.
+USER 1000:1000
+ENTRYPOINT ["palobox"]

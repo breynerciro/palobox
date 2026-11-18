@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 340 340" role="img" aria-label="PaloBox">
+  <title>PaloBox</title>
+  <defs>
+    <linearGradient id="pink-lft" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#FF4B72"/><stop offset="1" stop-color="#EC3462"/></linearGradient>
+    <linearGradient id="pink-rgt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#D21D4D"/><stop offset="1" stop-color="#A80F3A"/></linearGradient>
+    <linearGradient id="pink-top" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#FF86A2"/><stop offset="1" stop-color="#FF5C80"/></linearGradient>
+    <linearGradient id="purple-lft" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#9147F2"/><stop offset="1" stop-color="#7B2FE3"/></linearGradient>
+    <linearGradient id="purple-rgt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#6620CC"/><stop offset="1" stop-color="#4C12A6"/></linearGradient>
+    <linearGradient id="purple-top" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#B98AFF"/><stop offset="1" stop-color="#9D5CFA"/></linearGradient>
+    <linearGradient id="cyan-lft" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#26D4F6"/><stop offset="1" stop-color="#13B9EC"/></linearGradient>
+    <linearGradient id="cyan-rgt" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#0A9AD6"/><stop offset="1" stop-color="#0574B5"/></linearGradient>
+    <linearGradient id="cyan-top" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#86F7FF"/><stop offset="1" stop-color="#3FE6FB"/></linearGradient>
+  </defs>
+  <g transform="translate(170.0,170.0) scale(1.22)">
+    <g id="capa-cyan">
+      <polygon points="-85,26 0,75 0,111 -85,62" fill="url(#cyan-lft)"/>
+      <polygon points="0,75 85,26 85,62 0,111" fill="url(#cyan-rgt)"/>
+      <polygon points="0,-23 85,26 0,75 -85,26" fill="url(#cyan-top)"/>
+      <path d="M-85,26.0 L0,75.0 L85,26.0" fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="1" stroke-linejoin="round"/>
+      <g transform="matrix(0.866,0.5,0,1,-85,26.0)"><path d="M45,24.5 V11.0 L56,8.5 V22.0" fill="none" stroke="#fff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><circle cx="42" cy="24.5" r="3.4" fill="#fff"/><circle cx="53" cy="22.0" r="3.4" fill="#fff"/></g>
+      <g transform="matrix(0.866,-0.5,0,1,0,75.0)"><rect x="16" y="12.0" width="40" height="3.6" rx="1.8" fill="#fff" fill-opacity=".38"/><rect x="16" y="20.4" width="40" height="3.6" rx="1.8" fill="#fff" fill-opacity=".38"/><circle cx="72" cy="18.0" r="6.5" fill="#9DFFD9" fill-opacity=".28"/><circle cx="72" cy="18.0" r="3.4" fill="#C9FFEA"/></g>
+    </g>
+    <g id="capa-purple">
+      <polygon points="-85,-18 0,31 0,67 -85,18" fill="url(#purple-lft)"/>
+      <polygon points="0,31 85,-18 85,18 0,67" fill="url(#purple-rgt)"/>
+      <polygon points="0,-67 85,-18 0,31 -85,-18" fill="url(#purple-top)"/>
+      <path d="M-85,-18.0 L0,31.0 L85,-18.0" fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="1" stroke-linejoin="round"/>
+      <g transform="matrix(0.866,0.5,0,1,-85,-18.0)"><path d="M41,8.0 H51.5 L57,13.5 V28.0 H41 Z" fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round"/>
+        <path d="M44.5,18.5 H53.5 M44.5,23.0 H53.5" stroke="#fff" stroke-width="2.2" stroke-linecap="round"/></g>
+      <g transform="matrix(0.866,-0.5,0,1,0,31.0)"><rect x="16" y="12.0" width="40" height="3.6" rx="1.8" fill="#fff" fill-opacity=".38"/><rect x="16" y="20.4" width="40" height="3.6" rx="1.8" fill="#fff" fill-opacity=".38"/><circle cx="72" cy="18.0" r="6.5" fill="#9DFFD9" fill-opacity=".28"/><circle cx="72" cy="18.0" r="3.4" fill="#C9FFEA"/></g>
+    </g>
+    <g id="capa-pink">
+      <polygon points="-85,-62 0,-13 0,23 -85,-26" fill="url(#pink-lft)"/>
+      <polygon points="0,-13 85,-62 85,-26 0,23" fill="url(#pink-rgt)"/>
+      <clipPath id="clip-pink"><polygon points="0,-98.26 62.9,-62 0,-25.74 -62.9,-62"/></clipPath>
+      <g clip-path="url(#clip-pink)">
+        <polygon points="0,-98.26 62.9,-62 0,-25.74 -62.9,-62" fill="#4E0720"/>
+        <polygon points="-62.9,-62 0,-98.26 0,-74.26 -62.9,-38" fill="#6C0B2C"/>
+        <polygon points="0,-98.26 62.9,-62 62.9,-38 0,-74.26" fill="#97133F"/>
+      </g>
+      <path d="M0,-111 L85,-62 L0,-13 L-85,-62 Z M-62.9,-62 L0,-25.74 L62.9,-62 L0,-98.26 Z" fill="url(#pink-top)" fill-rule="evenodd"/>
+      <path d="M-85,-62.0 L0,-13.0 L85,-62.0" fill="none" stroke="#fff" stroke-opacity=".35" stroke-width="1" stroke-linejoin="round"/>
+      <g transform="matrix(0.866,0.5,0,1,-85,-62.0)"><rect x="38" y="9.0" width="22" height="18" rx="3.5" fill="none" stroke="#fff" stroke-width="2.4"/>
+        <path d="M41.5,24.5 L47,17.0 L51,21.0 L53.5,19.0 L57,24.5 Z" fill="#fff"/>
+        <circle cx="53.5" cy="14.0" r="2" fill="#fff"/></g>
+      <g transform="matrix(0.866,-0.5,0,1,0,-13.0)"><rect x="16" y="12.0" width="40" height="3.6" rx="1.8" fill="#fff" fill-opacity=".38"/><rect x="16" y="20.4" width="40" height="3.6" rx="1.8" fill="#fff" fill-opacity=".38"/><circle cx="72" cy="18.0" r="6.5" fill="#9DFFD9" fill-opacity=".28"/><circle cx="72" cy="18.0" r="3.4" fill="#C9FFEA"/></g>
+    </g>
+  </g>
+</svg>

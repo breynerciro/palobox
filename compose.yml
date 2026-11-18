@@ -1,0 +1,53 @@
+# La imagen se compila en el PC de desarrollo y llega con ./deploy.sh; el servidor no guarda código.
+services:
+  palobox:
+    image: palobox
+    restart: unless-stopped
+    ports: ["127.0.0.1:8080:8080"] # solo para tailscale serve (HTTPS en *.ts.net); ni la LAN ni el tailnet llegan directo
+    volumes: ["/srv/data:/data"]
+    environment:
+      SPOTDL_URL: http://spotdl:8801 # descargas de Spotify; sin el servicio, la sección queda oculta
+      SPOTDL_TOKEN_FILE: /run/secrets/spotdl_token # sin token la sección también queda oculta
+    secrets: [spotdl_token]
+    # deploy.sh espera este chequeo (up --wait) antes de borrar la imagen anterior.
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/version"]
+      interval: 5s
+      timeout: 3s
+      retries: 3
+      start_period: 15s
+
+  # Servicio propio de descargas de Spotify (no la imagen oficial): recibe enlaces de la
+  # app, los resuelve con spotDL y escribe los MP3 en /data/media/musica.
+  # No publica puerto: solo lo alcanza la app por la red de compose, y con su token.
+  spotdl:
+    image: palobox-spotdl
+    restart: unless-stopped
+    user: "1000:1000" # mismos dueños que la app y Samba
+    # Solo la biblioteca y su propio estado: no ve la base de la app ni los archivos de los usuarios.
+    volumes:
+      - /srv/data/media/musica:/data/media/musica
+      - /srv/data/.palobox/spotdl:/data/.palobox/spotdl
+    secrets: [spotdl_token]
+    environment:
+      TZ: America/Bogota
+      TOKEN_FILE: /run/secrets/spotdl_token
+      # Opcionales, para cuando YouTube pida credenciales:
+      # SPOTIFY_CLIENT_ID: ""
+      # SPOTIFY_CLIENT_SECRET: ""
+      # SPOTDL_COOKIE_FILE: /data/.palobox/spotdl/cookies.txt
+      # MAX_ACTIVE: "5"
+      # MAX_PER_USER: "2"
+      # THREADS: "2"
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request as u; t = open('/run/secrets/spotdl_token').read().strip(); u.urlopen(u.Request('http://127.0.0.1:8801/health', headers={'Authorization': 'Bearer ' + t}), timeout=8)"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+# Un secreto por módulo, compartido solo entre la app y ese módulo. Lo crea deploy.sh en el
+# servidor (secrets/ es 700; el archivo 644 para que lo lea el usuario 1000 del contenedor).
+secrets:
+  spotdl_token:
+    file: ./secrets/spotdl.token

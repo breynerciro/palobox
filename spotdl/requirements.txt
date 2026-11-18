@@ -1,0 +1,2 @@
+# Versión fija: si YouTube cambia y spotDL falla, se sube aquí y se reconstruye.
+spotdl==4.6.0

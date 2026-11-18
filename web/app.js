@@ -1,0 +1,103 @@
+// Punto de entrada: decide qué vista pintar según la ruta y mantiene la interfaz al día.
+import { $, el, empty } from './lib.js';
+import { TABS, route, go, setRenderer, render } from './nav.js';
+import { audio, markPlaying } from './player.js';
+import { isAdmin, start } from './session.js';
+import { uploading } from './uploads.js';
+import { photosView } from './photos.js';
+import { filesView } from './files.js';
+import { ensureLib } from './music.js';
+import { musicView, greeting, syncSearchBox } from './music-views.js';
+import { adminView } from './admin.js';
+
+let lastHash = ''; // de dónde se entró a Administración, para volver ahí
+let lastCloud = '#/fotos'; // última sección fuera de Música: a ella vuelve «Nube»
+let lastView = ''; // vista pintada la última vez; evita el parpadeo al buscar mientras se escribe
+const MUSIC = { '': 'inicio', buscar: 'buscar', biblioteca: 'biblioteca' }; // vistas raíz de Música; el resto son páginas de detalle
+
+window.addEventListener('hashchange', () => !$('#app').hidden && render());
+
+let renderId = 0;
+async function renderView() {
+  const { tab, path } = route();
+  const id = ++renderId;
+  for (const a of document.querySelectorAll('#tabs a')) {
+    a.dataset.tab === tab ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');
+  }
+  const parts = path ? path.split('/') : [];
+  const admin = tab === 'admin';
+  const music = tab === 'musica';
+  const section = music && Object.hasOwn(MUSIC, parts[0] ?? '') ? MUSIC[parts[0] ?? ''] : null;
+  const detail = music && !section; // álbum, artista o playlist: la vista trae su propio encabezado
+  if (!admin) lastHash = location.hash;
+  if (tab === 'fotos' || tab === 'archivos') lastCloud = location.hash || '#/fotos';
+
+  // En Música la barra inferior (o la lateral en escritorio) es la de la sección.
+  document.body.classList.toggle('music', music);
+  $('#tabs').hidden = music;
+  $('#mtabs').hidden = $('#side').hidden = !music;
+  $('#mtabs-exit').href = $('#side-exit').href = lastCloud;
+  for (const a of document.querySelectorAll('[data-m]')) {
+    a.dataset.m === section ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');
+  }
+  if (music) ensureLib().catch(() => {}); // la barra lateral y los me gusta, también al entrar directo a un álbum
+
+  $('#title').textContent = section === 'inicio' ? greeting() : section === 'buscar' ? 'Buscar' : section === 'biblioteca' ? 'Tu biblioteca' : parts.at(-1) ?? TABS[tab].title;
+  $('#title').hidden = detail;
+  $('#subtitle').textContent = '';
+  $('#admin-link').hidden = !isAdmin || admin;
+  $('#back').hidden = music ? !detail : !parts.length && !admin;
+  $('#back-label').textContent = admin ? TABS[route(lastHash).tab].title : music ? 'Atrás' : parts.at(-2) ?? TABS[tab].title;
+  $('#back').onclick = () => {
+    if (admin) location.hash = lastHash || '#/fotos';
+    else if (!music) go(tab, parts.slice(0, -1).join('/'));
+    else if (history.length > 1) history.back();
+    else go('musica', '');
+  };
+  $('#add').hidden = tab !== 'fotos' && tab !== 'archivos';
+  $('#mkdir').hidden = tab !== 'archivos';
+  document.title = `${music ? (section === 'inicio' ? 'Música' : $('#title').textContent) : $('#title').textContent} · PaloBox`;
+
+  $('#searchbox').hidden = section !== 'buscar';
+  if (section === 'buscar') {
+    $('#search').placeholder = 'Busca o pega un enlace de Spotify';
+    syncSearchBox();
+  }
+
+  const view = $('#view');
+  const viewKey = `${tab}/${section ?? path}`;
+  view.setAttribute('aria-busy', 'true');
+  if (!(section === 'buscar' && lastView === viewKey)) view.replaceChildren(skeleton(tab));
+  lastView = viewKey;
+  try {
+    const node = tab === 'fotos' ? await photosView() : admin ? await adminView() : music ? await musicView(path) : await filesView(path);
+    if (id !== renderId) return; // el usuario ya navegó a otra parte
+    view.replaceChildren(node);
+  } catch (e) {
+    if (id === renderId) view.replaceChildren(empty('alert', 'No se pudo cargar', e.message));
+  } finally {
+    if (id === renderId) view.removeAttribute('aria-busy');
+  }
+  if (tab !== 'fotos') markPlaying();
+}
+
+function skeleton(tab) {
+  if (tab === 'fotos') return el('div', { className: 'grid' }, Array.from({ length: 18 }, () => el('div', { className: 'tile skeleton' })));
+  return el('ul', { className: 'list' }, Array.from({ length: 6 }, () => el('li', {}, el('div', { className: 'row' },
+    el('span', { className: 'type skeleton' }), el('div', { className: 'row-text' })))));
+}
+
+// La app instalada en el celular no se recarga sola: al volver a primer plano, si el servidor
+// tiene otra versión de la interfaz, se recarga (salvo que esté sonando música o subiendo algo).
+let version;
+async function checkVersion() {
+  const v = await fetch('/api/version').then((r) => (r.ok ? r.text() : null)).catch(() => null);
+  if (!v) return;
+  if (version && v !== version && audio.paused && !uploading) location.reload();
+  version ??= v;
+}
+checkVersion();
+document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && checkVersion());
+
+setRenderer(renderView);
+start();

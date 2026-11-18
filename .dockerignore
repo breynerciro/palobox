@@ -1,0 +1,9 @@
+.git
+*.md
+spotdl
+deploy.sh
+codefinish.key
+compose.yml
+.env
+*.txt
+**/__pycache__
