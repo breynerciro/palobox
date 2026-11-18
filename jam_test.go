@@ -216,4 +216,17 @@ func TestJamStream(t *testing.T) {
 	if m := cmd(map[string]any{"op": "pause"}); m["room"].(map[string]any)["pos"].(float64) < 1 {
 		t.Fatalf("la sala debe ir en la segunda pista o más: %v", m["room"])
 	}
+
+	// Saltar al abrir el flujo: la acción viaja en la petición y repetirla (Safari lo hace) no salta dos veces.
+	cmd(map[string]any{"op": "jump", "index": 0})
+	for i := 0; i < 2; i++ {
+		req, _ := http.NewRequestWithContext(ctx, "GET", ana.base+"/api/jam/stream?device=anatelefono&op=next&from=0&n=abc", nil)
+		if r2, err := ana.c.Do(req); err == nil {
+			io.ReadFull(r2.Body, make([]byte, 417))
+			r2.Body.Close()
+		}
+	}
+	if m := cmd(map[string]any{"op": "pause"}); m["room"].(map[string]any)["pos"].(float64) != 1 {
+		t.Fatalf("«siguiente» en la petición del flujo debe aplicarse una sola vez: %v", m["room"])
+	}
 }

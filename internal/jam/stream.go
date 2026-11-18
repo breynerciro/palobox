@@ -15,6 +15,7 @@ package jam
 import (
 	"io"
 	"net/http"
+	"strconv"
 	"time"
 
 	"palobox/internal/httpx"
@@ -60,6 +61,35 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 	if room == nil || len(room.queue) == 0 {
 		h.mu.Unlock()
 		return errNoRoom
+	}
+	// Saltar, devolver o adelantar viajan en la misma petición que abre el audio nuevo: el teléfono la hace dentro
+	// del toque (lo único que iOS deja con la pantalla bloqueada) y lo que llega ya es la pista pedida, sin esperar
+	// una respuesta aparte mientras sigue sonando la anterior. «n» identifica la acción: Safari puede pedir la
+	// misma dirección más de una vez y no debe saltar dos canciones.
+	q := r.URL.Query()
+	if op, n := q.Get("op"), q.Get("n"); op != "" && n != "" && u.nonce != n {
+		u.nonce = n
+		from, _ := strconv.Atoi(q.Get("from"))
+		index, _ := strconv.Atoi(q.Get("index"))
+		at, _ := strconv.ParseFloat(q.Get("at"), 64)
+		switch {
+		case op == "next" && from == room.pos:
+			h.advance(room)
+		case op == "prev" && from == room.pos:
+			room.manual = 0
+			room.set(max(room.pos-1, 0), 0, true)
+		case op == "jump" && index >= 0 && index < len(room.queue):
+			room.manual = max(0, room.manual-(index-room.pos))
+			room.set(index, 0, true)
+		case op == "seek":
+			if d := room.dur(); d > 0 {
+				at = min(at, d)
+			}
+			room.set(room.pos, max(at, 0), true)
+		}
+		for _, m := range room.members {
+			m.poke()
+		}
 	}
 	room.streams++
 	h.mu.Unlock()

@@ -56,6 +56,7 @@ type user struct {
 	conns  map[string]*conn
 	room   *jamRoom
 	active map[string]bool // dispositivos en los que suena para este usuario: uno, o varios a la vez
+	nonce  string          // última acción aplicada al abrir un flujo (stream.go): el navegador puede repetir la petición
 }
 
 type jamRoom struct {

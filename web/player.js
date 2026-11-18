@@ -217,6 +217,7 @@ export const playNext = (t) => addAt(t, true);
 export const enqueue = (t) => addAt(t, false);
 
 function next(ended = false) {
+  if (streaming() && !ended) return streamDo('next');
   // «ended» lleva la pista que terminó: si otro dispositivo de la sala ya avisó, el servidor no avanza dos veces.
   if (room) {
     const from = pos;
@@ -240,6 +241,7 @@ function next(ended = false) {
   if (STREAM) startRoom({ playing: true, at: 0 });
 }
 function prev() {
+  if (streaming()) return streamDo(roomTime() > 3 || pos === 0 ? 'seek' : 'prev', { at: 0 });
   if (room) return void (roomTime() > 3 || pos === 0 ? jam.send('seek', { at: 0 }) : jam.send('prev'));
   if (STREAM) { // cola restaurada, todavía sin sala: la anterior (o la misma desde el principio) arranca en una
     if (pos > 0) load(pos - 1);
@@ -404,6 +406,7 @@ function setVolume(v) {
 $('#volume').oninput = (e) => { setVolume(e.target.value / 100); save(); };
 
 function seekTo(at) {
+  if (streaming()) return streamDo('seek', { at });
   if (room) return void jam.send('seek', { at });
   if (!STREAM) return void (audio.currentTime = at);
   resume = at; // cola restaurada en flujo continuo, aún sin sala: arrancará desde aquí
@@ -593,6 +596,7 @@ function queueRow(t, i) {
       load(i);
       return void (STREAM && startRoom({ playing: true, at: 0 }));
     }
+    if (streaming()) return streamDo('jump', { index: i });
     if (here) begin(t);
     jam.send('jump', { index: i });
   };
@@ -796,6 +800,31 @@ function syncStream(t) {
   stream = mark;
   audio.src = `/api/jam/stream?device=${jam.deviceId}&t=${Date.now()}`;
   audio.play().then(() => (warned = false)).catch(streamBlocked);
+}
+// streamDo salta, devuelve o adelanta en el flujo continuo. La acción viaja en la misma petición que abre el audio
+// nuevo, y esa petición se hace aquí mismo, dentro del toque: la canción anterior se corta al instante y, como
+// el cambio lo pidió el usuario (también desde la pantalla bloqueada), iOS lo deja cargar. La sala se adelanta
+// aquí para pintar ya la pista nueva; la foto del servidor dirá lo mismo.
+function streamDo(op, arg = {}) {
+  const from = room.pos;
+  const p = op === 'next' ? from + 1 : op === 'prev' ? Math.max(0, from - 1) : op === 'jump' ? arg.index : from;
+  const at = op === 'seek' ? Math.max(0, arg.at || 0) : 0;
+  const known = !!queue[p]; // «siguiente» al final de la cola: las sugerencias las pone el servidor y llegan con la foto
+  const now = Date.now() + offset;
+  // El flujo que se abre ya es el de la pista pedida: cuando llegue la foto con ese cambio no hay que abrir otro.
+  stream = { pos: p, origin: now - at * 1000, end: now + ((queue[p]?.dur || 0) - at) * 1000 };
+  if (known) {
+    room = { ...room, pos: p, at, stamp: now, playing: true };
+    if (p !== pos) load(p, { play: false, at });
+  }
+  const q = new URLSearchParams({ device: jam.deviceId, op, from, n: `${Date.now()}${Math.random()}` });
+  if (op === 'jump') q.set('index', arg.index);
+  if (op === 'seek') q.set('at', at);
+  audio.src = `/api/jam/stream?${q}`;
+  audio.play().then(() => (warned = false)).catch(streamBlocked);
+  syncPlayButton();
+  paintQueue();
+  paintRemote();
 }
 function streamBlocked(e) {
   stuck = e.name === 'NotAllowedError'; // wake lo reintenta al volver a la app
