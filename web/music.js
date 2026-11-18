@@ -109,8 +109,8 @@ export const item = {
   liked: () => ({ href: href('musica', 'gustan'), name: 'Canciones que te gustan', sub: joinText('Playlist', plural(liked.size, 'canción', 'canciones')), when: Infinity, art: likedCover }),
   playlist: (p) => ({ href: href('musica', `playlist/${p.id}`), name: p.name, sub: joinText('Playlist', plural(p.tracks, 'canción', 'canciones')), when: p.updated,
     art: (small) => cover(p.tracks ? p.cover : null, { small }) }),
-  album: (a) => ({ href: href('musica', `album/${a.path}`), name: a.name, sub: joinText('Álbum', a.artist), when: Math.max(a.played, a.added), art: (small) => cover(a.path, { small }) }),
-  artist: (a) => ({ href: href('musica', `artista/${a.path}`), name: a.name, sub: 'Artista', when: Math.max(a.played, a.added), round: true,
+  album: (a) => ({ href: href('musica', `album/${a.path}`), name: a.name, sub: joinText('Álbum', a.artist), when: Math.max(a.played, a.saved), art: (small) => cover(a.path, { small }) }),
+  artist: (a) => ({ href: href('musica', `artista/${a.path}`), name: a.name, sub: 'Artista', when: Math.max(a.played, a.saved), round: true,
     art: (small) => cover(a.path, { small, round: true, glyph: 'user' }) }),
 };
 export const card = (it, sub = it.sub) => el('a', { className: `card${it.round ? ' center' : ''}`, href: it.href },
@@ -118,20 +118,47 @@ export const card = (it, sub = it.sub) => el('a', { className: `card${it.round ?
 export const libRow = (it) => el('a', { className: 'row', href: it.href }, it.art(true),
   el('div', { className: 'row-text' }, el('p', { className: 'ellipsis', textContent: it.name }), el('p', { className: 'muted ellipsis', textContent: it.sub })));
 
-// Barra lateral de escritorio: lo mismo que Tu biblioteca por defecto (me gusta, playlists y artistas;
-// los álbumes se ven dentro de cada artista).
+// Barra lateral de escritorio: lo mismo que Tu biblioteca sin filtro.
 function paintSide() {
   if (!lib) return;
   $('#side-list').replaceChildren(...libItems(lib).map((it) => el('li', {}, libRow(it))));
 }
-// libItems arma la lista de Tu biblioteca: show = 'playlists' | 'artists' | 'albums' o vacío para la vista corta.
+// libItems arma Tu biblioteca: me gusta, playlists, artistas que sigues y álbumes guardados, como en
+// Spotify; el resto de la música compartida está en Inicio y Buscar. show = 'playlists' | 'artists' | 'albums' o vacío.
 export function libItems(d, { show = '', recent = true } = {}) {
-  const pick = (k) => (show ? show === k : k !== 'albums');
-  const items = [...(pick('playlists') ? d.playlists.map(item.playlist) : []), ...(pick('artists') ? d.artists.map(item.artist) : []),
-    ...(pick('albums') ? d.albums.map(item.album) : [])];
+  const pick = (k) => !show || show === k;
+  const items = [...(pick('playlists') ? d.playlists.map(item.playlist) : []), ...(pick('artists') ? d.artists.filter((a) => a.saved).map(item.artist) : []),
+    ...(pick('albums') ? d.albums.filter((a) => a.saved).map(item.album) : [])];
   items.sort(recent ? (a, b) => b.when - a.when : (a, b) => a.name.localeCompare(b.name, 'es'));
   if (pick('playlists')) items.unshift(item.liked()); // siempre fija arriba
   return items;
+}
+
+// saveButton guarda un álbum (+) o sigue a un artista (Seguir) en Tu biblioteca. x es la respuesta de
+// /api/music/album o /artist: trae path, name y saved (ms, 0 = no guardado).
+export function saveButton(kind, x) {
+  const album = kind === 'album';
+  const b = el('button', { className: album ? 'icon-btn toggle' : 'btn secondary small' });
+  const paint = () => {
+    const on = x.saved > 0;
+    b.setAttribute('aria-pressed', on);
+    if (!album) return void (b.textContent = on ? 'Siguiendo' : 'Seguir');
+    b.replaceChildren(icon(on ? 'check' : 'plus'));
+    b.setAttribute('aria-label', on ? 'Quitar de Tu biblioteca' : 'Guardar en Tu biblioteca');
+  };
+  b.onclick = async () => {
+    const on = !(x.saved > 0);
+    b.disabled = true;
+    const r = await api(`/api/music/saved?kind=${kind}&path=${encodeURIComponent(x.path)}`, { method: on ? 'PUT' : 'DELETE' }).catch(() => null);
+    b.disabled = false;
+    if (!r?.ok) return toast(r ? 'No se pudo cambiar Tu biblioteca.' : OFFLINE, { kind: 'warn' });
+    x.saved = on ? Date.now() : 0;
+    paint();
+    toast(album ? (on ? 'Se guardó en Tu biblioteca.' : 'Se quitó de Tu biblioteca.') : (on ? `Ahora sigues a ${x.name}.` : `Dejaste de seguir a ${x.name}.`), { kind: 'ok' });
+    library().catch(() => {}); // repinta la barra lateral
+  };
+  paint();
+  return b;
 }
 
 // trackList pinta pistas reproducibles. covers: carátula junto al título (listas de varios álbumes);

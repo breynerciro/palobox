@@ -88,6 +88,8 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("PUT /api/music/likes", auth(a.music.LikePut))
 	mux.HandleFunc("DELETE /api/music/likes", auth(a.music.LikeDelete))
 	mux.HandleFunc("POST /api/music/plays", auth(a.music.Played))
+	mux.HandleFunc("PUT /api/music/saved", auth(a.music.SavePut))
+	mux.HandleFunc("DELETE /api/music/saved", auth(a.music.SaveDelete))
 	mux.HandleFunc("POST /api/music/playlists", auth(a.music.PlaylistCreate))
 	mux.HandleFunc("GET /api/music/playlists/{id}", auth(a.music.PlaylistGet))
 	mux.HandleFunc("PATCH /api/music/playlists/{id}", auth(a.music.PlaylistRename))

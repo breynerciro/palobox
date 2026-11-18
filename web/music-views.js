@@ -3,7 +3,7 @@ import { $, el, icon, json, plural, joinText, fmtLong, typeBadge, toast, ask, me
 import { href, go, render, route } from './nav.js';
 import { api, userName } from './session.js';
 import { playAt, isShuffle } from './player.js';
-import { library, ensureLib, liked, createPlaylist, cover, item, card, libRow, trackList, libItems } from './music.js';
+import { library, ensureLib, liked, createPlaylist, cover, item, card, libRow, trackList, libItems, saveButton } from './music.js';
 
 const OFFLINE = 'Sin conexión con el servidor.';
 const frag = (...kids) => { const f = document.createDocumentFragment(); f.append(...kids.flat().filter(Boolean)); return f; };
@@ -177,7 +177,7 @@ async function resultsView(q) {
     out.push(el('div', { className: 'search-top' },
       el('section', {}, heading('Resultado principal'), top),
       tracks.length > 0 && el('section', {}, heading('Canciones'), trackList(tracks.slice(0, 5), { covers: true, sub: (t) => joinText(t.artist, t.album) }))));
-  } else out.push(note('No está en tu biblioteca. Si lo tienes en Spotify, pega aquí el enlace para descargarlo.', 'first'));
+  } else out.push(note('Aún no está en PaloBox. Si lo tienes en Spotify, pega aquí el enlace para descargarlo.', 'first'));
   out.push(shelf('Artistas', artists.map((a) => card(item.artist(a)))),
     shelf('Álbumes', albums.map((a) => card(item.album(a), joinText(a.artist, a.year)))),
     shelf('Tus playlists', playlists.map((p) => card(item.playlist(p)))));
@@ -201,13 +201,13 @@ async function linkView(link) {
     const r = await api('/api/spotdl', json('POST', { url: link.url })).catch(() => null);
     btn.disabled = false;
     if (!r?.ok) return toast(r ? await r.text() : OFFLINE, { kind: 'warn' });
-    toast('Quedó pedido. Aparece en tu biblioteca cuando termine de descargar.', { kind: 'ok' });
+    toast('Quedó pedido. Aparece en Inicio cuando termine de descargar.', { kind: 'ok' });
     setQuery(''); // vuelve a las sugerencias, donde se ve el avance
   };
   return frag(el('section', { className: 'dl-card' },
     el('span', { className: 'type', style: '--tc: var(--t-audio)' }, icon('download')),
     el('div', { className: 'row-text' }, el('p', { textContent: `Enlace de Spotify: ${what}` }),
-      el('p', { className: 'muted', textContent: 'Llega a tu biblioteca cuando termine de descargar.' })),
+      el('p', { className: 'muted', textContent: 'Aparece en Inicio cuando termine de descargar; desde ahí la guardas en Tu biblioteca.' })),
     btn), dl.node);
 }
 
@@ -288,9 +288,9 @@ async function downloads() {
   return ok && { node: jobs, paint };
 }
 
-// Tu biblioteca: por defecto playlists y artistas (los álbumes están dentro de cada artista), en lista o cuadrícula.
+// Tu biblioteca: lo que el usuario guardó (ver libItems), en lista o cuadrícula.
 
-let filter = ''; // '' = vista corta; 'playlists' | 'artists' | 'albums'
+let filter = ''; // '' = todo; 'playlists' | 'artists' | 'albums'
 let recent = true; // orden: recientes o alfabético
 let grid = (() => { try { return localStorage.getItem('palobox.libgrid') === '1'; } catch { return false; } })();
 
@@ -331,7 +331,8 @@ async function libraryView() {
   return frag(filters,
     el('div', { className: 'toolbar' }, order, el('span', { className: 'spacer' }), layout, add),
     dl?.node, dl && heading('Biblioteca'), box,
-    !d.albums.length && note('Aún no hay música. Pídela desde Buscar; esta biblioteca la comparten todos.', 'first'));
+    !d.playlists.length && !d.albums.some((a) => a.saved) && !d.artists.some((a) => a.saved) &&
+      note('Aquí queda lo que guardas: toca + en un álbum o Seguir en un artista. Lo encuentras en Inicio y en Buscar.', 'first'));
 }
 
 // Páginas de álbum, artista y playlist: encabezado grande, botones de reproducir y lista de pistas
@@ -374,7 +375,7 @@ async function albumView(path) {
   const [al] = await Promise.all([getJSON(`/api/music/album?path=${encodeURIComponent(path)}`), ensureLib().catch(() => {})]);
   if (!al) return gone('Este álbum ya no está');
   return page({
-    label: 'Álbum', title: al.name, art: cover(al.path), tracks: al.tracks,
+    label: 'Álbum', title: al.name, art: cover(al.path), tracks: al.tracks, actions: [saveButton('album', al)],
     meta: [al.artistPath && el('a', { href: href('musica', `artista/${al.artistPath}`), textContent: al.artist }), al.year || null, songs(al.tracks.length), total(al.tracks)],
     body: trackList(al.tracks),
   });
@@ -384,7 +385,7 @@ async function artistView(path) {
   const [ar] = await Promise.all([getJSON(`/api/music/artist?path=${encodeURIComponent(path)}`), ensureLib().catch(() => {})]);
   if (!ar) return gone('Este artista ya no está');
   return page({
-    label: 'Artista', title: ar.name, art: cover(ar.path, { round: true, glyph: 'user' }), tracks: ar.tracks,
+    label: 'Artista', title: ar.name, art: cover(ar.path, { round: true, glyph: 'user' }), tracks: ar.tracks, actions: [saveButton('artist', ar)],
     meta: [plural(ar.albums.length, 'álbum', 'álbumes'), songs(ar.tracks.length)],
     body: frag(heading('Populares'), trackList(ar.popular, { covers: true, sub: (t) => t.album }),
       heading('Discografía'), el('div', { className: 'cards' }, ar.albums.map((a) => card(item.album(a), joinText(a.year || null, songs(a.tracks)))))),

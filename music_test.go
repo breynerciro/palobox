@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -271,5 +272,64 @@ func TestPlaylists(t *testing.T) {
 	}
 	if code, _, _ := ana.do("GET", pl, nil); code != 404 {
 		t.Fatalf("la playlist borrada debe dar 404, dio %d", code)
+	}
+}
+
+// Tu biblioteca: cada usuario guarda álbumes y sigue artistas; empieza vacía.
+func TestTuBiblioteca(t *testing.T) {
+	ap, _, ana, luis := musicSetup(t)
+	ap.music.Reindex()
+	saved := func(c client, key, path string) float64 {
+		t.Helper()
+		_, m, raw := c.do("GET", "/api/music", nil)
+		for _, x := range m[key].([]any) {
+			if it := x.(map[string]any); it["path"] == path {
+				return it["saved"].(float64)
+			}
+		}
+		t.Fatalf("%s no está en %s: %s", path, key, raw)
+		return 0
+	}
+	album, artist := "Niña Pastori/Cañaílla", "Juanes"
+	q := func(kind, path string) string {
+		return "/api/music/saved?kind=" + kind + "&path=" + url.QueryEscape(path)
+	}
+	if saved(ana, "albums", album) != 0 || saved(ana, "artists", artist) != 0 {
+		t.Fatal("la biblioteca debe empezar vacía")
+	}
+	for _, u := range []string{q("album", album), q("artist", artist), q("album", album)} { // repetir no falla
+		if code, _, raw := ana.do("PUT", u, nil); code != 200 {
+			t.Fatalf("guardar %s: %d %s", u, code, raw)
+		}
+	}
+	if saved(ana, "albums", album) == 0 || saved(ana, "artists", artist) == 0 {
+		t.Fatal("ana guardó el álbum y sigue al artista")
+	}
+	if saved(luis, "albums", album) != 0 || saved(luis, "artists", artist) != 0 {
+		t.Fatal("lo guardado por ana no es de luis")
+	}
+	if _, m, _ := ana.do("GET", "/api/music/album?path="+url.QueryEscape(album), nil); m["saved"].(float64) == 0 {
+		t.Fatalf("la página del álbum debe saber que está guardado: %v", m["saved"])
+	}
+	if _, m, _ := ana.do("GET", "/api/music/artist?path="+artist, nil); m["saved"].(float64) == 0 {
+		t.Fatalf("la página del artista debe saber que lo sigue: %v", m["saved"])
+	}
+	// Solo carpetas que existen en el índice, y del tipo correcto.
+	for _, u := range []string{q("album", "Juanes"), q("artist", album), q("album", ""), q("artist", "../ana"), q("album", "No existe")} {
+		if code, _, _ := ana.do("PUT", u, nil); code != 404 {
+			t.Fatalf("%s debe dar 404, dio %d", u, code)
+		}
+	}
+	if code, _, _ := ana.do("PUT", q("cancion", album), nil); code != 400 {
+		t.Fatalf("tipo inválido debe dar 400, dio %d", code)
+	}
+	luis.do("DELETE", q("album", album), nil)
+	if saved(ana, "albums", album) == 0 {
+		t.Fatal("luis no puede quitar lo de ana")
+	}
+	ana.do("DELETE", q("album", album), nil)
+	ana.do("DELETE", q("artist", artist), nil)
+	if saved(ana, "albums", album) != 0 || saved(ana, "artists", artist) != 0 {
+		t.Fatal("quitar de la biblioteca")
 	}
 }

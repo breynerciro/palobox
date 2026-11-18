@@ -49,6 +49,7 @@ type album struct {
 	Added      int64   `json:"added"`  // ms; fecha del archivo más nuevo
 	Played     int64   `json:"played"` // ms; última vez que este usuario lo escuchó
 	Plays      int     `json:"plays"`
+	Saved      int64   `json:"saved"` // ms; cuándo lo guardó este usuario en Tu biblioteca, 0 = no
 }
 
 type artist struct {
@@ -59,6 +60,7 @@ type artist struct {
 	Added  int64  `json:"added"`
 	Played int64  `json:"played"`
 	Plays  int    `json:"plays"`
+	Saved  int64  `json:"saved"` // ms; cuándo lo empezó a seguir este usuario, 0 = no
 }
 
 type playlist struct {
@@ -283,6 +285,10 @@ func (l *Library) albums(u httpx.User) ([]album, error) {
 		heard[dir] = s
 	}
 	rows.Close()
+	saved, err := l.savedOf(u, "album")
+	if err != nil {
+		return nil, err
+	}
 	rows, err = l.DB.Query(`SELECT album_dir, MIN(album), artist_dir, MAX(year), COUNT(*), SUM(dur), MAX(mtime) FROM tracks GROUP BY album_dir`)
 	if err != nil {
 		return nil, err
@@ -294,14 +300,15 @@ func (l *Library) albums(u httpx.User) ([]album, error) {
 		if err := rows.Scan(&al.Path, &al.Name, &al.ArtistPath, &al.Year, &al.Tracks, &al.Dur, &al.Added); err != nil {
 			return nil, err
 		}
-		al.Artist, al.Played, al.Plays = al.ArtistPath, heard[al.Path].last, heard[al.Path].plays
+		al.Artist, al.Played, al.Plays, al.Saved = al.ArtistPath, heard[al.Path].last, heard[al.Path].plays, saved[al.Path]
 		out = append(out, al)
 	}
 	sort.Slice(out, func(i, j int) bool { return natsort.Less(fold(out[i].Name), fold(out[j].Name)) })
 	return out, rows.Err()
 }
 
-func artistsOf(albums []album) []artist {
+// artistsOf agrupa los álbumes por artista; followed son los que sigue el usuario (ver savedOf).
+func artistsOf(albums []album, followed map[string]int64) []artist {
 	at := map[string]int{}
 	out := []artist{}
 	for _, al := range albums {
@@ -312,7 +319,7 @@ func artistsOf(albums []album) []artist {
 		if !ok {
 			i = len(out)
 			at[al.ArtistPath] = i
-			out = append(out, artist{Path: al.ArtistPath, Name: al.ArtistPath})
+			out = append(out, artist{Path: al.ArtistPath, Name: al.ArtistPath, Saved: followed[al.ArtistPath]})
 		}
 		ar := &out[i]
 		ar.Albums++
@@ -371,7 +378,11 @@ func (l *Library) Lib(w http.ResponseWriter, r *http.Request, u httpx.User) erro
 		rows.Scan(&p)
 		likes = append(likes, p)
 	}
-	return httpx.WriteJSON(w, 200, map[string]any{"albums": albums, "artists": artistsOf(albums), "playlists": pls, "likes": likes, "top": top})
+	followed, err := l.savedOf(u, "artist")
+	if err != nil {
+		return err
+	}
+	return httpx.WriteJSON(w, 200, map[string]any{"albums": albums, "artists": artistsOf(albums, followed), "playlists": pls, "likes": likes, "top": top})
 }
 
 func (l *Library) Album(w http.ResponseWriter, r *http.Request, u httpx.User) error {
@@ -388,7 +399,11 @@ func (l *Library) Album(w http.ResponseWriter, r *http.Request, u httpx.User) er
 	for _, t := range ts {
 		year = max(year, t.Year)
 	}
-	return httpx.WriteJSON(w, 200, map[string]any{"path": dir, "name": ts[0].Album, "artist": ts[0].ArtistPath, "artistPath": ts[0].ArtistPath, "year": year, "tracks": ts})
+	saved, err := l.savedOf(u, "album")
+	if err != nil {
+		return err
+	}
+	return httpx.WriteJSON(w, 200, map[string]any{"saved": saved[dir], "path": dir, "name": ts[0].Album, "artist": ts[0].ArtistPath, "artistPath": ts[0].ArtistPath, "year": year, "tracks": ts})
 }
 
 func (l *Library) Artist(w http.ResponseWriter, r *http.Request, u httpx.User) error {
@@ -418,7 +433,11 @@ func (l *Library) Artist(w http.ResponseWriter, r *http.Request, u httpx.User) e
 		}
 	}
 	sort.SliceStable(mine, func(i, j int) bool { return mine[i].Year > mine[j].Year })
-	return httpx.WriteJSON(w, 200, map[string]any{"path": dir, "name": dir, "albums": mine, "tracks": ts, "popular": popular})
+	followed, err := l.savedOf(u, "artist")
+	if err != nil {
+		return err
+	}
+	return httpx.WriteJSON(w, 200, map[string]any{"saved": followed[dir], "path": dir, "name": dir, "albums": mine, "tracks": ts, "popular": popular})
 }
 
 var likeEscape = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
@@ -454,13 +473,17 @@ func (l *Library) Search(w http.ResponseWriter, r *http.Request, u httpx.User) e
 	if err != nil {
 		return err
 	}
+	followed, err := l.savedOf(u, "artist")
+	if err != nil {
+		return err
+	}
 	albums, artists := []album{}, []artist{}
 	for _, al := range all {
 		if len(albums) < 12 && has(al.Name+" "+al.Artist) {
 			albums = append(albums, al)
 		}
 	}
-	for _, ar := range artistsOf(all) {
+	for _, ar := range artistsOf(all, followed) {
 		if len(artists) < 8 && has(ar.Name) {
 			artists = append(artists, ar)
 		}
@@ -516,6 +539,67 @@ func (l *Library) Played(w http.ResponseWriter, r *http.Request, u httpx.User) e
 		return err
 	}
 	_, err = l.DB.Exec(`INSERT INTO plays(user_id, path, at) VALUES(?, ?, ?)`, u.ID, rel, time.Now().UnixMilli())
+	return err
+}
+
+// Tu biblioteca: álbumes guardados y artistas seguidos, por usuario. Lo demás de la
+// biblioteca compartida se ve en Inicio y Buscar, pero no aparece en Tu biblioteca.
+
+// savedOf devuelve lo que u guardó de un tipo ("album" o "artist"): carpeta -> cuándo (ms).
+func (l *Library) savedOf(u httpx.User, kind string) (map[string]int64, error) {
+	rows, err := l.DB.Query(`SELECT path, at FROM saved WHERE user_id = ? AND kind = ?`, u.ID, kind)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]int64{}
+	for rows.Next() {
+		var p string
+		var at int64
+		if err := rows.Scan(&p, &at); err != nil {
+			return nil, err
+		}
+		out[p] = at
+	}
+	return out, rows.Err()
+}
+
+// savedKind lee ?kind= y devuelve la columna del índice donde vive esa carpeta.
+func savedKind(r *http.Request) (kind, col string, err error) {
+	switch kind = r.URL.Query().Get("kind"); kind {
+	case "album":
+		return kind, "album_dir", nil
+	case "artist":
+		return kind, "artist_dir", nil
+	}
+	return "", "", httpx.Error(400, "tipo inválido")
+}
+
+// SavePut guarda un álbum o sigue a un artista; solo carpetas que existen en el índice.
+func (l *Library) SavePut(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	kind, col, err := savedKind(r)
+	if err != nil {
+		return err
+	}
+	path := r.URL.Query().Get("path")
+	if path == "" { // pistas sueltas en la raíz: no son un álbum ni un artista
+		return fs.ErrNotExist
+	}
+	var one int
+	if err := l.DB.QueryRow(`SELECT 1 FROM tracks WHERE `+col+` = ? LIMIT 1`, path).Scan(&one); err != nil {
+		return err
+	}
+	_, err = l.DB.Exec(`INSERT OR IGNORE INTO saved(user_id, kind, path, at) VALUES(?, ?, ?, ?)`, u.ID, kind, path, time.Now().UnixMilli())
+	return err
+}
+
+// SaveDelete no valida contra el índice: debe poder quitarse algo que ya no está en el disco.
+func (l *Library) SaveDelete(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	kind, _, err := savedKind(r)
+	if err != nil {
+		return err
+	}
+	_, err = l.DB.Exec(`DELETE FROM saved WHERE user_id = ? AND kind = ? AND path = ?`, u.ID, kind, r.URL.Query().Get("path"))
 	return err
 }
 

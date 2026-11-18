@@ -28,7 +28,8 @@ CREATE TABLE IF NOT EXISTS likes(user_id INTEGER NOT NULL, path TEXT NOT NULL, a
 CREATE TABLE IF NOT EXISTS playlists(id INTEGER PRIMARY KEY, user_id INTEGER NOT NULL, name TEXT NOT NULL, updated INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS playlist_tracks(playlist_id INTEGER NOT NULL, path TEXT NOT NULL, pos INTEGER NOT NULL, PRIMARY KEY(playlist_id, path));
 CREATE TABLE IF NOT EXISTS plays(user_id INTEGER NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL);
-CREATE INDEX IF NOT EXISTS plays_user ON plays(user_id, path);`
+CREATE INDEX IF NOT EXISTS plays_user ON plays(user_id, path);
+CREATE TABLE IF NOT EXISTS saved(user_id INTEGER NOT NULL, kind TEXT NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(user_id, kind, path));`
 
 // Open crea las carpetas internas de data/.palobox y abre la base con el esquema al día.
 func Open(data string) (*sql.DB, error) {
