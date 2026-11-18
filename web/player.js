@@ -43,12 +43,49 @@ let syncedAt = 0;
 const roomTime = () => (room.playing ? room.at + (Date.now() + offset - room.stamp) / 1000 : room.at);
 const playing = () => (room && !here ? room.playing : !audio.paused);
 const dur = () => audio.duration || queue[pos]?.dur || 0;
+const warnPlay = (e) => console.warn('El navegador no dejó reproducir:', e?.name, e?.message);
+let stuck = false; // un play() sin toque fue rechazado: se reintenta al volver a la app
+
+// La siguiente pista se descarga entera mientras suena la actual y se pone en el mismo audio con un blob:
+// así el cambio al terminar no espera la red. En segundo plano, un hueco de silencio mientras carga basta para
+// que Android o iOS den la reproducción por terminada. Mismo elemento: conserva la sesión de medios de iOS.
+let cur = null; // { path, url } blob de la pista cargada
+let ready = null; // { path, url } blob de la que sigue
+let tried = ''; // pista que ya se intentó descargar
+function srcFor(t) {
+  if (cur?.path !== t.path) {
+    if (cur) URL.revokeObjectURL(cur.url);
+    cur = ready?.path === t.path ? ready : null;
+    if (cur) ready = null;
+  }
+  return cur?.url ?? rawUrl('musica', t.path);
+}
+async function prefetch() {
+  const t = queue[pos + 1] ?? (repeat === 1 ? queue[0] : null);
+  if (!t || !here || t.path === tried || t.path === ready?.path || t.path === cur?.path) return;
+  tried = t.path;
+  try {
+    const r = await fetch(rawUrl('musica', t.path));
+    // shortcut: un archivo de más de 80 MB (FLAC largo) no se guarda en memoria y carga de la red como antes.
+    if (!r.ok || +r.headers.get('content-length') > 80e6) return void r.body?.cancel();
+    const url = URL.createObjectURL(await r.blob());
+    if (ready) URL.revokeObjectURL(ready.url);
+    ready = { path: t.path, url };
+  } catch (e) { console.warn('No se pudo adelantar la descarga de la siguiente pista:', e); }
+}
+// Posición en la pantalla de bloqueo y la notificación; sin esto Android puede dar la sesión por inactiva.
+function positionState() {
+  if (!navigator.mediaSession?.setPositionState || !(audio.duration < Infinity)) return;
+  try { navigator.mediaSession.setPositionState({ duration: audio.duration, position: Math.min(audio.currentTime, audio.duration), playbackRate: audio.playbackRate || 1 }); } catch {}
+}
+for (const ev of ['loadedmetadata', 'playing', 'pause', 'seeked', 'ratechange']) audio.addEventListener(ev, positionState);
+audio.addEventListener('playing', () => (stuck = false));
 // begin pone a sonar t dentro del toque del usuario: el navegador solo deja empezar el audio tras un gesto,
 // y la foto de la sala llega después.
 function begin(t) {
   curPath = t.path;
-  audio.src = rawUrl('musica', t.path);
-  audio.play().catch(() => {});
+  audio.src = srcFor(t);
+  audio.play().catch(warnPlay);
 }
 
 const mix = (a) => {
@@ -68,10 +105,10 @@ function load(i, { play = true, at = 0 } = {}) {
   const t = queue[i];
   if (!room || curPath !== t.path) { // en una sala la pista que ya está cargada no se vuelve a pedir
     curPath = t.path;
-    audio.src = rawUrl('musica', t.path);
+    audio.src = srcFor(t);
     if (at) audio.addEventListener('loadedmetadata', () => (audio.currentTime = room ? roomTime() : at), { once: true });
   }
-  if (play) audio.play().catch(() => {}); // si el formato no sirve, lo informa onerror
+  if (play) audio.play().catch((e) => { stuck = e.name === 'NotAllowedError'; warnPlay(e); }); // si el formato no sirve, lo informa onerror
   const sub = joinText(t.artist, t.album);
   for (const [titleEl, subEl, coverEl] of [['#now', '#now-sub', '#player-cover'], ['#np-title', '#np-sub', '#np-cover']]) {
     $(titleEl).textContent = t.title;
@@ -97,9 +134,9 @@ function load(i, { play = true, at = 0 } = {}) {
   refill();
 }
 
-// Sugerencias: cuando a la cola le quedan menos de 3 pistas, el servidor propone qué sigue y la música no se detiene.
+// Sugerencias: cuando a la cola le quedan menos de 6 pistas, el servidor propone qué sigue y la música no se detiene.
 async function refill() {
-  if (room || filling || repeat || pos < 0 || queue.length - pos > 3) return; // en una sala las sugerencias las pone el servidor
+  if (room || filling || repeat || pos < 0 || queue.length - pos > 6) return; // en una sala las sugerencias las pone el servidor
   filling = true;
   const e = epoch;
   let more = null;
@@ -251,7 +288,22 @@ function syncPlayButton() {
 audio.onplay = syncPlayButton;
 audio.onpause = () => { syncPlayButton(); save(); };
 audio.onended = () => { count(); next(true); };
-audio.onerror = () => queue[pos] && toast(`Este dispositivo no puede reproducir «${queue[pos].title}». Los formatos más compatibles son MP3 y M4A.`, { kind: 'warn', sticky: true });
+let retried = ''; // pista que ya se volvió a pedir tras un error de carga
+audio.addEventListener('playing', () => (retried = ''));
+audio.onerror = () => {
+  const t = queue[pos];
+  if (!t) return;
+  if (retried !== t.path) { // un corte de red o un blob roto: se pide una vez más a la red, en el mismo punto
+    retried = t.path;
+    const at = audio.currentTime;
+    if (cur) URL.revokeObjectURL(cur.url);
+    cur = null;
+    audio.src = rawUrl('musica', t.path);
+    if (at) audio.addEventListener('loadedmetadata', () => (audio.currentTime = at), { once: true });
+    return void audio.play().catch(warnPlay);
+  }
+  toast(`Este dispositivo no puede reproducir «${queue[pos].title}». Los formatos más compatibles son MP3 y M4A.`, { kind: 'warn', sticky: true });
+};
 
 // Historial: una escucha cuenta a los 30 s o al terminar la pista.
 function count() {
@@ -275,6 +327,7 @@ audio.ontimeupdate = () => {
   if (!audio.duration) return;
   if (!audio.paused && audio.currentTime >= 30) count();
   if (Date.now() - savedAt > 5000) save();
+  if (audio.currentTime > 5) prefetch(); // pasado el arranque, para no quitarle red a la pista actual
   // En una sala, este dispositivo se vuelve a alinear si se alejó de la posición común (como mucho cada 5 s).
   if (room && here && room.playing && Date.now() - syncedAt > 5000 && Math.abs(audio.currentTime - roomTime()) > 1.5) {
     syncedAt = Date.now();
@@ -304,13 +357,13 @@ $('#volume').oninput = (e) => { setVolume(e.target.value / 100); save(); };
 
 const seekTo = (at) => (room ? void jam.send('seek', { at }) : (audio.currentTime = at));
 function toggle() {
-  if (!room) return audio.paused ? audio.play().catch(() => {}) : audio.pause();
+  if (!room) return audio.paused ? audio.play().catch(warnPlay) : audio.pause();
   if (!here && !devices.some((d) => d.active)) { // el dispositivo donde sonaba se desconectó: reproducir aquí lo toma
     here = true;
     jam.send('here', { target: jam.deviceId });
   }
   const on = playing();
-  if (here && !on) audio.play().catch(() => {}); // dentro del toque; también destraba el audio si el navegador no lo dejó empezar solo
+  if (here && !on) audio.play().catch(warnPlay); // dentro del toque; también destraba el audio si el navegador no lo dejó empezar solo
   if (on || !room.playing) jam.send(on ? 'pause' : 'play');
 }
 $('#playpause').onclick = $('#np-play').onclick = toggle;
@@ -479,6 +532,16 @@ function save() {
   } catch {} // modo privado o cupo lleno: la app sigue sin recordar
 }
 window.addEventListener('pagehide', save);
+// Al volver a la app: la sala se pone al día (el flujo de eventos pudo morir en segundo plano) y, si el
+// navegador no dejó arrancar la siguiente pista sin un toque, se intenta de nuevo.
+function wake() {
+  if (document.visibilityState !== 'visible' || !user) return;
+  if (!jam.alive()) jam.connect(applyJam); // la foto que llega llama a syncRoom
+  else if (room) syncRoom();
+  else if (stuck && audio.paused) audio.play().catch(warnPlay);
+}
+document.addEventListener('visibilitychange', wake);
+window.addEventListener('pageshow', wake);
 
 // restore deja lista (en pausa) la cola que este usuario tenía la última vez.
 export function restore(name) {
@@ -502,6 +565,9 @@ export function restore(name) {
 export function reset() {
   audio.pause();
   audio.removeAttribute('src');
+  for (const b of [cur, ready]) if (b) URL.revokeObjectURL(b.url);
+  cur = ready = null;
+  tried = '';
   jam.close();
   room = null;
   devices = [];
@@ -602,7 +668,7 @@ export async function joinJam(code) {
 
 // playOn elige en cuál de mis dispositivos suena; con add lo suma a los que ya suenan (o lo quita si ya sonaba).
 function playOn(d, add = false) {
-  if (d.me && room?.playing && !(add && d.active)) audio.play().catch(() => {}); // dentro del toque, para que el navegador lo deje sonar
+  if (d.me && room?.playing && !(add && d.active)) audio.play().catch(warnPlay); // dentro del toque, para que el navegador lo deje sonar
   if (room) return void jam.send('here', { target: d.id, add });
   if (d.me) return; // sin sala ya suena aquí
   if (pos < 0) return toast('Pon a sonar algo primero y luego elige el dispositivo.');

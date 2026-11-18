@@ -37,6 +37,8 @@ export function connect(onState) {
   source.onmessage = (e) => take(JSON.parse(e.data));
 }
 
+export const alive = () => !!source && source.readyState !== EventSource.CLOSED;
+
 export function close() {
   source?.close();
   source = null;
