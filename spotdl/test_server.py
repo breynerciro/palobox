@@ -9,6 +9,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 import urllib.error
 import urllib.request
 from http.server import ThreadingHTTPServer
@@ -163,15 +164,75 @@ class StoreTest(unittest.TestCase):
         self.assertIn("No se pudo descargar «Tomá»", server.outcome("Tomá", url, [], True, 3, 3)[2])
 
 
+def biblioteca(music_dir, canciones):
+    """Crea <Artista>/<Álbum>/<Título>.mp3 vacíos y devuelve sus etiquetas por ruta, para
+    sustituir read_tags: (artista TPE1, álbum, título, duración, total de pistas)."""
+    tags = {}
+    for artista, album, titulo, dur, total in canciones:
+        ruta = os.path.join(music_dir, artista.split("/")[0], album, titulo + ".mp3")
+        os.makedirs(os.path.dirname(ruta), exist_ok=True)
+        open(ruta, "wb").close()
+        tags[ruta] = {"artists": artista.split("/"), "title": titulo, "duration": dur, "total": total}
+    return tags
+
+
+class FiltroTest(unittest.TestCase):
+    """La misma canción como sencillo y dentro de un álbum: se conserva la del álbum."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.music = tmp.name
+
+    def cancion(self, nombre="Nada", artista="Penyair", dur=180, pistas=1):
+        return {"url": "https://open.spotify.com/track/x", "name": nombre, "artist": artista,
+                "artists": [artista], "album_name": "x", "duration": dur, "tracks_count": pistas}
+
+    def filtrar(self, disco, cancion):
+        tags = biblioteca(self.music, disco)
+        with mock.patch("server.read_tags", side_effect=tags.__getitem__):
+            todo, saltadas = server.filter_plan([cancion], server.index_library(self.music))
+        return "salta" if saltadas else "baja"
+
+    def test_sencillo_en_disco_y_llega_el_album(self):
+        self.assertEqual(self.filtrar([("Penyair", "Nada", "Nada", 180, 1)], self.cancion(pistas=12)), "baja")
+
+    def test_album_en_disco_y_llega_el_sencillo(self):
+        self.assertEqual(self.filtrar([("Penyair", "La Ley del Todo", "Nada", 181, 12)], self.cancion(pistas=1)), "salta")
+
+    def test_mas_de_3_segundos_de_diferencia(self):
+        self.assertEqual(self.filtrar([("Penyair", "La Ley del Todo", "Nada", 184, 12)], self.cancion()), "baja")
+
+    def test_otro_artista(self):
+        self.assertEqual(self.filtrar([("Otro", "La Ley del Todo", "Nada", 180, 12)], self.cancion()), "baja")
+
+    def test_tildes_y_mayusculas(self):
+        self.assertEqual(self.filtrar([("PENYAIR", "Álbum", "CANCION", 180, 12)], self.cancion(nombre="Canción")), "salta")
+
+    def test_cualquiera_de_los_artistas(self):
+        # spotDL guarda TPE1 como «A/B» y la carpeta con el primero; llega con otro primero.
+        c = self.cancion(artista="Invitado")
+        c["artists"] = ["Invitado", "Penyair"]
+        self.assertEqual(self.filtrar([("Penyair/Invitado", "La Ley del Todo", "Nada", 180, 12)], c), "salta")
+
+    def test_mp3_ilegible_no_frena(self):
+        biblioteca(self.music, [("Penyair", "La Ley del Todo", "Nada", 180, 12)])
+        with mock.patch("server.read_tags", side_effect=ValueError("dañado")):
+            todo, saltadas = server.filter_plan([self.cancion()], server.index_library(self.music))
+        self.assertEqual((len(todo), saltadas), (1, []))
+
+
 class ServiceTest(unittest.TestCase):
     """Arranca el servicio real y un spotDL falso que solo imprime y escribe lo pedido."""
 
     CABECERA = """#!/usr/bin/env python3
 import json, os, subprocess, sys, time
 args = sys.argv[1:]
+# Un download de un .spotdl deja en el log las URLs que traía (el archivo se borra al terminar).
+todo = [s["url"] for a in args[1:2] if a.endswith(".spotdl") for s in json.load(open(a))]
 if os.environ.get("FAKE_LOG"):
     with open(os.environ["FAKE_LOG"], "a") as f:
-        f.write(json.dumps({"args": args, "home": os.environ.get("HOME"), "deno": os.environ.get("DENO_DIR")}) + "\\n")
+        f.write(json.dumps({"args": args, "home": os.environ.get("HOME"), "deno": os.environ.get("DENO_DIR"), "todo": todo}) + "\\n")
 if args and args[0] == "--version":
     print("4.6.0")
     sys.exit(0)
@@ -318,17 +379,27 @@ for i in range(1, 4):
         # Un fallo de toda la ejecución se reintenta solo una vez y luego queda para el usuario.
         fin = self.esperar(job["id"], ("error",), intentos=2)
         self.assertEqual(fin["error"], "No se pudo completar la descarga.")
-        descargas = [c["args"] for c in self.llamadas() if c["args"][0] == "download"]
-        self.assertEqual([a[1] for a in descargas], [job["url"]] * 2)
+        # Falla el plan (save): ni se intenta la descarga, y se reintenta el enlace entero.
+        self.assertEqual([(c["args"][0], c["args"][1]) for c in self.llamadas()], [("save", job["url"])] * 2)
 
     # Una playlist de cinco: cfg dice qué canciones fallan y con qué error de spotDL 4.6.
+    # Con save escribe el plan (cfg['plan'] o las cinco canciones) como lo hace spotDL.
     LISTA = """
+cfg = json.load(open(os.environ['FAKE_LOG'] + '.cfg'))
+if args[0] == 'save':
+    plan = cfg.get('plan') or [{'url': u, 'name': 'Canción ' + u[-2:], 'artist': 'Artista', 'artists': ['Artista'],
+                                'album_name': 'Tomá', 'duration': 200, 'tracks_count': 5} for u in cfg['tracks']]
+    if '/track/' not in args[1]:
+        print('Found %d songs in Tomá (Playlist)' % len(plan), flush=True)
+    json.dump(plan, open(args[args.index('--save-file') + 1], 'w'))
+    sys.exit(cfg.get('save_rc', 0))
 qs = args[1:args.index('--output')]
 err, save = args[args.index('--save-errors') + 1], args[args.index('--save-file') + 1]
-cfg = json.load(open(os.environ['FAKE_LOG'] + '.cfg'))
 songs = []
 for q in qs:
-    if '/track/' in q:
+    if q.endswith('.spotdl'):
+        songs += [s['url'] for s in json.load(open(q))]
+    elif '/track/' in q:
         songs.append(q)
     else:
         songs += cfg['tracks']
@@ -349,14 +420,14 @@ if lines:
     YTDLP = "AudioProviderError: YT-DLP download error - https://music.youtube.com/watch?v=abc"
     SIN_RESULTADOS = "LookupError: No results found for song: Artista - Canción"
 
-    def lista(self, fail):
+    def lista(self, fail, **cfg):
         with open(self.log + ".cfg", "w", encoding="utf-8") as f:
-            json.dump({"tracks": self.TRACKS, "fail": fail}, f)
+            json.dump({"tracks": self.TRACKS, "fail": fail, **cfg}, f)
         self.script(self.LISTA)
 
     def pedidas(self):
-        """Lo que se le pidió a spotDL en cada ejecución."""
-        return [a[1:a.index("--output")] for a in (c["args"] for c in self.llamadas()) if a[0] == "download"]
+        """Lo que se le pidió a spotDL en cada descarga (las URLs del .spotdl, si fue uno)."""
+        return [c["todo"] or c["args"][1:c["args"].index("--output")] for c in self.llamadas() if c["args"][0] == "download"]
 
     def test_fallo_transitorio_reintenta_solo_las_fallidas_y_luego_se_agota(self):
         t = self.TRACKS
@@ -364,7 +435,8 @@ if lines:
         _, job = self.request("POST", "/jobs", {"url": self.PLAYLIST})
         fin = self.esperar(job["id"], ("error",), intentos=2)
         # El automático ya pidió solo las dos transitorias; la permanente no se vuelve a pedir.
-        self.assertEqual(self.pedidas(), [[self.PLAYLIST], [t[0], t[1]]])
+        self.assertEqual(self.pedidas(), [t, [t[0], t[1]]])
+        self.assertEqual([c["args"][0] for c in self.llamadas()], ["save", "download", "download"])  # el reintento no planea
         self.assertEqual(fin["title"], "Tomá")
         self.assertEqual(fin["error"], "3 canciones no se pudieron descargar: Canción 03 — Artista, Canción 01 — Artista, Canción 02 — Artista")
         self.assertNotIn("http", json.dumps({k: v for k, v in fin.items() if k != "url"}))
@@ -378,6 +450,50 @@ if lines:
         self.assertEqual(self.pedidas()[-1], [t[0], t[1]])
         self.assertEqual(fin["notice"], "2 canciones de «Tomá» no se pudieron descargar: Canción 03 — Artista, Canción 02 — Artista.")
         self.assertEqual(self.request("POST", f"/jobs/{job['id']}/retry")[0], 409)
+
+    def temporales(self):
+        return sorted(f for f in os.listdir(self.settings.state_dir) if f.endswith((".spotdl", ".txt")))
+
+    def test_salta_lo_que_ya_esta_en_la_biblioteca(self):
+        t = self.TRACKS
+        self.lista({})
+        tags = biblioteca(self.settings.music_dir, [("Artista", "Tomá", "Canción 02", 201, 5), ("Artista", "Tomá", "Canción 04", 199, 5)])
+        with mock.patch("server.read_tags", side_effect=tags.__getitem__):
+            _, job = self.request("POST", "/jobs", {"url": self.PLAYLIST})
+            fin = self.esperar(job["id"], ("finished",))
+        self.assertEqual(self.pedidas(), [[t[0], t[2], t[4]]])
+        self.assertEqual(fin["notice"], "«Tomá» ya está en tu biblioteca. 2 canciones ya estaban en la biblioteca.")
+        self.assertEqual(self.temporales(), [])
+
+    def test_todo_ya_estaba_no_descarga(self):
+        self.lista({})
+        tags = biblioteca(self.settings.music_dir, [("Artista", "Tomá", f"Canción {u[-2:]}", 200, 5) for u in self.TRACKS])
+        with mock.patch("server.read_tags", side_effect=tags.__getitem__):
+            _, job = self.request("POST", "/jobs", {"url": self.PLAYLIST})
+            fin = self.esperar(job["id"])
+        self.assertEqual([c["args"][0] for c in self.llamadas()], ["save"])
+        self.assertEqual((fin["status"], fin["error"]), ("finished", ""))
+        self.assertEqual(self.service.store.failed(job["id"]), [])
+        self.assertEqual(fin["notice"], "«Tomá» ya está en tu biblioteca. 5 canciones ya estaban en la biblioteca.")
+        self.assertEqual(self.temporales(), [])
+
+    def test_cancion_suelta_ya_estaba(self):
+        u = self.TRACKS[0]
+        self.lista({}, plan=[{"url": u, "name": "Nada", "artist": "Penyair", "artists": ["Penyair"], "duration": 180, "tracks_count": 1}])
+        tags = biblioteca(self.settings.music_dir, [("Penyair", "La Ley del Todo", "Nada", 180, 12)])
+        with mock.patch("server.read_tags", side_effect=tags.__getitem__):
+            _, job = self.request("POST", "/jobs", {"url": u})
+            fin = self.esperar(job["id"], ("finished",))
+        self.assertEqual(fin["notice"], "«Penyair - Nada» ya está en tu biblioteca. 1 canción ya estaba en la biblioteca.")
+
+    def test_si_el_filtro_falla_baja_el_enlace_entero(self):
+        self.lista({})
+        with mock.patch("server.filter_plan", side_effect=RuntimeError("inesperado")):
+            _, job = self.request("POST", "/jobs", {"url": self.PLAYLIST})
+            fin = self.esperar(job["id"], ("finished",))
+        self.assertEqual(self.pedidas(), [[self.PLAYLIST]])
+        self.assertEqual(fin["notice"], "«Tomá» ya está en tu biblioteca.")
+        self.assertEqual(self.temporales(), [])
 
     def test_reintento_muestra_avance(self):
         self.lista({self.TRACKS[0]: self.YTDLP})
@@ -459,7 +575,7 @@ if lines:
         self.assertEqual(self.pedidas()[-1], t[:2])
         self.assertEqual(self.request("POST", "/jobs/cccccccccccccccc/retry")[0], 200)
         self.esperar("cccccccccccccccc", ("finished",))
-        self.assertEqual(self.pedidas()[-1], [self.PLAYLIST])
+        self.assertEqual(self.pedidas()[-1], t)  # el enlace entero, ya filtrado por el plan
 
     def test_apagar_no_marca_error_y_deja_el_trabajo_para_reanudar(self):
         self.script(
@@ -588,9 +704,11 @@ if lines:
 
         _, job = self.request("POST", "/jobs", {"url": "https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX"})
         self.esperar(job["id"])
-        args = [c for c in self.llamadas() if c["args"][0] == "download"][0]["args"]
-        self.assertNotIn("secreto-123", " ".join(args))
-        self.assertNotIn("--client-secret", args)
+        for args in (c["args"] for c in self.llamadas()):
+            self.assertNotIn("secreto-123", " ".join(args))
+            self.assertNotIn("--client-secret", args)
+        save = [c for c in self.llamadas() if c["args"][0] == "save"][0]["args"]
+        self.assertTrue(save[save.index("--lyrics") + 1].startswith("--"))  # sin proveedores: no busca letras
         with open(self.log + ".env") as f:
             self.assertEqual(f.read(), "False")  # tampoco en el entorno de spotDL
 

@@ -5,7 +5,8 @@ La app Go no ejecuta spotDL: le manda el enlace a este servicio y consulta la co
 Aquí viven el estado (SQLite propia), el proceso de spotDL y su cancelación, así que
 un reinicio del contenedor no pierde los trabajos pendientes.
 
-Solo usa la biblioteca estándar: menos dependencias y una imagen más liviana.
+Solo usa la biblioteca estándar, más mutagen para leer etiquetas MP3 (llega con spotDL):
+menos dependencias y una imagen más liviana.
 El puerto no se publica; únicamente lo alcanza la app por la red de compose, y toda
 petición debe traer el token del módulo (Authorization: Bearer) y la identidad del
 usuario que la app ya autenticó (X-PaloBox-User, X-PaloBox-Admin).
@@ -28,6 +29,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 import urllib.parse
 
 log = logging.getLogger("spotdl.servicio")
@@ -512,6 +514,76 @@ def song_names(path):
         return {}
 
 
+def norm(s):
+    """Texto comparable: sin mayúsculas, tildes, espacios ni signos («Canción» = «CANCION»)."""
+    return "".join(c for c in unicodedata.normalize("NFKD", s or "").casefold() if c.isalnum())
+
+
+def read_tags(path):
+    """Artistas (TPE1), título, duración y total de pistas del álbum (TRCK «n/total») de un MP3."""
+    from mutagen.mp3 import MP3  # perezoso: viene con spotDL y las pruebas lo sustituyen
+
+    audio = MP3(path)
+    tags = audio.tags or {}
+
+    def texts(key):
+        frame = tags.get(key)
+        return [str(t) for t in frame.text] if frame else []
+
+    total = (texts("TRCK") or [""])[0].partition("/")[2]
+    return {
+        "artists": [a for t in texts("TPE1") for a in t.split("/")],
+        "title": (texts("TIT2") or [""])[0],
+        "duration": audio.info.length,
+        "total": int(total) if total.isdigit() else 0,
+    }
+
+
+def index_library(music_dir):
+    """(artista, título) normalizados → rutas, según <Artista>/<Álbum>/<Título>.mp3. No lee
+    etiquetas: eso se hace solo con los candidatos."""
+    index = collections.defaultdict(list)
+    for root, _dirs, files in os.walk(music_dir):
+        parts = os.path.relpath(root, music_dir).split(os.sep)
+        if parts[0] == ".":
+            continue
+        for name in files:
+            stem, ext = os.path.splitext(name)
+            if ext.lower() == ".mp3":
+                index[(norm(parts[0]), norm(stem))].append(os.path.join(root, name))
+    return index
+
+
+def filter_plan(songs, index):
+    """(a bajar, saltadas): se salta la canción que ya está en disco con el mismo artista y
+    título, ±3 s de duración y un álbum igual o más grande. Si solo está el sencillo, la versión
+    del álbum sí se baja (la app Go borra luego el sencillo)."""
+    tags = {}
+
+    def read(path):
+        if path not in tags:
+            try:
+                tags[path] = read_tags(path)
+            except Exception as exc:  # un MP3 dañado no frena la descarga: cuenta como ausente
+                log.warning("no se pudieron leer las etiquetas de %s: %s", path, exc)
+                tags[path] = None
+        return tags[path]
+
+    todo, skipped = [], []
+    for song in songs:
+        artists = {norm(a) for a in [song.get("artist"), *(song.get("artists") or [])] if norm(a)}
+        title = norm(song.get("name"))
+        paths = {p for a in artists for p in index.get((a, title), ())}
+        found = any(
+            t and norm(t["title"]) == title and artists & {norm(a) for a in t["artists"]}
+            and abs(t["duration"] - (song.get("duration") or 0)) <= 3
+            and t["total"] >= (song.get("tracks_count") or 0)
+            for t in map(read, sorted(paths))
+        )
+        (skipped if found else todo).append(song)
+    return todo, skipped
+
+
 def songs_text(n):
     return "1 canción" if n == 1 else f"{n} canciones"
 
@@ -534,11 +606,18 @@ def row_text(failed):
     return f"{text}: {names}" if names else text
 
 
-def outcome(title, url, failed, run_failed, attempts, max_attempts):
+def outcome(title, url, failed, run_failed, attempts, max_attempts, skipped=0):
     """(status, error, notice) tras una ejecución: reintentable mientras quede algo transitorio
     y haya intentos; si no, finished con el aviso para su dueño."""
     if (run_failed or any(f["retry"] for f in failed)) and attempts < max_attempts:
         return "error", row_text(failed), ""
+    status, error, notice = finished(title, url, failed, run_failed)
+    if skipped:
+        notice += f" {songs_text(skipped)} ya " + ("estaba" if skipped == 1 else "estaban") + " en la biblioteca."
+    return status, error, notice
+
+
+def finished(title, url, failed, run_failed):
     name = title or (failed[0]["name"] if failed else "") or "tu descarga"
     if not failed and not run_failed:
         return "finished", "", f"«{name}» ya está en tu biblioteca."
@@ -553,6 +632,14 @@ def outcome(title, url, failed, run_failed, attempts, max_attempts):
         return "finished", row_text(failed), f"«{name}» {verb}."
     names = names_text(failed)
     return "finished", row_text(failed), f"{songs_text(n)} de «{name}» {verb}" + (f": {names}." if names else ".")
+
+
+def remove(paths):
+    for path in paths:
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
 
 
 class Runner:
@@ -617,34 +704,80 @@ class Runner:
         keep = [f for f in failed if not f["retry"]] if urls else []
         errfile = os.path.join(self.s.state_dir, f"errors-{jid}.txt")
         savefile = os.path.join(self.s.state_dir, f"songs-{jid}.spotdl")
-        for path in (errfile, savefile):
-            try:
-                os.remove(path)
-            except FileNotFoundError:
-                pass
-        cmd = [
-            self.s.spotdl_bin,
-            "download", *(urls or [url]),
-            "--output", os.path.join(self.s.music_dir, "{artist}/{album}/{title}.{output-ext}"),
-            "--format", "mp3",
-            "--bitrate", "128k",
-            "--threads", str(self.s.threads),
-            "--overwrite", "skip",
-            "--simple-tui",
-            "--log-format", "%(message)s",
-            "--save-errors", errfile,
-            "--save-file", savefile,  # nombres de todas las canciones, para decir cuáles fallaron
-        ]
-        if self.s.cookie_file:
-            cmd += ["--cookie-file", self.s.cookie_file]
+        planfile = os.path.join(self.s.state_dir, f"plan-{jid}.spotdl")
+        todofile = os.path.join(self.s.state_dir, f"to-download-{jid}.spotdl")
+        temps = (errfile, savefile, planfile, todofile)
+        remove(temps)
+        cookie = ["--cookie-file", self.s.cookie_file] if self.s.cookie_file else []
         # Las credenciales de Spotify las lee spotDL de su config.json (Settings.write_spotify_config).
 
         log.info("trabajo %s: empieza %s", jid, url)
+        feed = Feed()
+        if urls:  # un reintento: spotDL no anuncia lista, se conservan el título y el total pedido
+            feed.title, feed.total = job["title"], len(urls)
+            self.store.progress(jid, feed)
+        started = time.monotonic()  # el tiempo máximo cubre el plan y la descarga
+        try:
+            query, skipped = urls or [url], 0
+            if not urls:
+                # Primero el plan: la misma canción puede venir como sencillo y dentro de un álbum
+                # (ids y rutas distintas), así que --overwrite skip no la detecta. --lyrics sin
+                # proveedores: el plan no necesita letras.
+                rc = self.spotdl(jid, [
+                    "save", url, "--save-file", planfile, "--lyrics",
+                    "--threads", str(self.s.threads), "--log-format", "%(message)s", *cookie,
+                ], feed, started)
+                if rc is None:
+                    return
+                if rc:
+                    return self.settle(jid, failed, True)
+                try:
+                    with open(planfile, encoding="utf-8") as f:
+                        plan = json.load(f)
+                    todo, skip = filter_plan(plan, index_library(self.s.music_dir))
+                    with open(todofile, "w", encoding="utf-8") as f:
+                        json.dump(todo, f, ensure_ascii=False)
+                    query, skipped = [todofile], len(skip)
+                    if not feed.title and len(plan) == 1:  # canción suelta: como la anunciaría «Downloaded»
+                        feed.title = f"{plan[0]['artist']} - {plan[0]['name']}"
+                        self.store.progress(jid, feed)
+                    log.info("trabajo %s: %d por bajar, %d ya en la biblioteca", jid, len(todo), len(skip))
+                except Exception:  # bajar de más es mejor que perder canciones
+                    log.exception("trabajo %s: falló el filtro de duplicados; se baja el enlace entero", jid)
+                    todo = None
+                if todo == []:
+                    return self.settle(jid, [], False, skipped)
+
+            rc = self.spotdl(jid, [
+                "download", *query,
+                "--output", os.path.join(self.s.music_dir, "{artist}/{album}/{title}.{output-ext}"),
+                "--format", "mp3",
+                "--bitrate", "128k",
+                "--threads", str(self.s.threads),
+                "--overwrite", "skip",
+                "--simple-tui",
+                "--log-format", "%(message)s",
+                "--save-errors", errfile,
+                "--save-file", savefile,  # nombres de todas las canciones, para decir cuáles fallaron
+                *cookie,
+            ], feed, started)
+            if rc is None:
+                return
+            if rc:
+                self.settle(jid, failed, True)
+            else:
+                self.settle(jid, keep + failures_from(errfile, song_names(savefile)), False, skipped)
+        finally:
+            remove(temps)
+
+    def spotdl(self, jid, args, feed, started):
+        """Corre spotDL e informa el avance. Devuelve su código (o 1 si no arrancó o se pasó del
+        tiempo), o None si ya no hay que cerrar el trabajo: se apaga el servicio o se canceló."""
         if self.stopping:  # el servicio se apagó entre reclamar el trabajo y arrancarlo
-            return
+            return None
         try:
             proc = subprocess.Popen(
-                cmd,
+                [self.s.spotdl_bin, *args],
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
                 stdin=subprocess.DEVNULL,
@@ -657,7 +790,7 @@ class Runner:
             )
         except OSError as exc:  # incluye spotDL sin instalar
             log.error("trabajo %s: no se pudo iniciar spotDL: %s", jid, exc)
-            return self.settle(jid, failed, True)
+            return 1
 
         with self.lock:
             self.procs[jid] = proc
@@ -665,10 +798,6 @@ class Runner:
         if canceled:
             kill_group(proc)
 
-        feed = Feed()
-        if urls:  # un reintento: spotDL no anuncia lista, se conservan el título y el total pedido
-            feed.title, feed.total = job["title"], len(urls)
-            self.store.progress(jid, feed)
         lines = queue.Queue()
 
         def pump():
@@ -679,7 +808,6 @@ class Runner:
                 lines.put(None)
 
         threading.Thread(target=pump, name=f"spotdl-{jid}", daemon=True).start()
-        started = time.monotonic()
         timed_out = False
         while True:
             # El reloj se revisa en cada vuelta: si spotDL imprime sin parar, igual se corta.
@@ -702,33 +830,28 @@ class Runner:
             pass
         with self.lock:
             self.procs.pop(jid, None)
+            canceled = jid in self.canceled
             self.canceled.discard(jid)
         self.store.progress(jid, feed)  # último estado conocido, aun si fue cancelado
 
         if self.stopping:
             # Se apaga el servicio: el trabajo queda en 'downloading' y al arrancar
             # Store.resume() lo devuelve a la cola (spotDL salta lo ya descargado).
-            return
-        if self.store.status(jid) is None:  # se canceló y se quitó de la lista
-            return
+            return None
+        if canceled or self.store.status(jid) is None:  # se canceló y se quitó de la lista
+            return None
         if timed_out or proc.returncode != 0:
             log.error("trabajo %s: %s; últimas líneas: %s", jid,
-                      "tiempo máximo" if timed_out else f"spotDL salió con {proc.returncode}", " | ".join(feed.tail))
-            self.settle(jid, failed, True)
-        else:
-            self.settle(jid, keep + failures_from(errfile, song_names(savefile)), False)
-        for path in (errfile, savefile):
-            try:
-                os.remove(path)
-            except FileNotFoundError:
-                pass
+                      "tiempo máximo" if timed_out else f"spotDL {args[0]} salió con {proc.returncode}", " | ".join(feed.tail))
+            return 1
+        return 0
 
-    def settle(self, jid, failed, run_failed):
+    def settle(self, jid, failed, run_failed, skipped=0):
         """Aplica outcome(); tras el primer intento, lo transitorio se reintenta solo una vez."""
         job = self.store.get(jid)
         if not job:
             return
-        status, error, notice = outcome(job["title"], job["url"], failed, run_failed, job["attempts"], self.s.max_attempts)
+        status, error, notice = outcome(job["title"], job["url"], failed, run_failed, job["attempts"], self.s.max_attempts, skipped)
         title = next((f["name"] for f in failed if f["name"]), "") if "/track/" in job["url"] else ""
         self.store.finish(jid, status, error, failed, notice, title)
         if status == "error" and job["attempts"] == 1 and self.store.requeue(jid):

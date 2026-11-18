@@ -94,6 +94,25 @@ POST /api/spotdl/{id}/retry                   # sin cuerpo
   quedó sin descargar («3 canciones de «Tomá» no están disponibles: …»). Los nombres salen del
   `--save-file` que spotDL escribe al terminar, sin consultas extra.
 
+### Canciones que ya están en la biblioteca
+
+La misma canción existe en Spotify como sencillo y dentro de un álbum, con ids distintos. Como
+la ruta incluye el álbum, `--overwrite skip` no la detecta. Por eso la primera ejecución de un
+trabajo (no los reintentos) va en dos pasos:
+
+1. `spotdl save <enlace> --save-file plan-{id}.spotdl --lyrics` (sin proveedores de letras):
+   la lista de canciones con artista, título, duración y pistas del álbum, sin buscar en YouTube.
+2. Se salta la canción que ya está en disco con el mismo artista (cualquiera del `TPE1`) y
+   título normalizados (sin mayúsculas, tildes ni signos), ±3 s de duración y un álbum con
+   igual o más pistas (`TRCK n/total`). Si solo está el sencillo, la versión del álbum sí se
+   baja: la app borra luego el duplicado y conserva el álbum. El resto va a
+   `to-download-{id}.spotdl` y se baja con `spotdl download` sobre ese archivo, sin volver a
+   consultar Spotify por cada canción. Si no queda nada, no se ejecuta `download`.
+
+El aviso final dice cuántas ya estaban («3 canciones ya estaban en la biblioteca.»). Si `save`
+falla, cuenta como un fallo de la ejecución (con su reintento automático); si el filtro falla
+por otra cosa, se baja el enlace entero como antes: es mejor bajar de más que perder canciones.
+
 Solo se aceptan enlaces `https://open.spotify.com/(intl-xx/)?{track|album|playlist|artist}/ID`.
 No hay búsqueda de texto: spotDL resuelve el enlace y busca cada pista en YouTube.
 
