@@ -147,7 +147,7 @@ en `error` reintentables (las URLs salen de `errors-{id}.txt` si existe). `queue
 | --- | --- | --- |
 | `DATA_DIR` | `/data` | raíz compartida con la app |
 | `PORT` | `8801` | puerto interno |
-| `THREADS` | `2` | hilos de spotDL |
+| `THREADS` | `4` | canciones a la vez (el valor por defecto de spotDL); en compose sale de `SPOTDL_THREADS` |
 | `TOKEN_FILE` | `/run/secrets/spotdl_token` | token compartido con la app; sin él no arranca |
 | `MAX_ACTIVE` | `5` | trabajos en cola a la vez |
 | `MAX_PER_USER` | `2` | trabajos en cola a la vez por usuario |
@@ -158,7 +158,7 @@ en `error` reintentables (las URLs salen de `errors-{id}.txt` si existe). `queue
 
 ## Velocidad
 
-Medido en el servidor (spotDL 4.6, 2 hilos), una canción cuesta unos 30 s de trabajo:
+Medido en el servidor (spotDL 4.6), una canción cuesta unos 30 s de trabajo:
 
 | Paso | Tiempo | Qué es |
 | --- | --- | --- |
@@ -178,8 +178,8 @@ Lo que queda a decisión de quien instala:
 - **API oficial de Spotify** (credenciales propias): haría el plan casi instantáneo, pero no se usa. Desde
   2026 una app en modo desarrollo exige cuenta Premium y solo entrega las canciones de playlists propias,
   así que las playlists ajenas, el caso más común, dejarían de bajar.
-- **`THREADS`**: canciones a la vez. spotDL trae 4 por defecto; aquí va en 2 para pedirle menos a YouTube.
-  Subirlo acelera casi en proporción y aumenta la probabilidad de que YouTube pida verificación.
+- **`THREADS`** (`SPOTDL_THREADS` en `.env`): canciones a la vez. Va en 4, el valor por defecto de spotDL.
+  Bajarlo le pide menos a YouTube a cambio de velocidad; es lo primero que tocar si empieza a pedir verificación.
 
 ## Desarrollo
 

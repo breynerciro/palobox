@@ -80,7 +80,7 @@ class Settings:
 
     data_dir: str = "/data"
     port: int = 8801
-    threads: int = 2
+    threads: int = 4
     max_active: int = 5
     max_per_user: int = 2
     keep_finished: int = 30
@@ -112,7 +112,7 @@ class Settings:
         return cls(
             data_dir=os.environ.get("DATA_DIR", "/data"),
             port=entero("PORT", 8801),
-            threads=max(1, entero("THREADS", 2)),
+            threads=max(1, entero("THREADS", 4)),  # el valor por defecto de spotDL
             max_active=max(1, entero("MAX_ACTIVE", 5)),
             max_per_user=max(1, entero("MAX_PER_USER", 2)),
             job_timeout=timeout,

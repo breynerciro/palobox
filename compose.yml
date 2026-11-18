@@ -45,7 +45,7 @@ services:
       # SPOTDL_COOKIE_FILE: /data/.palobox/spotdl/cookies.txt
       # MAX_ACTIVE: "5"
       # MAX_PER_USER: "2"
-      # THREADS: "2"
+      THREADS: ${SPOTDL_THREADS:-4} # canciones a la vez (4 es el valor de spotDL); bájalo en .env si YouTube pide verificación
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request as u; t = open('/run/secrets/spotdl_token').read().strip(); u.urlopen(u.Request('http://127.0.0.1:8801/health', headers={'Authorization': 'Bearer ' + t}), timeout=8)"]
       interval: 10s
