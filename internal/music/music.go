@@ -233,6 +233,7 @@ func (l *Library) Sync() {
 	for rel := range old {
 		l.DB.Exec(`DELETE FROM tracks WHERE path = ?`, rel)
 	}
+	l.dedupe()
 	l.idxAt = time.Now()
 }
 
