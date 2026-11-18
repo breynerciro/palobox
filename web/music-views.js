@@ -350,9 +350,7 @@ async function libraryView() {
   filters.setAttribute('aria-label', 'Filtrar la biblioteca');
   return frag(filters,
     el('div', { className: 'toolbar' }, order, el('span', { className: 'spacer' }), layout, add),
-    dl?.node, dl && heading('Biblioteca'), box,
-    !d.playlists.length && !d.albums.some((a) => a.saved) && !d.artists.some((a) => a.saved) &&
-      note('Aquí queda lo que guardas: toca + en un álbum o Seguir en un artista. Lo encuentras en Inicio y en Buscar.', 'first'));
+    dl?.node, dl && heading('Biblioteca'), box);
 }
 
 // Páginas de álbum, artista y playlist: encabezado grande, botones de reproducir y lista de pistas
