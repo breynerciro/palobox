@@ -18,6 +18,7 @@ const MUSIC = { '': 'inicio', buscar: 'buscar', biblioteca: 'biblioteca' }; // v
 window.addEventListener('hashchange', () => !$('#app').hidden && render());
 
 let renderId = 0;
+let wasMusic; // la vista anterior era de Música (undefined antes de la primera)
 async function renderView() {
   const { tab, path } = route();
   const id = ++renderId;
@@ -33,6 +34,9 @@ async function renderView() {
   if (tab === 'fotos' || tab === 'archivos') lastCloud = location.hash || '#/fotos';
 
   // En Música la barra inferior (o la lateral en escritorio) es la de la sección.
+  // Fuera de Música el reproductor arranca minimizado (el botón redondo); al salir de Música se vuelve a minimizar.
+  if (!music && (wasMusic ?? true)) document.body.classList.add('player-tucked');
+  wasMusic = music;
   document.body.classList.toggle('music', music);
   $('#tabs').hidden = music;
   $('#mtabs').hidden = $('#side').hidden = !music;

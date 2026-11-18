@@ -423,5 +423,5 @@ export function reset() {
   user = '';
   for (const d of [$('#np'), $('#queue')]) d.close();
   $('#player').hidden = true;
-  document.body.classList.remove('has-player', 'player-tucked');
+  document.body.classList.remove('has-player'); // player-tucked se queda: el siguiente usuario también lo ve minimizado
 }
