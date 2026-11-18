@@ -171,10 +171,9 @@ class Settings:
         tmp = path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            # Con credenciales propias se usa la API oficial: sin use_official_api spotDL 4.6 las ignora y sigue
-            # leyendo los metadatos por el camino lento (SpotipyFree).
-            json.dump({"load_config": True, "client_id": self.client_id, "client_secret": self.client_secret,
-                       "use_official_api": True}, f)
+            # shortcut: spotDL 4.6 ignora estas credenciales salvo con use_official_api, y no se activa: en modo
+            # desarrollo la API oficial exige Premium y no entrega playlists ajenas; revisar si Spotify lo cambia.
+            json.dump({"load_config": True, "client_id": self.client_id, "client_secret": self.client_secret}, f)
         os.replace(tmp, path)
 
 

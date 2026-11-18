@@ -153,7 +153,7 @@ en `error` reintentables (las URLs salen de `errors-{id}.txt` si existe). `queue
 | `MAX_PER_USER` | `2` | trabajos en cola a la vez por usuario |
 | `JOB_TIMEOUT` | `43200` | segundos por trabajo |
 | `SPOTDL_BIN` | `spotdl` | binario (los tests usan uno falso) |
-| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | — | credenciales propias de Spotify: con ellas spotDL usa la API oficial y el plan pasa de ~6 s a menos de 1 s por canción (ver «Velocidad»). Van en su `config.json` (0600), nunca en la línea de comandos |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | — | credenciales propias de Spotify; se pasan a spotDL por su `config.json` (0600), nunca por la línea de comandos. spotDL 4.6 no las usa salvo con su API oficial, que aquí no se activa (ver «Velocidad») |
 | `SPOTDL_COOKIE_FILE` | — | `cookies.txt` de YouTube si aparecen bloqueos |
 
 ## Velocidad
@@ -175,8 +175,9 @@ Lo que ya se hace para acortarlo sin pedirle más a YouTube:
 
 Lo que queda a decisión de quien instala:
 
-- **Credenciales propias de Spotify** (`SPOTIFY_CLIENT_ID` y `SPOTIFY_CLIENT_SECRET`, gratis en
-  developer.spotify.com): el plan deja de ser el paso más lento. No se ha probado en este servidor.
+- **API oficial de Spotify** (credenciales propias): haría el plan casi instantáneo, pero no se usa. Desde
+  2026 una app en modo desarrollo exige cuenta Premium y solo entrega las canciones de playlists propias,
+  así que las playlists ajenas, el caso más común, dejarían de bajar.
 - **`THREADS`**: canciones a la vez. spotDL trae 4 por defecto; aquí va en 2 para pedirle menos a YouTube.
   Subirlo acelera casi en proporción y aumenta la probabilidad de que YouTube pida verificación.
 

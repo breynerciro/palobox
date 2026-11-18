@@ -718,8 +718,7 @@ if lines:
         cfg = os.path.join(settings.home, ".config", "spotdl", "config.json")
         self.assertEqual(os.stat(cfg).st_mode & 0o777, 0o600)
         with open(cfg, encoding="utf-8") as f:
-            self.assertEqual(json.load(f), {"load_config": True, "client_id": "id-publico", "client_secret": "secreto-123",
-                                            "use_official_api": True})
+            self.assertEqual(json.load(f), {"load_config": True, "client_id": "id-publico", "client_secret": "secreto-123"})
 
         _, job = self.request("POST", "/jobs", {"url": "https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX"})
         self.esperar(job["id"])
