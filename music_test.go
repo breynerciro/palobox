@@ -335,28 +335,14 @@ func TestTuBiblioteca(t *testing.T) {
 }
 
 func TestRadio(t *testing.T) {
-	a, _, ana, _ := musicSetup(t)
-	cai := "Ni%C3%B1a%20Pastori/Ca%C3%B1a%C3%ADlla/02%20-%20Cai.mp3"
-	radio := func(q string) []any {
-		code, _, raw := ana.do("GET", "/api/music/radio?path="+cai+q, nil)
-		var ts []any
-		if json.Unmarshal(raw, &ts); code != 200 {
-			t.Fatalf("radio: %d %s", code, raw)
-		}
-		return ts
+	_, _, ana, _ := musicSetup(t)
+	code, _, raw := ana.do("GET", "/api/music/radio?path=Ni%C3%B1a%20Pastori/Ca%C3%B1a%C3%ADlla/02%20-%20Cai.mp3", nil)
+	var ts []any
+	if json.Unmarshal(raw, &ts); code != 200 {
+		t.Fatalf("radio: %d %s", code, raw)
 	}
-	// Variado: cualquier pista menos la que suena.
-	if ts := radio(""); len(ts) != 4 || strings.Contains(titles(ts), "Cai") {
-		t.Fatalf("variado: %s", titles(ts))
-	}
-	// Mismo género sin etiqueta de género: se queda en el artista.
-	if ts := radio("&same=1"); len(ts) != 2 || strings.Contains(titles(ts), "Dios") {
-		t.Fatalf("sin género: %s", titles(ts))
-	}
-	// Con género manda el género, sin importar mayúsculas ni el artista.
-	a.music.DB.Exec(`UPDATE tracks SET genre = 'Pop' WHERE path LIKE '%Cai.mp3'`)
-	a.music.DB.Exec(`UPDATE tracks SET genre = 'pop' WHERE path LIKE 'Juanes/%'`)
-	if ts := radio("&same=1"); titles(ts) != "A Dios le pido" {
-		t.Fatalf("mismo género: %s", titles(ts))
+	// Cualquier pista menos la que suena.
+	if len(ts) != 4 || strings.Contains(titles(ts), "Cai") {
+		t.Fatalf("radio: %s", titles(ts))
 	}
 }

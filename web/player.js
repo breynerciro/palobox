@@ -20,8 +20,7 @@ let user = ''; // dueño de la cola guardada en este navegador
 let counted = false; // la pista actual ya se anotó en el historial
 let savedAt = 0;
 let resume = 0; // posición restaurada que el audio aún no ha cargado
-let auto = 'any'; // qué se sugiere al acabarse la cola: 'any' variado, 'genre' el género de lo que suena
-let epoch = 0; // cambia al reemplazar la cola o el modo: descarta sugerencias pedidas para lo anterior
+let epoch = 0; // cambia al reemplazar la cola: descarta sugerencias pedidas para lo anterior
 let filling = false;
 
 const mix = (a) => {
@@ -73,7 +72,7 @@ async function refill() {
   const e = epoch;
   let more = null;
   try {
-    const r = await api(`/api/music/radio?path=${encodeURIComponent(queue[pos].path)}${auto === 'genre' ? '&same=1' : ''}`);
+    const r = await api(`/api/music/radio?path=${encodeURIComponent(queue[pos].path)}`);
     if (r.ok) more = await r.json();
   } catch {} // sin conexión: la cola termina como antes
   filling = false;
@@ -86,16 +85,6 @@ async function refill() {
   paintQueue();
   save();
   if (audio.ended) next(); // la cola se acabó mientras llegaban
-}
-function setAuto(mode) {
-  auto = mode;
-  epoch++;
-  const drop = new Set(queue.slice(pos + 1).filter((t) => t.auto)); // lo sugerido con el modo anterior
-  queue = queue.filter((t) => !drop.has(t));
-  order = order.filter((t) => !drop.has(t));
-  paintQueue();
-  save();
-  refill();
 }
 
 // playAt reemplaza la cola por tracks y empieza en la pista i.
@@ -375,19 +364,7 @@ function paintQueue() {
   if (pos < 0) return body.replaceChildren(el('p', { className: 'muted note', textContent: 'No hay nada en la cola.' }));
   const rest = queue.slice(pos + 1, pos + 1 + QUEUE_MAX);
   const more = queue.length - pos - 1 - rest.length;
-  const modes = [['any', 'Variado'], ['genre', 'Mismo género']].map(([k, text]) => {
-    const b = el('button', { className: 'chip', textContent: text });
-    b.setAttribute('aria-pressed', auto === k);
-    b.onclick = () => {
-      if (auto === k) return;
-      setAuto(k);
-      body.querySelector('.chip[aria-pressed=true]').focus(); // repintar se llevó el foco
-    };
-    return b;
-  });
   body.replaceChildren(...[
-    el('h3', { className: 'section-title', textContent: 'Al acabarse la cola, sugerir' }),
-    el('div', { className: 'toolbar' }, modes),
     el('h3', { className: 'section-title', textContent: 'Sonando' }),
     el('ul', { className: 'list' }, queueRow(queue[pos], pos)),
     el('h3', { className: 'section-title', textContent: 'A continuación' }),
@@ -407,7 +384,7 @@ function save() {
   const from = Math.max(0, pos - 50);
   try {
     localStorage.setItem('palobox.player', JSON.stringify({
-      user, queue: queue.slice(from, from + KEEP), pos: pos - from, at: audio.currentTime || resume, shuffle, repeat, auto, volume: audio.volume,
+      user, queue: queue.slice(from, from + KEEP), pos: pos - from, at: audio.currentTime || resume, shuffle, repeat, volume: audio.volume,
     }));
   } catch {} // modo privado o cupo lleno: la app sigue sin recordar
 }
@@ -425,7 +402,6 @@ export function restore(name) {
   order = queue.slice();
   shuffle = !!s.shuffle;
   repeat = [0, 1, 2].includes(s.repeat) ? s.repeat : 0;
-  auto = s.auto === 'genre' ? 'genre' : 'any';
   load(s.pos, { play: false, at: s.at });
   ensureLib().catch(() => {}); // para pintar el me gusta de la pista restaurada
 }

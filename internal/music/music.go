@@ -504,17 +504,10 @@ func (l *Library) Search(w http.ResponseWriter, r *http.Request, u httpx.User) e
 	return httpx.WriteJSON(w, 200, out)
 }
 
-// Radio sugiere qué sigue cuando se acaba la cola: pistas al azar de toda la biblioteca o, con same=1,
-// del género de la pista ?path= (si esa pista no trae género, de su mismo artista).
-// shortcut: el género se compara completo, «Rock; Pop» no cuenta como Rock; partir la etiqueta si las sugerencias salen pobres.
+// Radio sugiere qué sigue cuando se acaba la cola: pistas al azar de toda la biblioteca menos ?path=.
 func (l *Library) Radio(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	l.fresh()
-	tail := `WHERE t.path != ?`
-	if r.URL.Query().Get("same") != "" {
-		tail = `JOIN tracks s ON s.path = ? WHERE t.path != s.path
-			AND CASE WHEN s.genre = '' THEN t.artist_dir = s.artist_dir ELSE t.genre = s.genre COLLATE NOCASE END`
-	}
-	ts, err := l.tracks(tail+` ORDER BY RANDOM() LIMIT 40`, r.URL.Query().Get("path"))
+	ts, err := l.tracks(`WHERE t.path != ? ORDER BY RANDOM() LIMIT 40`, r.URL.Query().Get("path"))
 	if err != nil {
 		return err
 	}
