@@ -455,7 +455,7 @@ body.has-player.player-tucked:not(.music) .player-tab { display: grid; }
 /* Secciones del panel: chips como enlaces (cada sección tiene su ruta) y un resumen con tarjetas. */
 a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .chip[aria-current=page] { background: var(--accent); color: var(--on-accent); border-color: transparent; }
-.admin-nav { padding-top: 0; }
+.admin-nav { padding-top: 0; position: relative; } /* referencia de offsetLeft para centrar la sección elegida */
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-right: var(--gutter); }
 .section-head .section-title { margin-right: 0; }
 .section-head .btn { flex: none; margin-top: 12px; }

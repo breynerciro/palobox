@@ -208,12 +208,15 @@ const SECTIONS = [
 const link = (key) => '#/admin' + (key ? '/' + key : '');
 
 function sectionNav(current) {
+  let active;
   const nav = el('nav', { className: 'toolbar admin-nav' }, SECTIONS.map(([key, text]) => {
     const a = el('a', { className: 'chip', href: link(key), textContent: text });
-    if (key === current) a.setAttribute('aria-current', 'page');
+    if (key === current) a.setAttribute('aria-current', 'page'), (active = a);
     return a;
   }));
   nav.setAttribute('aria-label', 'Secciones de administración');
+  // La fila se vuelve a crear en cada sección: sin esto vuelve al inicio y la elegida queda fuera de la pantalla.
+  requestAnimationFrame(() => (nav.scrollLeft = active.offsetLeft - (nav.clientWidth - active.offsetWidth) / 2));
   return nav;
 }
 
