@@ -451,3 +451,24 @@ body.has-player.player-tucked:not(.music) .player-tab { display: grid; }
   background: var(--success); border: 2px solid var(--surface); } /* el texto de la fila también dice "En línea ahora" */
 .alerts { margin-top: 8px; margin-bottom: 8px; }
 .row-wrap.off .row-text { opacity: .55; } /* cuenta desactivada; el texto también lo dice */
+
+/* Secciones del panel: chips como enlaces (cada sección tiene su ruta) y un resumen con tarjetas. */
+a.chip { display: inline-flex; align-items: center; text-decoration: none; }
+.chip[aria-current=page] { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.admin-nav { padding-top: 0; }
+.section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-right: var(--gutter); }
+.section-head .section-title { margin-right: 0; }
+.section-head .btn { flex: none; margin-top: 12px; }
+.alerts .row { color: inherit; text-decoration: none; }
+.chev { width: 18px; height: 18px; flex: none; color: var(--muted); }
+.meters.single { grid-template-columns: 1fr; }
+.stat-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 8px var(--gutter) 0; }
+@media (min-width: 900px) { .stat-cards { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+.stat-card { min-width: 0; display: grid; gap: 2px; padding: 14px; background: var(--surface); border: 1px solid transparent; border-radius: var(--radius);
+  color: var(--text); text-decoration: none; font-size: .8rem; transition: background var(--fast); }
+.stat-card:hover { background: var(--surface-2); }
+.stat-card:active { opacity: .6; }
+.stat-card .type { margin-bottom: 8px; }
+.stat-num { font-size: 1.5rem; font-weight: 700; letter-spacing: -.02em; line-height: 1.2; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.stat-card.warn { border-color: color-mix(in srgb, var(--danger) 60%, transparent); }
+.stat-card.warn .stat-num { color: var(--danger); }

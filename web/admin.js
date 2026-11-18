@@ -66,16 +66,17 @@ const iconBtn = (glyph, label, run) => {
 
 // Alertas: lo que pide atención, arriba de todo. Sin nada raro no se muestra la sección.
 function alerts(s, sp) {
-  const out = [];
+  const out = []; // [texto, sección donde se resuelve]
   const disk = 1 - s.diskFree / s.diskTotal;
-  if (disk >= 0.9) out.push(`El disco está al ${Math.round(disk * 100)} %: quedan ${size(s.diskFree)}. Las subidas y descargas fallarán cuando se llene.`);
-  if (1 - s.memFree / s.memTotal >= 0.9) out.push('La memoria del servidor está casi llena.');
-  if (s.failed24h >= 5) out.push(`${plural(s.failed24h, 'intento fallido', 'intentos fallidos')} de entrar en las últimas 24 h. Revisa «Entradas recientes».`);
-  if (sp?.enabled && !sp.ok) out.push(sp.error || 'El servicio de descargas de Spotify no responde.');
+  if (disk >= 0.9) out.push([`El disco está al ${Math.round(disk * 100)} %: quedan ${size(s.diskFree)}. Las subidas y descargas fallarán cuando se llene.`, 'almacenamiento']);
+  if (1 - s.memFree / s.memTotal >= 0.9) out.push(['La memoria del servidor está casi llena.', '']);
+  if (s.failed24h >= 5) out.push([`${plural(s.failed24h, 'intento fallido', 'intentos fallidos')} de entrar en las últimas 24 h.`, 'actividad']);
+  if (sp?.enabled && !sp.ok) out.push([sp.error || 'El servicio de descargas de Spotify no responde.', 'musica']);
   if (!out.length) return null;
-  return el('ul', { className: 'list alerts' }, out.map((t) => el('li', {}, el('div', { className: 'row static' },
-    el('span', { className: 'type', style: '--tc: var(--danger)' }, icon('alert')),
-    el('div', { className: 'row-text' }, el('p', { textContent: t }))))));
+  return el('ul', { className: 'list alerts' }, out.map(([t, key]) => {
+    const inner = [el('span', { className: 'type', style: '--tc: var(--danger)' }, icon('alert')), el('div', { className: 'row-text' }, el('p', { textContent: t }))];
+    return el('li', {}, key ? el('a', { className: 'row', href: link(key) }, ...inner, icon('next', 'chev')) : el('div', { className: 'row static' }, ...inner));
+  }));
 }
 
 // Usuarios
@@ -112,16 +113,15 @@ function userMenu(u, anchor) {
 
 function usersSection(s) {
   const online = (u) => !u.disabled && u.seen && Date.now() / 1000 - u.seen < 120;
-  const add = el('button', { className: 'btn secondary small' }, icon('plus'), 'Nuevo usuario');
+  const add = el('button', { className: 'btn primary small' }, icon('plus'), 'Nuevo usuario');
   add.onclick = newUser;
   return [
-    heading('Usuarios', `${s.users.filter(online).length} en línea de ${s.users.length}`),
+    el('div', { className: 'section-head' }, heading('Usuarios', `${s.users.filter(online).length} en línea de ${s.users.length}`), add),
     el('ul', { className: 'list' }, s.users.map((u) => el('li', { className: `row-wrap${u.disabled ? ' off' : ''}` },
       usageRow('image', 'user', joinText(u.name, u.admin && 'administrador'),
-        joinText(u.disabled ? 'Desactivado' : ago(u.seen), plural(u.sessions, 'sesión', 'sesiones'), plural(u.media, 'foto', 'fotos'), size(u.bytes)),
-        u.bytes / s.diskTotal, online(u)),
+        joinText(u.disabled ? 'Desactivado' : ago(u.seen), plural(u.sessions, 'sesión', 'sesiones'), size(u.bytes)),
+        null, online(u)),
       iconBtn('more', `Acciones para ${u.name}`, (b) => userMenu(u, b))))),
-    el('div', { className: 'toolbar' }, add),
   ];
 }
 
@@ -136,7 +136,7 @@ function sessionsSection(s) {
 }
 
 function loginsSection(s) {
-  const LIMIT = 15;
+  const LIMIT = 30;
   if (!s.logins.length) return [];
   return [
     heading('Entradas recientes', s.failed24h ? `${plural(s.failed24h, 'fallida', 'fallidas')} en 24 h` : null),
@@ -153,12 +153,11 @@ function musicSection(m) {
     if (await send('/api/admin/music/reindex', { method: 'POST' }, 'Escaneando la biblioteca. Las canciones nuevas aparecen en unos minutos.')) scan.disabled = true;
   };
   return [
-    heading('Biblioteca de música', size(m.bytes)),
+    el('div', { className: 'section-head' }, heading('Biblioteca de música', size(m.bytes)), scan),
     el('ul', { className: 'list' }, el('li', {}, usageRow('audio', 'music',
       joinText(plural(m.tracks, 'canción', 'canciones'), plural(m.albums, 'álbum', 'álbumes'), plural(m.artists, 'artista', 'artistas')),
       joinText(m.seconds && fmtLong(m.seconds), m.scanning ? 'Escaneando ahora' : m.scanned ? `Escaneada ${since(m.scanned)}` : 'Aún sin escanear',
         m.removed && `${plural(m.removed, 'duplicado borrado', 'duplicados borrados')} desde el último arranque`)))),
-    el('div', { className: 'toolbar' }, scan),
   ];
 }
 
@@ -177,29 +176,74 @@ async function downloadsSection(sp) {
 
 const OTHER = { media: 'Música', '.palobox': 'Miniaturas e índice' };
 
-export async function adminView() {
-  const [r, sp] = await Promise.all([
-    api('/api/admin'),
-    api('/api/admin/spotdl').then((x) => (x.ok ? x.json() : null)).catch(() => null), // las descargas son un extra
-  ]);
-  if (!r.ok) throw new Error(await r.text());
-  const s = await r.json();
-  const days = Math.floor(s.uptime / 86400);
-  $('#subtitle').textContent = `Servidor encendido hace ${days ? plural(days, 'día', 'días') : plural(Math.floor(s.uptime / 3600), 'hora', 'horas')}`;
-  const frag = document.createDocumentFragment();
-  frag.append(...[
+function storageSection(s) {
+  return [
+    el('div', { className: 'meters single' }, meter('Disco', 1 - s.diskFree / s.diskTotal, `${size(s.diskFree)} libres de ${size(s.diskTotal)}`)),
+    heading('Por usuario'),
+    el('ul', { className: 'list' }, [...s.users].sort((a, b) => b.bytes - a.bytes).map((u) => el('li', {},
+      usageRow('image', 'user', u.name, joinText(size(u.bytes), plural(u.media, 'foto', 'fotos')), u.bytes / s.diskTotal)))),
+    heading('Compartido y del sistema'),
+    el('ul', { className: 'list' }, s.other.map((o) => el('li', {}, usageRow('video', 'folder', OTHER[o.name] ?? o.name, size(o.bytes), o.bytes / s.diskTotal)))),
+  ];
+}
+
+// Secciones del panel: cada una tiene su ruta (#/admin/usuarios), así funcionan «atrás» y los enlaces directos.
+const SECTIONS = [
+  ['', 'Resumen'], ['usuarios', 'Usuarios'], ['actividad', 'Actividad'], ['musica', 'Música'], ['almacenamiento', 'Almacenamiento'],
+];
+const link = (key) => '#/admin' + (key ? '/' + key : '');
+
+function sectionNav(current) {
+  const nav = el('nav', { className: 'toolbar admin-nav' }, SECTIONS.map(([key, text]) => {
+    const a = el('a', { className: 'chip', href: link(key), textContent: text });
+    if (key === current) a.setAttribute('aria-current', 'page');
+    return a;
+  }));
+  nav.setAttribute('aria-label', 'Secciones de administración');
+  return nav;
+}
+
+// Resumen: lo urgente arriba y una tarjeta por sección con su dato clave; el detalle está a un toque.
+function summary(s, sp) {
+  const online = s.users.filter((u) => !u.disabled && u.seen && Date.now() / 1000 - u.seen < 120).length;
+  const card = (key, glyph, type, title, value, sub, warn) => el('a', { className: `stat-card${warn ? ' warn' : ''}`, href: link(key) },
+    el('span', { className: 'type', style: `--tc: var(--t-${type})` }, icon(glyph)),
+    el('p', { className: 'muted', textContent: title }),
+    el('p', { className: 'stat-num', textContent: value }),
+    el('p', { className: 'muted', textContent: sub }));
+  return [
     alerts(s, sp),
     el('div', { className: 'meters' },
       meter('Procesador', s.load[0] / s.cpus, `Carga ${s.load[0].toFixed(2).replace('.', ',')} en ${plural(s.cpus, 'núcleo', 'núcleos')}`),
       meter('Memoria', 1 - s.memFree / s.memTotal, `${size(s.memTotal - s.memFree)} de ${size(s.memTotal)}`),
       meter('Disco', 1 - s.diskFree / s.diskTotal, `${size(s.diskFree)} libres`)),
-    ...usersSection(s),
-    ...sessionsSection(s),
-    ...loginsSection(s),
-    ...musicSection(s.music),
-    ...(await downloadsSection(sp)),
-    heading('Otro almacenamiento', `de ${size(s.diskTotal)}`),
-    el('ul', { className: 'list' }, s.other.map((o) => el('li', {}, usageRow('video', 'folder', OTHER[o.name] ?? o.name, size(o.bytes), o.bytes / s.diskTotal)))),
-  ].filter(Boolean));
+    el('div', { className: 'stat-cards' },
+      card('usuarios', 'user', 'image', 'Usuarios', String(s.users.length), online ? `${online} en línea ahora` : 'Nadie en línea'),
+      card('actividad', 'activity', 'doc', 'Sesiones abiertas', String(s.sessions.length),
+        s.failed24h ? `${plural(s.failed24h, 'entrada fallida', 'entradas fallidas')} en 24 h` : 'Sin entradas fallidas', s.failed24h >= 5),
+      card('musica', 'music', 'audio', 'Canciones', s.music.tracks.toLocaleString('es-CO'),
+        sp?.enabled ? (sp.ok ? plural(sp.active ?? 0, 'descarga activa', 'descargas activas') : 'Descargas sin respuesta') : plural(s.music.albums, 'álbum', 'álbumes'), sp?.enabled && !sp.ok),
+      card('almacenamiento', 'folder', 'video', 'Disco libre', size(s.diskFree), `de ${size(s.diskTotal)}`, s.diskFree / s.diskTotal <= 0.1)),
+  ];
+}
+
+export async function adminView(path = '') {
+  const key = SECTIONS.some(([k]) => k === path) ? path : '';
+  const needsSpot = key === '' || key === 'musica'; // el estado de las descargas solo se pide donde se usa
+  const [r, sp] = await Promise.all([
+    api('/api/admin'),
+    needsSpot ? api('/api/admin/spotdl').then((x) => (x.ok ? x.json() : null)).catch(() => null) : null, // las descargas son un extra
+  ]);
+  if (!r.ok) throw new Error(await r.text());
+  const s = await r.json();
+  const days = Math.floor(s.uptime / 86400);
+  $('#subtitle').textContent = `Servidor encendido hace ${days ? plural(days, 'día', 'días') : plural(Math.floor(s.uptime / 3600), 'hora', 'horas')}`;
+  const body = key === 'usuarios' ? usersSection(s)
+    : key === 'actividad' ? [...sessionsSection(s), ...loginsSection(s)]
+    : key === 'musica' ? [...musicSection(s.music), ...(await downloadsSection(sp))]
+    : key === 'almacenamiento' ? storageSection(s)
+    : summary(s, sp);
+  const frag = document.createDocumentFragment();
+  frag.append(...[sectionNav(key), ...body].filter(Boolean));
   return frag;
 }

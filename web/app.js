@@ -42,7 +42,7 @@ async function renderView() {
   }
   if (music) ensureLib().catch(() => {}); // la barra lateral y los me gusta, también al entrar directo a un álbum
 
-  $('#title').textContent = section === 'inicio' ? greeting() : section === 'buscar' ? 'Buscar' : section === 'biblioteca' ? 'Tu biblioteca' : parts.at(-1) ?? TABS[tab].title;
+  $('#title').textContent = section === 'inicio' ? greeting() : section === 'buscar' ? 'Buscar' : section === 'biblioteca' ? 'Tu biblioteca' : admin ? TABS.admin.title : parts.at(-1) ?? TABS[tab].title;
   $('#title').hidden = detail;
   $('#subtitle').textContent = '';
   $('#admin-link').hidden = !isAdmin || admin;
@@ -70,7 +70,7 @@ async function renderView() {
   if (!(section === 'buscar' && lastView === viewKey)) view.replaceChildren(skeleton(tab));
   lastView = viewKey;
   try {
-    const node = tab === 'fotos' ? await photosView() : admin ? await adminView() : music ? await musicView(path) : await filesView(path);
+    const node = tab === 'fotos' ? await photosView() : admin ? await adminView(path) : music ? await musicView(path) : await filesView(path);
     if (id !== renderId) return; // el usuario ya navegó a otra parte
     view.replaceChildren(node);
   } catch (e) {
