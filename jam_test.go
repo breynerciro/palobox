@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -10,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Salas de reproducción: elegir dispositivo y jam entre usuarios.
@@ -155,47 +157,63 @@ func TestJam(t *testing.T) {
 	}
 }
 
-// Prueba del flujo continuo: una sola respuesta con varias canciones seguidas, sin las etiquetas ID3.
-func TestStreamTest(t *testing.T) {
+// Flujo continuo: el audio de la sala por una sola respuesta, sin etiquetas, y el servidor avanza la cola.
+func TestJamStream(t *testing.T) {
 	a, data, ana, _ := musicSetup(t)
-	// Tres MP3 con etiqueta ID3v2 delante (30 bytes), el cuadro de información de LAME (417 bytes a 128 kbps
-	// y 44,1 kHz, que declara la duración del archivo) y 700 bytes de «audio».
-	for i, name := range []string{"uno", "dos", "tres"} {
+	// MP3 de mentira con la forma de uno real: etiqueta ID3v2 (30 bytes), el cuadro de información de LAME
+	// (417 bytes, declara la duración del archivo) y cuadros de 417 bytes a 128 kbps y 44,1 kHz.
+	frame := func(fill byte) []byte {
+		b := bytes.Repeat([]byte{fill}, 417)
+		copy(b, []byte{0xFF, 0xFB, 0x90, 0x00})
+		return b
+	}
+	for i, name := range []string{"uno", "dos"} {
 		id3 := append([]byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 20}, make([]byte, 20)...)
-		info := make([]byte, 417)
-		copy(info, []byte{0xFF, 0xFB, 0x90, 0x00})
+		info := frame(0)
 		copy(info[36:], "Info")
-		body := []byte(strings.Repeat(string(rune('a'+i)), 700))
+		body := bytes.Repeat(frame('a'+byte(i)), 40) // 16 680 bytes
 		os.WriteFile(filepath.Join(data, "media", "musica", name+".mp3"), append(append(id3, info...), body...), 0o644)
 	}
 	ana.do("GET", "/api/music", nil)
-	a.music.DB.Exec(`UPDATE tracks SET dur = 70 WHERE path IN ('uno.mp3', 'dos.mp3', 'tres.mp3')`) // los de mentira no tienen duración
+	a.music.DB.Exec(`UPDATE tracks SET dur = 1 WHERE path IN ('uno.mp3', 'dos.mp3')`) // un segundo cada una
+	a.jam.Lead = 300 * time.Millisecond                                               // el colchón real (6 s) es más largo que estas pistas
 
-	list := func() string {
-		_, _, raw := ana.do("GET", "/api/music/stream-test?list=1&seed=5", nil)
-		return string(raw)
+	if code, _, _ := ana.do("GET", "/api/jam/stream?device=anatelefono", nil); code != 409 {
+		t.Fatalf("sin sala no hay flujo: %d", code)
 	}
-	if l := list(); strings.Count(l, `"title"`) != 3 || l != list() {
-		t.Fatalf("la lista debe traer las tres y ser la misma para la misma semilla: %s", l)
+	cmd := func(v map[string]any) map[string]any {
+		v["device"] = "anatelefono"
+		_, m, _ := ana.do("POST", "/api/jam", mustJSON(v))
+		return m
 	}
-	if code, _, _ := (client{t, ana.base, &http.Client{}}).do("GET", "/api/music/stream-test?seed=5", nil); code != 401 {
-		t.Fatalf("sin sesión: %d", code)
-	}
+	cmd(map[string]any{"op": "start", "paths": []string{"uno.mp3", "dos.mp3"}, "pos": 0, "playing": true})
 
-	// El audio llega como emisión (sin tamaño) y empieza por el cuerpo de una canción, no por su etiqueta.
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	req, _ := http.NewRequestWithContext(ctx, "GET", ana.base+"/api/music/stream-test?seed=5", nil)
+	req, _ := http.NewRequestWithContext(ctx, "GET", ana.base+"/api/jam/stream?device=anatelefono", nil)
 	res, err := ana.c.Do(req)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	first := make([]byte, 100) // lo que cabe en el colchón inicial: llega sin esperar
-	if _, err := io.ReadFull(res.Body, first); err != nil {
-		t.Fatal(err)
+	if res.Header.Get("Content-Type") != "audio/mpeg" || res.ContentLength != -1 {
+		t.Fatalf("debe ser una emisión sin tamaño: %q %d", res.Header.Get("Content-Type"), res.ContentLength)
 	}
-	if res.Header.Get("Content-Type") != "audio/mpeg" || res.ContentLength != -1 || strings.Trim(string(first), string(first[:1])) != "" || !strings.Contains("abc", string(first[:1])) {
-		t.Fatalf("flujo: %q %d %q", res.Header.Get("Content-Type"), res.ContentLength, first)
+	// Llegan los dos cuerpos seguidos por la misma conexión: primero «uno» y después «dos». Son 80 cuadros; el
+	// primero puede faltar, porque el flujo arranca en el cuadro siguiente a la posición de la sala.
+	got := make([]byte, 79*417)
+	if n, err := io.ReadFull(res.Body, got); err != nil {
+		t.Fatalf("el flujo se cortó antes de mandar las dos pistas: %v (llegaron %d bytes)", err, n)
+	}
+	if bytes.Contains(got, []byte("ID3")) || bytes.Contains(got, []byte("Info")) {
+		t.Fatal("las etiquetas y el cuadro de información no deben ir en el flujo")
+	}
+	na, nb, cambio := bytes.Count(got, []byte{'a'}), bytes.Count(got, []byte{'b'}), bytes.IndexByte(got, 'b')
+	if na < 39*413 || nb < 39*413 || bytes.IndexByte(got[cambio:], 'a') >= 0 {
+		t.Fatalf("deben llegar las dos pistas completas y en orden: %d de la primera, %d de la segunda", na, nb)
+	}
+	// El servidor avanzó la sala por su cuenta: nadie mandó «ended».
+	if m := cmd(map[string]any{"op": "pause"}); m["room"].(map[string]any)["pos"].(float64) < 1 {
+		t.Fatalf("la sala debe ir en la segunda pista o más: %v", m["room"])
 	}
 }

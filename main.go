@@ -61,7 +61,7 @@ func open(data string) (*app, error) {
 		uploads: uploads.New(db, data, thumbs),
 		music:   lib,
 		spotdl:  &spotdl.Handler{Full: lib.Full},
-		jam:     &jam.Hub{Lookup: lib.ByPaths, More: lib.Random},
+		jam:     &jam.Hub{Lookup: lib.ByPaths, More: lib.Random, Audio: lib.OpenStream},
 	}, nil
 }
 
@@ -110,7 +110,6 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/music/artist", auth(a.music.Artist))
 	mux.HandleFunc("GET /api/music/search", auth(a.music.Search))
 	mux.HandleFunc("GET /api/music/radio", auth(a.music.Radio))
-	mux.HandleFunc("GET /api/music/stream-test", auth(a.music.StreamTest)) // prueba del flujo continuo para iPhone (web/flujo.html)
 	mux.HandleFunc("GET /api/music/likes", auth(a.music.Likes))
 	mux.HandleFunc("PUT /api/music/likes", auth(a.music.LikePut))
 	mux.HandleFunc("DELETE /api/music/likes", auth(a.music.LikeDelete))
@@ -126,6 +125,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("PUT /api/music/playlists/{id}/order", auth(a.music.PlaylistOrder))
 	mux.HandleFunc("GET /api/jam/events", auth(a.jam.Events))
 	mux.HandleFunc("POST /api/jam", auth(a.jam.Cmd))
+	mux.HandleFunc("GET /api/jam/stream", auth(a.jam.Stream))
 	mux.HandleFunc("GET /api/spotdl", auth(a.spotdl.List))
 	mux.HandleFunc("POST /api/spotdl", auth(a.spotdl.Add))
 	mux.HandleFunc("DELETE /api/spotdl/{id}", auth(a.spotdl.Delete))

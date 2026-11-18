@@ -11,6 +11,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"regexp"
 	"sort"
@@ -32,6 +33,9 @@ const (
 type Hub struct {
 	Lookup func(paths []string) ([]music.Track, error)    // pistas del índice, en el orden pedido
 	More   func(n int, not string) ([]music.Track, error) // sugerencias cuando se acaba la cola
+	// Audio abre una pista desde el segundo at para el flujo continuo (stream.go) y dice sus bytes por segundo.
+	Audio func(path string, dur, at float64) (io.ReadCloser, float64, error)
+	Lead  time.Duration // colchón del flujo continuo; 0 = streamLead (las pruebas lo acortan)
 
 	mu    sync.Mutex
 	seq   int64 // crece con cada foto enviada: el cliente descarta las que llegan en desorden
@@ -65,6 +69,7 @@ type jamRoom struct {
 	playing bool
 	at      float64   // posición en segundos en el momento stamp
 	stamp   time.Time // si playing, la posición actual es at + lo transcurrido desde stamp
+	streams int       // flujos continuos abiertos (stream.go): mantienen viva la sala aunque no haya otra conexión
 	empty   time.Time // desde cuándo no hay nadie conectado
 	solo    time.Time // desde cuándo es una sala personal con menos de dos dispositivos
 }
@@ -245,7 +250,9 @@ func (h *Hub) sweep() {
 		for _, m := range r.members {
 			online = online || len(m.conns) > 0
 		}
-		lonely := !r.open && len(r.members) == 1 && len(r.members[0].conns) < 2
+		// Un iPhone en segundo plano pierde el flujo de eventos pero sigue oyendo por el de audio: la sala es suya.
+		online = online || r.streams > 0
+		lonely := !r.open && len(r.members) == 1 && len(r.members[0].conns) < 2 && r.streams == 0
 		switch {
 		case online:
 			r.empty = time.Time{}
@@ -357,8 +364,8 @@ func (h *Hub) newCode() string {
 
 var errNoRoom = httpx.Error(409, "Esa sesión ya terminó.")
 
-// advance pasa a la siguiente pista; si la cola se acaba, pide sugerencias y si no hay, se detiene.
-func (h *Hub) advance(r *jamRoom) {
+// extend agrega sugerencias cuando a la cola le quedan menos de tres pistas por delante.
+func (h *Hub) extend(r *jamRoom) {
 	if len(r.queue)-(r.pos+1) < 3 && h.More != nil && len(r.queue) > 0 && len(r.queue) < maxQueue {
 		have := map[string]bool{}
 		for _, t := range r.queue {
@@ -373,6 +380,11 @@ func (h *Hub) advance(r *jamRoom) {
 			}
 		}
 	}
+}
+
+// advance pasa a la siguiente pista; si la cola se acaba, pide sugerencias y si no hay, se detiene.
+func (h *Hub) advance(r *jamRoom) {
+	h.extend(r)
 	r.manual = max(0, r.manual-1)
 	if r.pos+1 < len(r.queue) {
 		r.set(r.pos+1, 0, true)
@@ -485,6 +497,13 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 				room.manual--
 			}
 			room.queue = append(room.queue[:i:i], room.queue[i+1:]...)
+			room.qrev++
+		case "tail": // reemplaza lo que sigue después de la pista actual (aleatorio en el flujo continuo)
+			keep := room.pos + 1
+			if len(tracks) > maxQueue-keep {
+				tracks = tracks[:max(0, maxQueue-keep)]
+			}
+			room.queue, room.manual = append(room.queue[:keep:keep], tracks...), 0
 			room.qrev++
 		case "jump":
 			if in.Index < 0 || in.Index >= len(room.queue) {

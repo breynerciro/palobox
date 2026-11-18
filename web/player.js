@@ -42,7 +42,22 @@ let warned = false; // ya se avisó que el navegador no dejó sonar sin un toque
 let syncedAt = 0;
 const roomTime = () => (room.playing ? room.at + (Date.now() + offset - room.stamp) / 1000 : room.at);
 const playing = () => (room && !here ? room.playing : !audio.paused);
-const dur = () => audio.duration || queue[pos]?.dur || 0;
+
+// Flujo continuo (iPhone). iOS deja que una página siga sonando en segundo plano mientras sea el mismo audio,
+// pero a veces bloquea cargar uno nuevo, que es lo que pasa al terminar cada canción. Aquí el iPhone siempre
+// reproduce a través de una sala: el audio es una sola respuesta del servidor (/api/jam/stream) que trae la
+// pista de la sala y luego la que sigue, sin cambiar de fuente. La cola, la pista y la posición son las de la
+// sala; esta página pinta el avance con el reloj de la sala y manda cada acción como comando, igual que en un jam.
+// Se fuerza o se apaga con localStorage «palobox.flujo» = 1 / 0.
+const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)); // el iPad se presenta como Mac
+const STREAM = (() => {
+  let flag = null;
+  try { flag = localStorage.getItem('palobox.flujo'); } catch {}
+  return flag === '1' || (flag !== '0' && IOS);
+})();
+let stream = null; // { pos, origin, end, held }: qué traía la sala cuando se abrió (o se dio por bueno) el flujo que suena
+const streaming = () => STREAM && !!room && here;
+const dur = () => (streaming() ? 0 : audio.duration) || queue[pos]?.dur || 0;
 const warnPlay = (e) => console.warn('El navegador no dejó reproducir:', e?.name, e?.message);
 let stuck = false; // un play() sin toque fue rechazado: se reintenta al volver a la app
 
@@ -62,7 +77,7 @@ function srcFor(t) {
 }
 async function prefetch() {
   const t = queue[pos + 1] ?? (repeat === 1 ? queue[0] : null);
-  if (!t || !here || t.path === tried || t.path === ready?.path || t.path === cur?.path) return;
+  if (STREAM || !t || !here || t.path === tried || t.path === ready?.path || t.path === cur?.path) return;
   tried = t.path;
   try {
     const r = await fetch(rawUrl('musica', t.path));
@@ -75,14 +90,17 @@ async function prefetch() {
 }
 // Posición en la pantalla de bloqueo y la notificación; sin esto Android puede dar la sesión por inactiva.
 function positionState() {
-  if (!navigator.mediaSession?.setPositionState || !(audio.duration < Infinity)) return;
-  try { navigator.mediaSession.setPositionState({ duration: audio.duration, position: Math.min(audio.currentTime, audio.duration), playbackRate: audio.playbackRate || 1 }); } catch {}
+  const total = streaming() ? queue[pos]?.dur : audio.duration; // el flujo no tiene duración: vale la de la pista
+  if (!navigator.mediaSession?.setPositionState || !(total > 0 && total < Infinity)) return;
+  const at = streaming() ? roomTime() : audio.currentTime;
+  try { navigator.mediaSession.setPositionState({ duration: total, position: Math.max(0, Math.min(at, total)), playbackRate: audio.playbackRate || 1 }); } catch {}
 }
 for (const ev of ['loadedmetadata', 'playing', 'pause', 'seeked', 'ratechange']) audio.addEventListener(ev, positionState);
 audio.addEventListener('playing', () => (stuck = false));
 // begin pone a sonar t dentro del toque del usuario: el navegador solo deja empezar el audio tras un gesto,
 // y la foto de la sala llega después.
 function begin(t) {
+  if (STREAM) return; // el audio es el flujo de la sala: lo abre syncStream cuando llega la foto
   curPath = t.path;
   audio.src = srcFor(t);
   audio.play().catch(warnPlay);
@@ -103,12 +121,13 @@ function load(i, { play = true, at = 0 } = {}) {
   counted = false;
   resume = at;
   const t = queue[i];
-  if (!room || curPath !== t.path) { // en una sala la pista que ya está cargada no se vuelve a pedir
+  if (STREAM) curPath = t.path; // aquí solo se pinta: el audio es el flujo de la sala (syncStream), no el archivo
+  else if (!room || curPath !== t.path) { // en una sala la pista que ya está cargada no se vuelve a pedir
     curPath = t.path;
     audio.src = srcFor(t);
     if (at) audio.addEventListener('loadedmetadata', () => (audio.currentTime = room ? roomTime() : at), { once: true });
   }
-  if (play) audio.play().catch((e) => { stuck = e.name === 'NotAllowedError'; warnPlay(e); }); // si el formato no sirve, lo informa onerror
+  if (play && !STREAM) audio.play().catch((e) => { stuck = e.name === 'NotAllowedError'; warnPlay(e); }); // si el formato no sirve, lo informa onerror
   const sub = joinText(t.artist, t.album);
   for (const [titleEl, subEl, coverEl] of [['#now', '#now-sub', '#player-cover'], ['#np-title', '#np-sub', '#np-cover']]) {
     $(titleEl).textContent = t.title;
@@ -162,7 +181,13 @@ export function playAt(tracks, i) {
   if (room) {
     const from = Math.max(0, i - 50); // la sala guarda hasta 500 pistas alrededor de la elegida
     if (here) begin(tracks[i]);
-    return void jam.send('queue', { paths: tracks.slice(from, from + 500).map((t) => t.path), pos: i - from });
+    let list = tracks.slice(from, from + 500);
+    let at = i - from;
+    if (STREAM && shuffle && !room.open) { // en la sala propia del flujo el aleatorio se aplica al armar la cola
+      list = [list[at], ...mix(list.filter((_, k) => k !== at))];
+      at = 0;
+    }
+    return void jam.send('queue', { paths: list.map((t) => t.path), pos: at });
   }
   order = tracks.map((t) => ({ ...t })); // copias: la misma pista puede estar dos veces en la cola
   manual = 0;
@@ -175,6 +200,7 @@ export function playAt(tracks, i) {
     queue = order.slice();
     load(i);
   }
+  if (STREAM) startRoom({ playing: true, at: 0 }); // en flujo continuo todo suena a través de una sala
 }
 
 function addAt(t, nextUp) {
@@ -196,7 +222,7 @@ function next(ended = false) {
     const from = pos;
     // Al terminar una pista, la siguiente arranca aquí mismo y de inmediato, sin esperar la respuesta del servidor:
     // en segundo plano el navegador solo deja seguir sonando si el cambio ocurre en el instante en que termina.
-    if (ended && here && queue[pos + 1]) {
+    if (ended && here && !STREAM && queue[pos + 1]) {
       ahead = { from, until: Date.now() + 8000 };
       curPath = ''; // aunque sea la misma canción dos veces seguidas, se carga de nuevo
       load(pos + 1);
@@ -211,9 +237,14 @@ function next(ended = false) {
   }
   manual = Math.max(0, manual - 1);
   load(n);
+  if (STREAM) startRoom({ playing: true, at: 0 });
 }
 function prev() {
   if (room) return void (roomTime() > 3 || pos === 0 ? jam.send('seek', { at: 0 }) : jam.send('prev'));
+  if (STREAM) { // cola restaurada, todavía sin sala: la anterior (o la misma desde el principio) arranca en una
+    if (pos > 0) load(pos - 1);
+    return void startRoom({ playing: true, at: 0 });
+  }
   if (audio.currentTime > 3 || pos === 0) return (audio.currentTime = 0);
   manual = 0;
   load(pos - 1);
@@ -238,6 +269,15 @@ function setShuffle(on) {
   save();
 }
 
+// En la sala propia del flujo el aleatorio baraja lo que sigue en la cola del servidor. Apagarlo no devuelve
+// el orden original (la sala no lo guarda): solo deja de barajar lo próximo que pongas.
+function streamShuffle() {
+  shuffle = !shuffle;
+  if (shuffle) jam.send('tail', { paths: mix(queue.slice(pos + 1)).map((t) => t.path) });
+  syncToggles();
+  save();
+}
+
 const REPEAT = ['Repetir', 'Repetir: toda la cola', 'Repetir: esta canción'];
 export function syncToggles() {
   for (const b of document.querySelectorAll('[data-act=shuffle]')) b.setAttribute('aria-pressed', shuffle);
@@ -251,6 +291,8 @@ export function syncToggles() {
 document.addEventListener('click', (e) => {
   const act = e.target.closest?.('[data-act]')?.dataset.act;
   if (act === 'jam') { $('#jam').showModal(); paintJam(); }
+  else if (act === 'shuffle' && STREAM && room && !room.open && here) streamShuffle();
+  else if (act === 'repeat' && STREAM && room && !room.open) toast('Repetir no está disponible con la reproducción en segundo plano del iPhone: al acabarse la cola siguen sugerencias.');
   else if (room && (act === 'shuffle' || act === 'repeat')) toast('Aleatorio y repetir no están disponibles mientras la reproducción es compartida.');
   else if (act === 'shuffle') setShuffle(!shuffle);
   else if (act === 'repeat') { repeat = (repeat + 1) % 3; syncToggles(); save(); refill(); }
@@ -287,10 +329,15 @@ function syncPlayButton() {
 }
 audio.onplay = syncPlayButton;
 audio.onpause = () => { syncPlayButton(); save(); };
-audio.onended = () => { count(); next(true); };
+audio.onended = () => {
+  if (STREAM) return streamLost(); // el flujo no termina con cada pista: si se acabó es que se cortó
+  count();
+  next(true);
+};
 let retried = ''; // pista que ya se volvió a pedir tras un error de carga
 audio.addEventListener('playing', () => (retried = ''));
 audio.onerror = () => {
+  if (STREAM) return streamLost();
   const t = queue[pos];
   if (!t) return;
   if (retried !== t.path) { // un corte de red o un blob roto: se pide una vez más a la red, en el mismo punto
@@ -324,6 +371,7 @@ function paintTimes(cur, dur) {
   $('#np-dur').textContent = $('#dur').textContent = clock(dur);
 }
 audio.ontimeupdate = () => {
+  if (STREAM) return paintRemote(); // el avance del flujo se pinta con el reloj de la sala; este evento sí llega en segundo plano
   if (!audio.duration) return;
   if (!audio.paused && audio.currentTime >= 30) count();
   if (Date.now() - savedAt > 5000) save();
@@ -355,12 +403,26 @@ function setVolume(v) {
 }
 $('#volume').oninput = (e) => { setVolume(e.target.value / 100); save(); };
 
-const seekTo = (at) => (room ? void jam.send('seek', { at }) : (audio.currentTime = at));
+function seekTo(at) {
+  if (room) return void jam.send('seek', { at });
+  if (!STREAM) return void (audio.currentTime = at);
+  resume = at; // cola restaurada en flujo continuo, aún sin sala: arrancará desde aquí
+  paintTimes(at, dur());
+}
 function toggle() {
+  if (STREAM && !room) return void (pos >= 0 && startRoom({ playing: true })); // cola restaurada: arranca en una sala
   if (!room) return audio.paused ? audio.play().catch(warnPlay) : audio.pause();
   if (!here && !devices.some((d) => d.active)) { // el dispositivo donde sonaba se desconectó: reproducir aquí lo toma
     here = true;
     jam.send('here', { target: jam.deviceId });
+  }
+  if (streaming()) {
+    // Pausar y reanudar no sueltan el flujo: el teléfono guarda su colchón y sigue con el mismo audio, dentro del
+    // propio toque (o del botón de la pantalla bloqueada), que es lo único que iOS deja hacer sin la app abierta.
+    const on = !audio.paused;
+    if (on) audio.pause();
+    else if (stream && audio.src) audio.play().catch(warnPlay);
+    return void jam.send(on ? 'pause' : 'play');
   }
   const on = playing();
   if (here && !on) audio.play().catch(warnPlay); // dentro del toque; también destraba el audio si el navegador no lo dejó empezar solo
@@ -526,7 +588,11 @@ function queueRow(t, i) {
   }
   b.setAttribute('aria-label', `Saltar a ${t.title}`);
   b.onclick = () => {
-    if (!room) { manual = Math.max(0, manual - (i - pos)); return load(i); }
+    if (!room) {
+      manual = Math.max(0, manual - (i - pos));
+      load(i);
+      return void (STREAM && startRoom({ playing: true, at: 0 }));
+    }
     if (here) begin(t);
     jam.send('jump', { index: i });
   };
@@ -565,11 +631,13 @@ function paintQueue() {
 const KEEP = 500; // pistas guardadas alrededor de la actual: localStorage tiene cupo
 function save() {
   savedAt = Date.now();
-  if (room || pos < 0 || !user) return; // la cola de una sala es del servidor: aquí se conserva la propia
+  // La cola de una sala es del servidor y aquí se conserva la propia; en flujo continuo siempre hay sala, así
+  // que se guarda la de la sala para retomarla al volver a abrir la app.
+  if ((room && !STREAM) || pos < 0 || !user) return;
   const from = Math.max(0, pos - 50);
   try {
     localStorage.setItem('palobox.player', JSON.stringify({
-      user, queue: queue.slice(from, from + KEEP), pos: pos - from, at: audio.currentTime || resume, shuffle, repeat, volume: audio.volume,
+      user, queue: queue.slice(from, from + KEEP), pos: pos - from, at: STREAM ? resume : audio.currentTime || resume, shuffle, repeat, volume: audio.volume,
     }));
   } catch {} // modo privado o cupo lleno: la app sigue sin recordar
 }
@@ -611,6 +679,7 @@ export function reset() {
   cur = ready = null;
   tried = '';
   jam.close();
+  stream = null;
   room = null;
   devices = [];
   here = true;
@@ -636,10 +705,17 @@ function applyJam(s) {
   room = s.room;
   here = !room || devices.some((d) => d.me && d.active);
   document.body.classList.toggle('in-room', !!room);
+  document.body.classList.toggle('own-stream', STREAM && !!room && !room.open); // sala propia del flujo: no es «compartida»
   if (room) return syncRoom();
   if (was) { // la sala terminó: lo que sonaba aquí sigue sonando, ya como reproductor local
     order = queue.slice();
     save();
+    if (STREAM) { // en flujo continuo «local» es otra sala, propia: se abre con la cola que quedó
+      stream = null;
+      const on = was.playing && !audio.paused;
+      audio.pause();
+      if (on) startRoom({ playing: true });
+    }
   } else if (devices.length > before && devices.length > 1 && pos >= 0 && !audio.paused) {
     startRoom(); // apareció otro dispositivo mío mientras suena aquí: comparto la reproducción para que la vea y la maneje
   }
@@ -652,7 +728,7 @@ function startRoom(extra = {}) {
   const from = Math.max(0, pos - 50);
   return jam.send('start', {
     paths: queue.slice(from, from + 500).map((t) => t.path), pos: Math.max(0, pos - from),
-    at: audio.currentTime || resume, playing: !audio.paused, ...extra,
+    at: STREAM ? resume : audio.currentTime || resume, playing: !STREAM && !audio.paused, ...extra,
   });
 }
 
@@ -674,7 +750,10 @@ function syncRoom() {
     document.body.classList.remove('has-player');
   } else {
     if (pos !== room.pos || curPath !== t.path) load(room.pos, { play: false, at: roomTime() });
-    if (!here) audio.pause();
+    if (!here) {
+      audio.pause();
+      stream = null;
+    } else if (STREAM) syncStream(t);
     else {
       if (audio.readyState > 0 && Math.abs(audio.currentTime - roomTime()) > 1.5) audio.currentTime = roomTime();
       if (!room.playing) audio.pause();
@@ -693,9 +772,69 @@ function syncRoom() {
   paintRemote();
 }
 
-// Con la música sonando en otro dispositivo el audio de aquí está quieto: el avance se calcula.
+// syncStream mantiene sonando el flujo de la sala en este dispositivo. Mientras la sala siga su curso (la misma
+// pista, o la siguiente justo cuando acababa la anterior) no se toca nada: el flujo ya trae lo que toca. Solo si
+// alguien saltó o adelantó hay que abrir otro, y eso se hace con la app a la vista; en segundo plano no se puede
+// cargar un audio nuevo, y es el servidor el que cambia lo que manda por el mismo (se oye al acabarse el colchón).
+function syncStream(t) {
+  if (!room.playing) {
+    if (!audio.paused) audio.pause();
+    if (stream) stream.held = room.at; // dónde quedó: al reanudar ahí mismo, el flujo abierto sigue sirviendo
+    return;
+  }
+  const origin = room.stamp - room.at * 1000; // cuándo «empezó» esta pista en el reloj de la sala
+  const mark = { pos: room.pos, origin, end: origin + (t.dur || 0) * 1000 };
+  const steady = stream && audio.src && (
+    (room.pos === stream.pos && Math.abs(origin - stream.origin) < 1500) // la misma pista, sin saltos
+    || (room.pos === stream.pos + 1 && Math.abs(origin - stream.end) < 3000) // pasó sola a la siguiente
+    || (stream.held != null && room.pos === stream.pos && Math.abs(room.at - stream.held) < 1.5)); // se reanudó donde estaba
+  if (steady || (stream && audio.src && !audio.paused && document.visibilityState !== 'visible')) {
+    stream = mark;
+    if (audio.paused) audio.play().catch(streamBlocked);
+    return;
+  }
+  stream = mark;
+  audio.src = `/api/jam/stream?device=${jam.deviceId}&t=${Date.now()}`;
+  audio.play().then(() => (warned = false)).catch(streamBlocked);
+}
+function streamBlocked(e) {
+  stuck = e.name === 'NotAllowedError'; // wake lo reintenta al volver a la app
+  warnPlay(e);
+  if (!stuck || warned || document.visibilityState !== 'visible') return;
+  warned = true; // el navegador exige un toque antes de sonar: el botón de reproducir lo destraba
+  toast('Toca reproducir para escuchar en este dispositivo.', { kind: 'warn', sticky: true });
+}
+// streamLost: el flujo se cortó (red, servidor reiniciado). Se reabre si la sala sigue sonando y la app está a la
+// vista; si no, al volver a la app. Dos cortes seguidos no se insisten: sería un bucle contra un servidor caído.
+let lostAt = 0;
+function streamLost() {
+  stream = null;
+  const again = Date.now() - lostAt < 8000;
+  lostAt = Date.now();
+  if (!streaming() || !room.playing) return;
+  if (again || document.visibilityState !== 'visible') return void (stuck = true);
+  syncRoom();
+}
+
+// Con la música sonando en otro dispositivo el audio de aquí está quieto, y en el flujo continuo el audio no
+// sabe en qué pista va: en los dos casos el avance se calcula con el reloj de la sala.
+let stateAt = 0;
 function paintRemote() {
-  if (!room || here || seeking || pos < 0) return;
+  if (!room || (here && !STREAM) || pos < 0) return;
+  if (streaming() && room.playing) {
+    // En segundo plano el flujo de eventos puede haberse caído y nadie avisa que la sala pasó de pista: se
+    // deduce aquí con su mismo reloj (el servidor avanza justo al final), para que la pantalla de bloqueo
+    // muestre la canción que suena. La foto que llegue después dirá lo mismo.
+    const length = queue[pos].dur || 0;
+    if (length > 0 && roomTime() >= length && room.pos === pos && queue[pos + 1]) {
+      room = { ...room, pos: pos + 1, at: 0, stamp: room.stamp + (length - room.at) * 1000 };
+      return syncRoom();
+    }
+    resume = Math.min(roomTime(), queue[pos].dur || Infinity); // para retomar aquí si la sala se cierra
+    if (resume >= 30) count();
+    if (Date.now() - stateAt > 5000) { stateAt = Date.now(); positionState(); save(); }
+  }
+  if (seeking) return;
   const d = queue[pos].dur || 0;
   const cur = d ? Math.min(roomTime(), d) : roomTime();
   for (const s of seeks) setSeek(s, d ? cur / d : 0);
@@ -710,7 +849,7 @@ export async function joinJam(code) {
 
 // playOn elige en cuál de mis dispositivos suena; con add lo suma a los que ya suenan (o lo quita si ya sonaba).
 function playOn(d, add = false) {
-  if (d.me && room?.playing && !(add && d.active)) audio.play().catch(warnPlay); // dentro del toque, para que el navegador lo deje sonar
+  if (d.me && room?.playing && !STREAM && !(add && d.active)) audio.play().catch(warnPlay); // dentro del toque, para que el navegador lo deje sonar
   if (room) return void jam.send('here', { target: d.id, add });
   if (d.me) return; // sin sala ya suena aquí
   if (pos < 0) return toast('Pon a sonar algo primero y luego elige el dispositivo.');
@@ -779,7 +918,7 @@ function paintJam() {
           if (code) joinJam(code);
         })));
   }
-  if (room) {
+  if (room && (room.open || !STREAM)) { // la sala propia del flujo continuo no se «deja»: es el reproductor
     out.push(el('div', { className: 'jam-actions' }, btn('secondary small', 'logout', room.open ? 'Salir del jam' : 'Dejar de compartir entre dispositivos', () => jam.send('leave'))));
   }
   $('#jam-body').replaceChildren(...out);
