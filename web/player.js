@@ -573,17 +573,18 @@ export async function joinJam(code) {
   if (code && await jam.send('join', { code })) toast('Te uniste al jam. Todos pueden agregar canciones y cambiar la que suena.', { kind: 'ok' });
 }
 
-// playOn elige en cuál de mis dispositivos suena.
-function playOn(d) {
-  if (d.me && room?.playing) audio.play().catch(() => {}); // dentro del toque, para que el navegador lo deje sonar
-  if (room) return void jam.send('here', { target: d.id });
+// playOn elige en cuál de mis dispositivos suena; con add lo suma a los que ya suenan (o lo quita si ya sonaba).
+function playOn(d, add = false) {
+  if (d.me && room?.playing && !(add && d.active)) audio.play().catch(() => {}); // dentro del toque, para que el navegador lo deje sonar
+  if (room) return void jam.send('here', { target: d.id, add });
   if (d.me) return; // sin sala ya suena aquí
   if (pos < 0) return toast('Pon a sonar algo primero y luego elige el dispositivo.');
-  startRoom({ target: d.id });
+  startRoom({ target: d.id, add });
 }
 
 function paintJam() {
-  const active = devices.find((d) => d.active);
+  const sounding = devices.filter((d) => d.active);
+  const active = sounding.length && { name: sounding.map((d) => d.name).join(' y ') };
   const shared = !!room && (room.members.length > 1 || !here);
   for (const b of document.querySelectorAll('[data-act=jam]')) b.classList.toggle('on', shared);
   $('#np-where').textContent = room && !here ? (active ? `Sonando en ${active.name}` : 'En pausa: ningún dispositivo') : room?.members.length > 1 ? `Jam con ${plural(room.members.length - 1, 'persona', 'personas')}` : 'Reproduciendo';
@@ -603,10 +604,17 @@ function paintJam() {
       on && icon('check'));
     if (on) b.setAttribute('aria-current', 'true');
     b.onclick = () => playOn(d);
-    return el('li', { className: 'row-wrap' }, b);
+    // El botón de la derecha suma o quita este dispositivo sin tocar los demás: así suenan varios a la vez.
+    const several = devices.filter((x) => (room ? x.active : x.me)).length > 1;
+    const also = (!on || several) && el('button', { className: 'icon-btn' }, icon(on ? 'x' : 'plus'));
+    if (also) {
+      also.setAttribute('aria-label', on ? `Dejar de sonar en ${d.name}` : `Sonar también en ${d.name}`);
+      also.onclick = () => playOn(d, true);
+    }
+    return el('li', { className: 'row-wrap' }, b, also);
   })));
   out.push(note(devices.length > 1
-    ? 'El sonido sale por lo que tenga conectado el dispositivo elegido: su parlante, audífonos o un equipo Bluetooth.'
+    ? 'Toca un dispositivo para que suene solo ahí, o + para que suene también ahí, a la vez. El sonido sale por lo que tenga conectado: su parlante, audífonos o un equipo Bluetooth.'
     : 'Abre PaloBox con tu cuenta en otro dispositivo y aparecerá aquí para pasarle la música o controlarla desde este.'));
   if (audio.webkitShowPlaybackTargetPicker) { // Safari: AirPlay y salidas del sistema
     out.push(el('div', { className: 'jam-actions' }, btn('secondary small', 'volume', 'AirPlay y otras salidas', () => audio.webkitShowPlaybackTargetPicker())));

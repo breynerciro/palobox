@@ -75,6 +75,32 @@ func TestJam(t *testing.T) {
 		t.Fatalf("el cambio debe llegar por el flujo, sin repetir la cola: %v", ev)
 	}
 
+	// Varios a la vez: «add» suma un dispositivo a los que suenan, y repetirlo lo quita.
+	devs := func(m map[string]any) (on int) {
+		for _, d := range m["devices"].([]any) {
+			if d.(map[string]any)["active"] == true {
+				on++
+			}
+		}
+		return on
+	}
+	req2, _ := http.NewRequestWithContext(ctx, "GET", ana.base+"/api/jam/events?device=anaparlante&name=Parlante", nil)
+	res2, err := ana.c.Do(req2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer res2.Body.Close()
+	bufio.NewReader(res2.Body).ReadString('\n') // conectado
+	if _, m := cmd(ana, "anatelefono", map[string]any{"op": "here", "target": "anaparlante", "add": true}); devs(m) != 2 {
+		t.Fatalf("sonar en dos a la vez: %v", m)
+	}
+	if _, m := cmd(ana, "anatelefono", map[string]any{"op": "here", "target": "anaparlante", "add": true}); devs(m) != 1 {
+		t.Fatalf("quitar uno: %v", m)
+	}
+	next() // los avisos de estos cambios
+	next()
+	next()
+
 	// Jam: no se entra a una sala personal ni con un código inventado; sí cuando se abre.
 	if code, _ := cmd(luis, "luistelefono", map[string]any{"op": "join", "code": code}); code != 404 {
 		t.Fatalf("sala sin abrir: %d", code)

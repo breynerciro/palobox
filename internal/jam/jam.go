@@ -51,7 +51,7 @@ type user struct {
 	name   string
 	conns  map[string]*conn
 	room   *jamRoom
-	active string // dispositivo en el que suena para este usuario
+	active map[string]bool // dispositivos en los que suena para este usuario: uno, o varios a la vez
 }
 
 type jamRoom struct {
@@ -139,7 +139,7 @@ func (h *Hub) snapshot(u *user, device string, have int) view {
 	now := time.Now()
 	v := view{Seq: h.seq, Now: now.UnixMilli(), Me: device, Devices: []deviceView{}}
 	for _, c := range u.conns {
-		v.Devices = append(v.Devices, deviceView{c.id, c.name, c.id == u.active})
+		v.Devices = append(v.Devices, deviceView{c.id, c.name, u.active[c.id]})
 	}
 	sort.Slice(v.Devices, func(i, j int) bool {
 		return v.Devices[i].Name+v.Devices[i].ID < v.Devices[j].Name+v.Devices[j].ID
@@ -155,14 +155,44 @@ func (h *Hub) snapshot(u *user, device string, have int) view {
 		}
 		for _, m := range r.members {
 			mv := memberView{Name: m.name, Online: len(m.conns) > 0}
-			if c := m.conns[m.active]; c != nil {
-				mv.Device = c.name
+			var names []string
+			for _, d := range v.Devices { // ya ordenados; para otro miembro se recorren los suyos
+				if m == u && d.Active {
+					names = append(names, d.Name)
+				}
 			}
+			if m != u {
+				for id := range m.active {
+					if c := m.conns[id]; c != nil {
+						names = append(names, c.name)
+					}
+				}
+				sort.Strings(names)
+			}
+			mv.Device = strings.Join(names, ", ")
 			rv.Members = append(rv.Members, mv)
 		}
 		v.Room = rv
 	}
 	return v
+}
+
+// listen elige dónde suena: con add, device se suma a los que ya suenan (o se quita si ya estaba);
+// sin add, pasa a sonar solo ahí.
+func (u *user) listen(device string, add bool) {
+	switch {
+	case !add:
+		u.active = map[string]bool{device: true}
+	case u.active[device]:
+		delete(u.active, device)
+	default:
+		for id := range u.active { // de paso se olvidan los que ya no están conectados
+			if u.conns[id] == nil {
+				delete(u.active, id)
+			}
+		}
+		u.active[device] = true
+	}
 }
 
 func (u *user) poke() {
@@ -358,7 +388,7 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 		Paths                          []string
 		Pos, Index, Qrev               int
 		At                             float64
-		Playing, Open, Next            bool
+		Playing, Open, Next, Add       bool
 	}
 	// Una cola de 500 rutas no cabe en el límite de httpx.ReadJSON.
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil || !deviceRe.MatchString(in.Device) || len(in.Paths) > maxQueue {
@@ -385,10 +415,11 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			room = &jamRoom{code: h.newCode(), queue: tracks, qrev: 1}
 			h.rooms[room.code] = room
 			room.set(clampPos(len(tracks)), max(in.At, 0), in.Playing && len(tracks) > 0)
-			room.members, u.room, u.active = []*user{u}, room, in.Device
+			room.members, u.room = []*user{u}, room
+			u.listen(in.Device, false)
 		}
 		if u.conns[in.Target] != nil {
-			u.active = in.Target
+			u.listen(in.Target, in.Add)
 		}
 		room.open = room.open || in.Open
 	case "join":
@@ -400,7 +431,8 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			h.leave(u)
 			target.members, u.room = append(target.members, u), target
 		}
-		u.active, room = in.Device, target
+		u.listen(in.Device, false)
+		room = target
 	case "leave":
 		h.leave(u)
 		room = nil
@@ -416,7 +448,7 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			if u.conns[in.Target] == nil {
 				return httpx.Error(409, "Ese dispositivo ya no está conectado.")
 			}
-			u.active = in.Target
+			u.listen(in.Target, in.Add)
 		case "queue": // alguien puso a sonar otra lista
 			if len(tracks) == 0 {
 				return httpx.Error(404, "Esa música ya no está en la biblioteca.")
