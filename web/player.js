@@ -37,6 +37,7 @@ let devices = []; // mis dispositivos conectados
 let here = true; // en este dispositivo es donde suena para mi cuenta
 let offset = 0; // reloj del servidor menos el de este dispositivo
 let curPath = ''; // pista cargada en el audio
+let ahead = null; // { from, until }: pista de la sala que este dispositivo ya dejó atrás por su cuenta
 let warned = false; // ya se avisó que el navegador no dejó sonar sin un toque
 let syncedAt = 0;
 const roomTime = () => (room.playing ? room.at + (Date.now() + offset - room.stamp) / 1000 : room.at);
@@ -154,7 +155,17 @@ export const enqueue = (t) => addAt(t, false);
 
 function next(ended = false) {
   // «ended» lleva la pista que terminó: si otro dispositivo de la sala ya avisó, el servidor no avanza dos veces.
-  if (room) return void jam.send(ended ? 'ended' : 'next', { pos });
+  if (room) {
+    const from = pos;
+    // Al terminar una pista, la siguiente arranca aquí mismo y de inmediato, sin esperar la respuesta del servidor:
+    // en segundo plano el navegador solo deja seguir sonando si el cambio ocurre en el instante en que termina.
+    if (ended && here && queue[pos + 1]) {
+      ahead = { from, until: Date.now() + 8000 };
+      curPath = ''; // aunque sea la misma canción dos veces seguidas, se carga de nuevo
+      load(pos + 1);
+    }
+    return void jam.send(ended ? 'ended' : 'next', { pos: from });
+  }
   if (ended && repeat === 2) return load(pos);
   let n = pos + 1;
   if (n >= queue.length) {
@@ -540,6 +551,13 @@ function startRoom(extra = {}) {
 // syncRoom deja este reproductor igual a la sala: misma cola, misma pista y, si suena aquí, misma posición.
 function syncRoom() {
   queue = order = room.queue;
+  // Este dispositivo ya pasó a la siguiente pista (next) y la sala todavía no: se espera sin devolverse.
+  if (ahead && room.pos === ahead.from && Date.now() < ahead.until && queue[pos]?.path === curPath) {
+    paintQueue();
+    paintJam();
+    return;
+  }
+  ahead = null;
   const t = queue[room.pos];
   if (!t) { // sala recién creada sin música
     audio.pause();
