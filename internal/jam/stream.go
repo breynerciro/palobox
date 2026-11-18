@@ -105,6 +105,7 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Accept-Ranges", "none")
 	w.WriteHeader(200)
+	fl.Flush() // la respuesta empieza ya: el reproductor no espera al primer trozo de audio para saber que hay flujo
 
 	var (
 		src   io.ReadCloser // la pista que se está mandando

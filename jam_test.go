@@ -222,8 +222,7 @@ func TestJamStream(t *testing.T) {
 	for i := 0; i < 2; i++ {
 		req, _ := http.NewRequestWithContext(ctx, "GET", ana.base+"/api/jam/stream?device=anatelefono&op=next&from=0&n=abc", nil)
 		if r2, err := ana.c.Do(req); err == nil {
-			io.ReadFull(r2.Body, make([]byte, 417))
-			r2.Body.Close()
+			r2.Body.Close() // con la respuesta iniciada la acción ya se aplicó
 		}
 	}
 	if m := cmd(map[string]any{"op": "pause"}); m["room"].(map[string]any)["pos"].(float64) != 1 {

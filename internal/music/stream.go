@@ -80,8 +80,10 @@ func (p procCloser) Close() error {
 }
 
 // OpenStream abre el audio de una pista desde el segundo at para el flujo continuo y dice a cuántos bytes por
-// segundo va. Un MP3 del tipo común sale tal cual, desde el cuadro más cercano; lo demás (FLAC, M4A, MP3 a
-// 48 kHz) lo convierte ffmpeg sobre la marcha, porque en un mismo flujo no se puede cambiar de formato.
+// segundo va. Desde el principio, un MP3 del tipo común sale tal cual. Lo demás lo convierte ffmpeg sobre la
+// marcha: otros formatos (FLAC, M4A, MP3 a 48 kHz), porque en un mismo flujo no se puede cambiar de formato, y
+// cualquier pista que se abre a mitad de camino (adelantar, reabrir el flujo), porque cada cuadro MP3 usa datos
+// del anterior y empezar en uno suelto suena como un ruido; ffmpeg entrega un comienzo limpio.
 func (l *Library) OpenStream(path string, dur, at float64) (io.ReadCloser, float64, error) {
 	full := httpx.Safe(l.musicRoot(), path)
 	f, err := os.Open(full)
@@ -93,22 +95,11 @@ func (l *Library) OpenStream(path string, dur, at float64) (io.ReadCloser, float
 		f.Close()
 		return nil, 0, os.ErrNotExist
 	}
-	if start, end, ok := mp3Body(f, st.Size()); ok && dur > 0 && strings.EqualFold(filepath.Ext(path), ".mp3") {
-		rate := float64(end-start) / dur
-		from := start + int64(at*rate)
-		// Desde un punto cualquiera hay que caer en el inicio de un cuadro: se busca una cabecera seguida,
-		// a la distancia que ella misma dice, por otra cabecera.
-		var b [4096]byte
-		if n, _ := f.ReadAt(b[:], from); at > 0 && n > 8 {
-			for i := 0; i+4 < n; i++ {
-				if size := frameLen(b[i:n]); size > 0 && (i+int(size)+4 > n || frameLen(b[i+int(size):n]) > 0) {
-					from += int64(i)
-					break
-				}
-			}
-		}
-		if from < end {
-			return sectionCloser{io.NewSectionReader(f, from, end-from), f}, rate, nil
+	// Menos de una décima de segundo es «desde el principio»: el flujo se abre un instante después del salto.
+	if at < 0.1 {
+		at = 0
+		if start, end, ok := mp3Body(f, st.Size()); ok && dur > 0 && strings.EqualFold(filepath.Ext(path), ".mp3") {
+			return sectionCloser{io.NewSectionReader(f, start, end-start), f}, float64(end-start) / dur, nil
 		}
 	}
 	f.Close()
