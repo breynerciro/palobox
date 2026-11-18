@@ -162,15 +162,15 @@ function loginsSection(s) {
 }
 
 function musicSection(m) {
-  const scan = el('button', { className: 'btn secondary small', disabled: m.scanning }, icon('repeat'), m.scanning ? 'Escaneando…' : 'Volver a escanear');
+  const scan = el('button', { className: 'btn secondary small', disabled: m.scanning }, icon('repeat'), m.scanning ? 'Escaneando…' : 'Escanear');
   scan.onclick = async () => {
     if (await send('/api/admin/music/reindex', { method: 'POST' }, 'Escaneando la biblioteca. Las canciones nuevas aparecen en unos minutos.')) scan.disabled = true;
   };
   return [
-    el('div', { className: 'section-head' }, heading('Biblioteca de música', size(m.bytes)), scan),
+    el('div', { className: 'section-head' }, heading('Biblioteca de música'), scan),
     el('ul', { className: 'list' }, el('li', {}, usageRow('audio', 'music',
       joinText(plural(m.tracks, 'canción', 'canciones'), plural(m.albums, 'álbum', 'álbumes'), plural(m.artists, 'artista', 'artistas')),
-      joinText(m.seconds && fmtLong(m.seconds), m.scanning ? 'Escaneando ahora' : m.scanned ? `Escaneada ${since(m.scanned)}` : 'Aún sin escanear',
+      joinText(size(m.bytes), m.seconds && fmtLong(m.seconds), m.scanning ? 'Escaneando ahora' : m.scanned ? `Escaneada ${since(m.scanned)}` : 'Aún sin escanear',
         m.removed && `${plural(m.removed, 'duplicado borrado', 'duplicados borrados')} desde el último arranque`)))),
   ];
 }
