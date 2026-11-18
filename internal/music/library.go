@@ -27,6 +27,7 @@ type Library struct {
 	Data   string
 	Sem    chan struct{} // cupo de procesos pesados, compartido con las miniaturas
 	Thumbs media.Thumbs
+	Max    int        // tope de canciones de la biblioteca para las descargas; 0 = sin tope
 	idxMu  sync.Mutex // un recorrido del índice a la vez
 	idxAt  time.Time  // último recorrido completo; lo protege idxMu
 
@@ -36,6 +37,12 @@ type Library struct {
 	removed  atomic.Int64 // canciones duplicadas borradas desde que arrancó la app
 }
 
+// Full dice si la biblioteca ya llegó a su tope de canciones.
+func (l *Library) Full() bool {
+	var n int
+	return l.Max > 0 && l.DB.QueryRow(`SELECT COUNT(*) FROM tracks`).Scan(&n) == nil && n >= l.Max
+}
+
 // Status resume la biblioteca para el panel de administrador.
 func (l *Library) Status() (map[string]any, error) {
 	var tracks, albums, artists int
@@ -43,7 +50,7 @@ func (l *Library) Status() (map[string]any, error) {
 	var bytes int64
 	err := l.DB.QueryRow(`SELECT COUNT(*), COUNT(DISTINCT album_dir), COUNT(DISTINCT artist_dir), COALESCE(SUM(dur), 0), COALESCE(SUM(size), 0) FROM tracks`).
 		Scan(&tracks, &albums, &artists, &secs, &bytes)
-	return map[string]any{"tracks": tracks, "albums": albums, "artists": artists, "seconds": int64(secs), "bytes": bytes,
+	return map[string]any{"max": l.Max, "tracks": tracks, "albums": albums, "artists": artists, "seconds": int64(secs), "bytes": bytes,
 		"scanning": l.scanning.Load(), "scanned": l.scanned.Load(), "removed": l.removed.Load()}, err
 }
 

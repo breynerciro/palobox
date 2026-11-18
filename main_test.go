@@ -326,6 +326,46 @@ func TestAdminControl(t *testing.T) {
 		t.Fatal("el usuario creado debe poder entrar")
 	}
 
+	// Cuenta de solo Música: entra a la música pero no a fotos, archivos ni subidas, ni pidiéndolos a mano.
+	inv := newClient()
+	if code, _, _ := ana.do("POST", "/api/admin/users", mustJSON(map[string]any{"name": "invitado", "pass": "clave-invitado", "musicOnly": true})); code != 200 || inv.login("invitado", "clave-invitado") != 200 {
+		t.Fatal("crear invitado")
+	}
+	if _, m, _ := inv.do("GET", "/api/me", nil); m["musicOnly"] != true {
+		t.Fatalf("invitado: %v", m)
+	}
+	for _, r := range [][2]string{{"GET", "/api/photos"}, {"GET", "/api/files"}, {"POST", "/api/uploads"}, {"POST", "/api/files/mkdir"}, {"DELETE", "/api/files?path=x"}} {
+		if code, _, _ := inv.do(r[0], r[1], []byte(`{}`)); code != 403 {
+			t.Fatalf("%s %s con cuenta de solo música: %d", r[0], r[1], code)
+		}
+	}
+	if code, _, _ := inv.do("GET", "/api/music", nil); code != 200 {
+		t.Fatalf("la música sí debe abrirle: %d", code)
+	}
+	// Con acceso completo vuelve a entrar; al administrador no se le puede limitar.
+	if put("/api/admin/users/invitado/access", map[string]bool{"musicOnly": false}) != 200 {
+		t.Fatal("dar acceso completo")
+	}
+	if code, _, _ := inv.do("GET", "/api/photos", nil); code != 200 {
+		t.Fatalf("con acceso completo debe ver sus fotos: %d", code)
+	}
+	if put("/api/admin/users/ana/access", map[string]bool{"musicOnly": true}) != 400 {
+		t.Fatal("al administrador no se le limita")
+	}
+	inv.do("POST", "/api/logout", nil)
+
+	// Tope de canciones: con la biblioteca llena solo el administrador puede pedir descargas.
+	a.music.Max = 1
+	a.music.DB.Exec(`INSERT INTO tracks(path, size, mtime, title, artist, album, album_dir, artist_dir, year, disc, num, dur, fold) VALUES('x.mp3', 1, 1, 'x', '', '', '', '', 0, 0, 0, 0, 'x')`)
+	link := mustJSON(map[string]string{"url": "https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC"})
+	if code, _, _ := luis.do("POST", "/api/spotdl", link); code != 409 {
+		t.Fatalf("biblioteca llena: %d", code)
+	}
+	if code, _, _ := ana.do("POST", "/api/spotdl", link); code != 503 { // pasa el tope; no hay servicio de descargas en la prueba
+		t.Fatalf("el administrador pasa el tope: %d", code)
+	}
+	a.music.Max = 0
+
 	// El panel lista sesiones y entradas, incluida la fallida.
 	_, m, raw := ana.do("GET", "/api/admin", nil)
 	ss, _ := m["sessions"].([]any)
@@ -336,7 +376,7 @@ func TestAdminControl(t *testing.T) {
 			current++
 		}
 	}
-	if len(ss) != 3 || current != 1 || len(ls) != 4 || m["failed24h"].(float64) != 1 || m["music"] == nil {
+	if len(ss) != 3 || current != 1 || len(ls) != 5 || m["failed24h"].(float64) != 1 || m["music"] == nil {
 		t.Fatalf("panel: %s", raw)
 	}
 

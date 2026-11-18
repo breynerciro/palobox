@@ -2,7 +2,7 @@
 import { $, el, empty } from './lib.js';
 import { TABS, route, go, setRenderer, render } from './nav.js';
 import { audio, markPlaying, joinJam } from './player.js';
-import { isAdmin, start } from './session.js';
+import { isAdmin, musicOnly, start } from './session.js';
 import { uploading } from './uploads.js';
 import { photosView } from './photos.js';
 import { filesView } from './files.js';
@@ -26,6 +26,8 @@ async function renderView() {
     history.replaceState(null, '', '#/musica');
     joinJam(invite[1]);
   }
+  // Una cuenta de solo Música no tiene Fotos ni Archivos (el servidor tampoco se los entrega).
+  if (musicOnly && ['fotos', 'archivos'].includes(route().tab)) history.replaceState(null, '', '#/musica');
   const { tab, path } = route();
   const id = ++renderId;
   for (const a of document.querySelectorAll('#tabs a')) {
@@ -46,7 +48,7 @@ async function renderView() {
   document.body.classList.toggle('music', music);
   $('#tabs').hidden = music;
   $('#mtabs').hidden = $('#side').hidden = !music;
-  $('#mtabs-exit').href = $('#side-exit').href = lastCloud;
+  $('#mtabs-exit').href = $('#side-exit').href = musicOnly ? '#/musica' : lastCloud;
   for (const a of document.querySelectorAll('[data-m]')) {
     a.dataset.m === section ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');
   }

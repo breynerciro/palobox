@@ -16,6 +16,16 @@ import (
 
 type Handler struct {
 	Module module.Module // sin URL = sección desactivada
+	Full   func() bool   // la biblioteca llegó a su tope de canciones: solo el administrador sigue descargando
+}
+
+// room rechaza una descarga nueva cuando la biblioteca está llena. Se revisa al pedirla: una playlist grande
+// pedida justo antes del tope puede pasarlo.
+func (h *Handler) room(u httpx.User) error {
+	if !u.Admin && h.Full != nil && h.Full() {
+		return httpx.Error(409, "La biblioteca llegó a su tope de canciones. Pídele al administrador que haga espacio.")
+	}
+	return nil
 }
 
 // spotifyRe acepta los cuatro tipos de Spotify, con o sin prefijo de idioma, y descarta
@@ -84,6 +94,9 @@ func (h *Handler) Add(w http.ResponseWriter, r *http.Request, u httpx.User) erro
 	if err != nil {
 		return err
 	}
+	if err := h.room(u); err != nil {
+		return err
+	}
 	var job Job
 	if err := h.Module.Do(u, "POST", "/jobs", map[string]string{"url": url}, &job); err != nil {
 		return err
@@ -109,6 +122,9 @@ func (h *Handler) Retry(w http.ResponseWriter, r *http.Request, u httpx.User) er
 	id := r.PathValue("id")
 	if !idRe.MatchString(id) {
 		return httpx.Error(400, "Trabajo no válido.")
+	}
+	if err := h.room(u); err != nil {
+		return err
 	}
 	var job Job
 	if err := h.Module.Do(u, "POST", "/jobs/"+id+"/retry", nil, &job); err != nil {

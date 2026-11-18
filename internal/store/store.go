@@ -49,7 +49,7 @@ func Open(data string) (*sql.DB, error) {
 	// Bases creadas antes del panel de administrador; falla sin daño si la columna ya existe.
 	db.Exec(`ALTER TABLE users ADD COLUMN seen INTEGER NOT NULL DEFAULT 0`)
 	// Columnas del control de usuarios y sesiones; mismas reglas que la anterior.
-	for _, col := range []string{"users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0",
+	for _, col := range []string{"users ADD COLUMN disabled INTEGER NOT NULL DEFAULT 0", "users ADD COLUMN music_only INTEGER NOT NULL DEFAULT 0",
 		"sessions ADD COLUMN created INTEGER NOT NULL DEFAULT 0", "sessions ADD COLUMN seen INTEGER NOT NULL DEFAULT 0",
 		"sessions ADD COLUMN ip TEXT NOT NULL DEFAULT ''", "sessions ADD COLUMN agent TEXT NOT NULL DEFAULT ''"} {
 		db.Exec(`ALTER TABLE ` + col)

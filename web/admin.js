@@ -64,6 +64,7 @@ function alerts(s, sp) {
   if (1 - s.memFree / s.memTotal >= 0.9) out.push(['La memoria del servidor está casi llena.', '']);
   if (s.failed24h >= 5) out.push([`${plural(s.failed24h, 'intento fallido', 'intentos fallidos')} de entrar en las últimas 24 h.`, 'actividad']);
   if (sp?.enabled && !sp.ok) out.push([sp.error || 'El servicio de descargas de Spotify no responde.', 'musica']);
+  if (s.music.max && s.music.tracks >= s.music.max) out.push([`La biblioteca llegó a su tope de ${s.music.max.toLocaleString('es-CO')} canciones: solo tú puedes seguir descargando.`, 'musica']);
   if (!out.length) return null;
   return el('ul', { className: 'list alerts' }, out.map(([t, key]) => {
     const inner = [el('span', { className: 'type', style: '--tc: var(--danger)' }, icon('alert')), el('div', { className: 'row-text' }, el('p', { textContent: t }))];
@@ -73,11 +74,16 @@ function alerts(s, sp) {
 
 // Usuarios
 
-async function newUser() {
-  const name = await ask({ heading: 'Nuevo usuario', text: 'Solo minúsculas, números, - y _. También es el nombre de su carpeta.', input: '', label: 'Usuario', ok: 'Siguiente' });
+// Dos niveles: acceso completo (fotos, archivos y música) o invitado de solo música.
+async function newUser(musicOnly) {
+  const name = await ask({
+    heading: musicOnly ? 'Nuevo invitado de música' : 'Nuevo usuario',
+    text: `${musicOnly ? 'Solo podrá entrar a Música: escuchar, armar playlists y pedir descargas. ' : 'Tendrá sus propias fotos y archivos, además de la música. '}El nombre va en minúsculas, con números, - o _.`,
+    input: '', label: 'Usuario', ok: 'Siguiente',
+  });
   if (!name) return;
-  const pass = await ask({ heading: `Contraseña de ${name}`, text: 'Mínimo 8 caracteres. Compártela con esa persona por un medio seguro.', input: '', label: 'Contraseña', type: 'password', ok: 'Crear usuario' });
-  if (pass) send('/api/admin/users', json('POST', { name, pass }), `Listo: ${name} ya puede entrar.`);
+  const pass = await ask({ heading: `Contraseña de ${name}`, text: 'Mínimo 8 caracteres. Compártela con esa persona por un medio seguro.', input: '', label: 'Contraseña', type: 'password', ok: musicOnly ? 'Crear invitado' : 'Crear usuario' });
+  if (pass) send('/api/admin/users', json('POST', { name, pass, musicOnly }), `Listo: ${name} ya puede entrar${musicOnly ? ', solo a Música' : ''}.`);
 }
 
 function userMenu(u, anchor) {
@@ -88,6 +94,13 @@ function userMenu(u, anchor) {
       if (pass) send(`${path}/password`, json('PUT', { pass }), 'Contraseña cambiada.');
     } },
     u.sessions > 0 && !u.admin && { icon: 'logout', label: `Cerrar ${plural(u.sessions, 'sesión', 'sesiones')}`, run: () => send(`${path}/sessions`, { method: 'DELETE' }, `${u.name} tendrá que volver a entrar.`) },
+    !u.admin && (u.musicOnly
+      ? { icon: 'folder', label: 'Dar acceso completo', run: () => send(`${path}/access`, json('PUT', { musicOnly: false }), `${u.name} ahora tiene fotos, archivos y música.`) }
+      : { icon: 'music', label: 'Limitar a solo música', run: async () => {
+        if (await ask({ heading: `¿Limitar a ${u.name} a solo música?`, text: 'Dejará de ver Fotos y Archivos. Lo que tenga guardado no se borra: vuelve a verlo si le das acceso completo.', ok: 'Limitar' })) {
+          send(`${path}/access`, json('PUT', { musicOnly: true }), `${u.name} ahora solo entra a Música.`);
+        }
+      } }),
     !u.admin && (u.disabled
       ? { icon: 'check', label: 'Activar cuenta', run: () => send(`${path}/disabled`, json('PUT', { disabled: false }), `${u.name} ya puede entrar.`) }
       : { icon: 'x', label: 'Desactivar cuenta', run: async () => {
@@ -105,12 +118,16 @@ function userMenu(u, anchor) {
 
 function usersSection(s) {
   const online = (u) => !u.disabled && u.seen && Date.now() / 1000 - u.seen < 120;
-  const add = el('button', { className: 'btn primary small' }, icon('plus'), 'Nuevo usuario');
-  add.onclick = newUser;
+  const add = el('button', { className: 'btn primary small' }, icon('plus'), 'Usuario');
+  add.setAttribute('aria-label', 'Nuevo usuario con acceso completo');
+  add.onclick = () => newUser(false);
+  const guest = el('button', { className: 'btn secondary small' }, icon('music'), 'Invitado');
+  guest.setAttribute('aria-label', 'Nuevo invitado de solo música');
+  guest.onclick = () => newUser(true);
   return [
-    el('div', { className: 'section-head' }, heading('Usuarios', `${s.users.filter(online).length} en línea de ${s.users.length}`), add),
+    el('div', { className: 'section-head' }, heading('Usuarios', `${s.users.filter(online).length} en línea de ${s.users.length}`), el('span', { className: 'head-btns' }, guest, add)),
     el('ul', { className: 'list' }, s.users.map((u) => el('li', { className: `row-wrap${u.disabled ? ' off' : ''}` },
-      usageRow('image', 'user', joinText(u.name, u.admin && 'administrador'),
+      usageRow(u.musicOnly ? 'audio' : 'image', u.musicOnly ? 'music' : 'user', joinText(u.name, u.admin && 'administrador', u.musicOnly && 'solo música'),
         joinText(u.disabled ? 'Desactivado' : ago(u.seen), plural(u.sessions, 'sesión', 'sesiones'), size(u.bytes)),
         null, online(u)),
       iconBtn('more', `Acciones para ${u.name}`, (b) => userMenu(u, b))))),
@@ -161,7 +178,7 @@ function musicSection(m) {
   return [
     el('div', { className: 'section-head' }, heading('Biblioteca de música'), scan),
     el('ul', { className: 'list' }, el('li', {}, usageRow('audio', 'music',
-      joinText(plural(m.tracks, 'canción', 'canciones'), plural(m.albums, 'álbum', 'álbumes'), plural(m.artists, 'artista', 'artistas')),
+      joinText(m.max ? `${m.tracks.toLocaleString('es-CO')} de ${m.max.toLocaleString('es-CO')} canciones` : plural(m.tracks, 'canción', 'canciones'), plural(m.albums, 'álbum', 'álbumes'), plural(m.artists, 'artista', 'artistas')),
       joinText(size(m.bytes), m.seconds && fmtLong(m.seconds), m.scanning ? 'Escaneando ahora' : m.scanned ? `Escaneada ${since(m.scanned)}` : 'Aún sin escanear',
         m.removed && `${plural(m.removed, 'duplicado borrado', 'duplicados borrados')} desde el último arranque`)))),
   ];

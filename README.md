@@ -41,6 +41,9 @@ docker compose run --rm palobox adduser admin 'una-clave-larga'
 La app queda en `http://127.0.0.1:8080`. El mismo comando `adduser` crea más usuarios o le
 cambia la contraseña a uno que ya existe.
 
+Desde el panel de administración también se crean usuarios y se elige su nivel: **acceso completo**
+(fotos, archivos y música) o **solo música**, para invitados que escuchan y ayudan a llenar la biblioteca.
+
 ### Acceso desde otros dispositivos
 
 El puerto solo se publica en `127.0.0.1`: la idea es ponerle HTTPS por delante, por ejemplo
@@ -64,6 +67,7 @@ Variables de `.env`, todas opcionales:
 | `ADMIN` | `admin` | usuario que ve el panel de administrador |
 | `DATA_PATH` | `/srv/data` | carpeta del servidor donde viven los datos |
 | `TZ` | `America/Bogota` | zona horaria |
+| `MUSIC_MAX` | `8000` | tope de canciones: al llegar, solo el administrador descarga más (`0` = sin tope) |
 | `DEPLOY_HOST` | — | `usuario@servidor` para `./deploy.sh` |
 
 Dentro de la carpeta de datos:

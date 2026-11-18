@@ -52,9 +52,10 @@ func (h *Handler) Stats(w http.ResponseWriter, r *http.Request, u httpx.User) er
 		Media    int    `json:"media"`
 		Bytes    int64  `json:"bytes"`
 		Disabled bool   `json:"disabled,omitempty"`
+		Music    bool   `json:"musicOnly,omitempty"`
 		Admin    bool   `json:"admin,omitempty"`
 	}
-	rows, err := h.DB.Query(`SELECT u.name, u.seen, u.disabled,
+	rows, err := h.DB.Query(`SELECT u.name, u.seen, u.disabled, u.music_only,
 		(SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.expires > ?),
 		(SELECT COUNT(*) FROM media m WHERE m.user_id = u.id)
 		FROM users u ORDER BY u.seen DESC, u.name`, time.Now().Unix())
@@ -65,10 +66,11 @@ func (h *Handler) Stats(w http.ResponseWriter, r *http.Request, u httpx.User) er
 	users, isUser := []usage{}, map[string]bool{}
 	for rows.Next() {
 		var x usage
-		if err := rows.Scan(&x.Name, &x.Seen, &x.Disabled, &x.Sessions, &x.Media); err != nil {
+		if err := rows.Scan(&x.Name, &x.Seen, &x.Disabled, &x.Music, &x.Sessions, &x.Media); err != nil {
 			return err
 		}
 		x.Admin = x.Name == h.Auth.Admin
+		x.Music = x.Music && !x.Admin
 		users, isUser[x.Name] = append(users, x), true
 	}
 	if err := rows.Err(); err != nil {
@@ -207,11 +209,14 @@ func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request, u httpx.Use
 	if !u.Admin {
 		return errOnlyAdmin
 	}
-	var in struct{ Name, Pass string }
+	var in struct {
+		Name, Pass string
+		MusicOnly  bool
+	}
 	if err := httpx.ReadJSON(w, r, &in); err != nil {
 		return err
 	}
-	if err := h.Auth.CreateUser(in.Name, in.Pass); err != nil {
+	if err := h.Auth.CreateUser(in.Name, in.Pass, in.MusicOnly); err != nil {
 		return err
 	}
 	return httpx.WriteJSON(w, 200, done)
@@ -246,6 +251,22 @@ func (h *Handler) SetDisabled(w http.ResponseWriter, r *http.Request, u httpx.Us
 		return err
 	}
 	if err := h.Auth.SetDisabled(id, in.Disabled); err != nil {
+		return err
+	}
+	return httpx.WriteJSON(w, 200, done)
+}
+
+// SetAccess cambia el nivel de una cuenta: solo Música o acceso completo.
+func (h *Handler) SetAccess(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	id, _, err := h.target(r, u, true)
+	if err != nil {
+		return err
+	}
+	var in struct{ MusicOnly bool }
+	if err := httpx.ReadJSON(w, r, &in); err != nil {
+		return err
+	}
+	if err := h.Auth.SetMusicOnly(id, in.MusicOnly); err != nil {
 		return err
 	}
 	return httpx.WriteJSON(w, 200, done)

@@ -62,7 +62,7 @@ func (s *Service) AddUser(name, pass string) error {
 }
 
 // CreateUser crea un usuario nuevo; a diferencia de AddUser, falla si ya existe.
-func (s *Service) CreateUser(name, pass string) error {
+func (s *Service) CreateUser(name, pass string, musicOnly bool) error {
 	if err := ValidName(name); err != nil {
 		return httpx.Error(400, err.Error())
 	}
@@ -70,7 +70,7 @@ func (s *Service) CreateUser(name, pass string) error {
 	if err != nil {
 		return httpx.Error(400, err.Error())
 	}
-	res, err := s.DB.Exec(`INSERT INTO users(name, pass) VALUES(?, ?) ON CONFLICT(name) DO NOTHING`, name, h)
+	res, err := s.DB.Exec(`INSERT INTO users(name, pass, music_only) VALUES(?, ?, ?) ON CONFLICT(name) DO NOTHING`, name, h, musicOnly)
 	if err != nil {
 		return err
 	}
@@ -100,6 +100,13 @@ func (s *Service) SetDisabled(id int64, off bool) error {
 		return err
 	}
 	return s.CloseSessions(id)
+}
+
+// SetMusicOnly limita la cuenta a Música o le devuelve el acceso completo. No borra nada: si tenía fotos o
+// archivos, siguen en el disco y vuelven a verse al darle acceso completo.
+func (s *Service) SetMusicOnly(id int64, on bool) error {
+	_, err := s.DB.Exec(`UPDATE users SET music_only = ? WHERE id = ?`, on, id)
+	return err
 }
 
 func (s *Service) CloseSessions(id int64) error {
@@ -155,15 +162,16 @@ func (s *Service) Wrap(h httpx.Handler) http.HandlerFunc {
 		now := time.Now().Unix()
 		c, err := r.Cookie("s")
 		if err == nil {
-			err = s.DB.QueryRow(`SELECT u.id, u.name, MIN(u.seen, s.seen) FROM sessions s JOIN users u ON u.id = s.user_id
-				WHERE s.token = ? AND s.expires > ? AND u.disabled = 0`, c.Value, now).Scan(&u.ID, &u.Name, &seen)
+			err = s.DB.QueryRow(`SELECT u.id, u.name, u.music_only, MIN(u.seen, s.seen) FROM sessions s JOIN users u ON u.id = s.user_id
+				WHERE s.token = ? AND s.expires > ? AND u.disabled = 0`, c.Value, now).Scan(&u.ID, &u.Name, &u.MusicOnly, &seen)
 		}
 		if err != nil {
 			http.Error(w, "no autenticado", 401)
 			return
 		}
 		u.Admin = u.Name == s.Admin
-		if now-seen > 60 { // último uso del usuario y de esta sesión, para el panel; una escritura por minuto como mucho
+		u.MusicOnly = u.MusicOnly && !u.Admin // el administrador siempre tiene acceso completo
+		if now-seen > 60 {                    // último uso del usuario y de esta sesión, para el panel; una escritura por minuto como mucho
 			s.DB.Exec(`UPDATE users SET seen = ? WHERE id = ?`, now, u.ID)
 			s.DB.Exec(`UPDATE sessions SET seen = ? WHERE token = ?`, now, c.Value)
 		}

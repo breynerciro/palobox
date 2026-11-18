@@ -11,6 +11,7 @@ services:
     environment:
       ADMIN: ${ADMIN:-admin} # usuario que ve el panel de administrador
       TZ: ${TZ:-America/Bogota}
+      MUSIC_MAX: ${MUSIC_MAX:-8000} # tope de canciones: al llegar, solo el administrador descarga más (0 = sin tope)
       SPOTDL_URL: http://spotdl:8801 # descargas de Spotify; sin el servicio, la sección queda oculta
       SPOTDL_TOKEN_FILE: /run/secrets/spotdl_token # sin token la sección también queda oculta
     secrets: [spotdl_token]

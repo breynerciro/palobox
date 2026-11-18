@@ -60,7 +60,7 @@ func open(data string) (*app, error) {
 		photos:  &photos.Handler{DB: db, Data: data, Thumbs: thumbs},
 		uploads: uploads.New(db, data, thumbs),
 		music:   lib,
-		spotdl:  &spotdl.Handler{},
+		spotdl:  &spotdl.Handler{Full: lib.Full},
 		jam:     &jam.Hub{Lookup: lib.ByPaths, More: lib.Random},
 	}, nil
 }
@@ -68,29 +68,39 @@ func open(data string) (*app, error) {
 func (a *app) routes() http.Handler {
 	mux := http.NewServeMux()
 	auth := a.auth.Wrap
+	// cloud protege Fotos, Archivos y sus subidas: las cuentas de solo Música no entran, aunque pidan la ruta a mano.
+	cloud := func(h httpx.Handler) http.HandlerFunc {
+		return auth(func(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+			if u.MusicOnly {
+				return httpx.Error(403, "Tu cuenta solo tiene acceso a Música.")
+			}
+			return h(w, r, u)
+		})
+	}
 	mux.HandleFunc("POST /api/login", a.auth.Login)
 	mux.HandleFunc("POST /api/logout", a.auth.Logout)
 	mux.HandleFunc("GET /api/me", auth(func(w http.ResponseWriter, r *http.Request, u httpx.User) error {
-		return httpx.WriteJSON(w, 200, map[string]any{"name": u.Name, "admin": u.Admin})
+		return httpx.WriteJSON(w, 200, map[string]any{"name": u.Name, "admin": u.Admin, "musicOnly": u.MusicOnly})
 	}))
 	mux.HandleFunc("GET /api/admin", auth(a.admin.Stats))
 	mux.HandleFunc("POST /api/admin/users", auth(a.admin.CreateUser))
 	mux.HandleFunc("PUT /api/admin/users/{name}/password", auth(a.admin.SetPassword))
+	mux.HandleFunc("PUT /api/admin/users/{name}/access", auth(a.admin.SetAccess))
 	mux.HandleFunc("PUT /api/admin/users/{name}/disabled", auth(a.admin.SetDisabled))
 	mux.HandleFunc("DELETE /api/admin/users/{name}", auth(a.admin.DeleteUser))
 	mux.HandleFunc("DELETE /api/admin/users/{name}/sessions", auth(a.admin.CloseUserSessions))
 	mux.HandleFunc("DELETE /api/admin/sessions/{id}", auth(a.admin.CloseSession))
 	mux.HandleFunc("POST /api/admin/music/reindex", auth(a.admin.Reindex))
 	mux.HandleFunc("GET /api/admin/spotdl", auth(a.spotdl.Health))
-	mux.HandleFunc("POST /api/uploads", auth(a.uploads.Start))
-	mux.HandleFunc("PATCH /api/uploads/{id}", auth(a.uploads.Part))
-	mux.HandleFunc("GET /api/photos", auth(a.photos.List))
-	mux.HandleFunc("GET /api/photos/{id}/{v}", auth(a.photos.Get))
-	mux.HandleFunc("DELETE /api/photos/{id}", auth(a.photos.Delete))
-	mux.HandleFunc("GET /api/files", auth(a.files.List))
-	mux.HandleFunc("GET /api/files/raw", auth(a.files.Raw))
-	mux.HandleFunc("POST /api/files/mkdir", auth(a.files.Mkdir))
-	mux.HandleFunc("DELETE /api/files", auth(a.files.Delete))
+	mux.HandleFunc("POST /api/uploads", cloud(a.uploads.Start))
+	mux.HandleFunc("PATCH /api/uploads/{id}", cloud(a.uploads.Part))
+	mux.HandleFunc("GET /api/photos", cloud(a.photos.List))
+	mux.HandleFunc("GET /api/photos/{id}/{v}", cloud(a.photos.Get))
+	mux.HandleFunc("DELETE /api/photos/{id}", cloud(a.photos.Delete))
+	mux.HandleFunc("GET /api/files", cloud(a.files.List))
+	mux.HandleFunc("GET /api/files/raw", cloud(a.files.Raw))
+	mux.HandleFunc("POST /api/files/mkdir", cloud(a.files.Mkdir))
+	mux.HandleFunc("DELETE /api/files", cloud(a.files.Delete))
 	mux.HandleFunc("GET /api/media/raw", auth(a.music.Raw))
 	mux.HandleFunc("GET /api/media/thumb", auth(a.music.Thumb))
 	mux.HandleFunc("GET /api/music", auth(a.music.Lib))
@@ -162,6 +172,12 @@ func main() {
 		log.Fatal(err)
 	}
 	a.spotdl.Module = module.Load("SPOTDL", "El servicio de descargas de Spotify")
+	a.music.Max = 8000 // tope de canciones para las descargas de quienes no son el administrador
+	if v := os.Getenv("MUSIC_MAX"); v != "" {
+		if _, err := fmt.Sscan(v, &a.music.Max); err != nil {
+			log.Fatal("MUSIC_MAX no es un número: ", v)
+		}
+	}
 	if a.auth.Admin = os.Getenv("ADMIN"); a.auth.Admin == "" {
 		a.auth.Admin = "admin"
 	}

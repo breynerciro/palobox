@@ -484,3 +484,8 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .jam-code { margin: 4px var(--gutter) 8px; font-size: 2rem; font-weight: 700; letter-spacing: .2em; text-align: center; font-variant-numeric: tabular-nums; -webkit-user-select: all; user-select: all; }
 .jam-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px var(--gutter) 8px; }
 .np-bar-btns { display: flex; }
+
+/* Cuenta de solo Música: sin salidas a Fotos ni Archivos (el servidor tampoco los entrega). */
+.music-only #mtabs-exit, .music-only .side-foot { display: none; }
+.head-btns { display: flex; gap: 8px; flex: none; }
+.section-head .head-btns .btn { margin-top: 12px; }

@@ -54,6 +54,7 @@ $('#logout').onclick = async () => {
 };
 
 export let isAdmin = false;
+export let musicOnly = false; // cuenta de invitado: solo ve Música
 export let userName = ''; // dueño de lo que se recuerda en este navegador (búsquedas recientes)
 
 export async function start() {
@@ -61,6 +62,8 @@ export async function start() {
   if (!r?.ok) return showLogin();
   const me = await r.json();
   isAdmin = me.admin;
+  musicOnly = !!me.musicOnly;
+  document.body.classList.toggle('music-only', musicOnly);
   userName = me.name;
   restore(me.name);
   $('#login').hidden = true;

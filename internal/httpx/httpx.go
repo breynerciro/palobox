@@ -14,9 +14,10 @@ import (
 
 // User es el usuario de la sesión, ya verificado por auth.
 type User struct {
-	ID    int64
-	Name  string
-	Admin bool
+	ID        int64
+	Name      string
+	Admin     bool
+	MusicOnly bool // cuenta de invitado: solo entra a Música, sin fotos ni archivos propios
 }
 
 // Handler atiende una petición autenticada; el error lo traduce Fail.
