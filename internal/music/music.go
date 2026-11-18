@@ -36,6 +36,7 @@ type track struct {
 	Num        int     `json:"num"`
 	Dur        float64 `json:"dur"` // segundos; 0 = desconocida
 	disc       int
+	genre      string
 }
 
 type album struct {
@@ -145,7 +146,7 @@ func applyTags(t *track, probe []byte) {
 	if n := leadInt(tags["track"]); n > 0 { // "3/12"
 		t.Num = n
 	}
-	t.disc = leadInt(tags["disc"])
+	t.disc, t.genre = leadInt(tags["disc"]), tags["genre"]
 	if t.Year = leadInt(tags["date"]); t.Year == 0 {
 		t.Year = leadInt(tags["year"])
 	}
@@ -219,9 +220,9 @@ func (l *Library) Sync() {
 		cancel()
 		<-l.Sem
 		applyTags(&t, out)
-		if _, err := l.DB.Exec(`INSERT OR REPLACE INTO tracks(path, size, mtime, title, artist, album, album_dir, artist_dir, year, disc, num, dur, fold)
-			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, rel, now.size, now.mtime, t.Title, t.Artist, t.Album, t.AlbumPath, t.ArtistPath,
-			t.Year, t.disc, t.Num, t.Dur, fold(t.Title+" "+t.Artist+" "+t.Album)); err != nil {
+		if _, err := l.DB.Exec(`INSERT OR REPLACE INTO tracks(path, size, mtime, title, artist, album, album_dir, artist_dir, year, disc, num, dur, fold, genre)
+			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, rel, now.size, now.mtime, t.Title, t.Artist, t.Album, t.AlbumPath, t.ArtistPath,
+			t.Year, t.disc, t.Num, t.Dur, fold(t.Title+" "+t.Artist+" "+t.Album), t.genre); err != nil {
 			log.Print("índice de música: ", err)
 		}
 		return nil
@@ -501,6 +502,23 @@ func (l *Library) Search(w http.ResponseWriter, r *http.Request, u httpx.User) e
 	}
 	out["tracks"], out["albums"], out["artists"], out["playlists"] = ts, albums, artists, mine
 	return httpx.WriteJSON(w, 200, out)
+}
+
+// Radio sugiere qué sigue cuando se acaba la cola: pistas al azar de toda la biblioteca o, con same=1,
+// del género de la pista ?path= (si esa pista no trae género, de su mismo artista).
+// shortcut: el género se compara completo, «Rock; Pop» no cuenta como Rock; partir la etiqueta si las sugerencias salen pobres.
+func (l *Library) Radio(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	l.fresh()
+	tail := `WHERE t.path != ?`
+	if r.URL.Query().Get("same") != "" {
+		tail = `JOIN tracks s ON s.path = ? WHERE t.path != s.path
+			AND CASE WHEN s.genre = '' THEN t.artist_dir = s.artist_dir ELSE t.genre = s.genre COLLATE NOCASE END`
+	}
+	ts, err := l.tracks(tail+` ORDER BY RANDOM() LIMIT 40`, r.URL.Query().Get("path"))
+	if err != nil {
+		return err
+	}
+	return httpx.WriteJSON(w, 200, ts)
 }
 
 // Me gusta e historial

@@ -171,6 +171,11 @@ body:has(#upbar:not([hidden])) { --up-h: 52px; } /* lo último de la vista no qu
 
 /* ---- Música: pistas, estanterías, accesos rápidos, filtros ---- */
 .tracks .row { padding-right: 4px; }
+/* Deslizar a la derecha agrega a la cola: la fila se corre y deja ver el aviso */
+.tracks > li { touch-action: pan-y; }
+.tracks > li.swipe { position: relative; }
+.tracks > li.swipe::before { content: 'A la cola'; position: absolute; inset: 0 100% 0 auto; width: 96px; display: grid; place-items: center;
+  background: var(--accent); color: var(--on-accent); font-size: .85rem; font-weight: 600; }
 .dur { flex: none; min-width: 38px; text-align: right; font-size: .82rem; font-variant-numeric: tabular-nums; }
 .like { color: var(--muted); }
 .row-wrap .like[aria-pressed=true], .like[aria-pressed=true] { color: var(--accent); }

@@ -21,7 +21,7 @@ CREATE INDEX IF NOT EXISTS media_taken ON media(user_id, taken DESC);
 CREATE TABLE IF NOT EXISTS tracks(
 	path TEXT PRIMARY KEY, size INTEGER NOT NULL, mtime INTEGER NOT NULL,
 	title TEXT NOT NULL, artist TEXT NOT NULL, album TEXT NOT NULL, album_dir TEXT NOT NULL, artist_dir TEXT NOT NULL,
-	year INTEGER NOT NULL, disc INTEGER NOT NULL, num INTEGER NOT NULL, dur REAL NOT NULL, fold TEXT NOT NULL);
+	year INTEGER NOT NULL, disc INTEGER NOT NULL, num INTEGER NOT NULL, dur REAL NOT NULL, fold TEXT NOT NULL, genre TEXT NOT NULL DEFAULT '');
 CREATE INDEX IF NOT EXISTS tracks_album ON tracks(album_dir);
 CREATE INDEX IF NOT EXISTS tracks_artist ON tracks(artist_dir);
 CREATE TABLE IF NOT EXISTS likes(user_id INTEGER NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(user_id, path));
@@ -47,5 +47,9 @@ func Open(data string) (*sql.DB, error) {
 	}
 	// Bases creadas antes del panel de administrador; falla sin daño si la columna ya existe.
 	db.Exec(`ALTER TABLE users ADD COLUMN seen INTEGER NOT NULL DEFAULT 0`)
+	// Índices anteriores al género: la columna nace vacía y mtime = -1 hace que Sync vuelva a leer las etiquetas.
+	if _, err := db.Exec(`ALTER TABLE tracks ADD COLUMN genre TEXT NOT NULL DEFAULT ''`); err == nil {
+		db.Exec(`UPDATE tracks SET mtime = -1`)
+	}
 	return db, nil
 }

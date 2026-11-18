@@ -164,7 +164,7 @@ export function saveButton(kind, x) {
 // trackList pinta pistas reproducibles. covers: carátula junto al título (listas de varios álbumes);
 // sub: texto bajo el título; extra(t, i): acciones de menú de la vista; onMove(de, a): permite reordenar arrastrando.
 export function trackList(tracks, { covers = false, sub = (t) => t.artist, extra, onMove } = {}) {
-  return el('ul', { className: `list tracks${covers ? ' covers' : ''}` }, tracks.map((t, i) => {
+  return swipeQueue(tracks, el('ul', { className: `list tracks${covers ? ' covers' : ''}` }, tracks.map((t, i) => {
     const b = el('button', { className: 'row' }, el('span', { className: 'num', textContent: i + 1 }), covers && cover(t.albumPath, { small: true }),
       el('div', { className: 'row-text' }, el('p', { className: 'ellipsis', textContent: t.title }), el('p', { className: 'muted ellipsis', textContent: sub(t) })));
     b.dataset.track = t.path;
@@ -186,5 +186,48 @@ export function trackList(tracks, { covers = false, sub = (t) => t.artist, extra
       };
     }
     return li;
-  }));
+  })));
+}
+
+// Deslizar una fila a la derecha con el dedo la agrega a la cola, como en Spotify. El mouse tiene el menú.
+function swipeQueue(tracks, ul) {
+  let d = null; // { id, x, y, li, on }
+  let swallowUntil = 0; // el click que sigue al gesto no reproduce la pista
+  ul.addEventListener('pointerdown', (e) => {
+    const li = e.target.closest('li');
+    if (e.pointerType !== 'mouse' && e.isPrimary && li) d = { id: e.pointerId, x: e.clientX, y: e.clientY, li, on: false };
+  });
+  ul.addEventListener('pointermove', (e) => {
+    if (d?.id !== e.pointerId) return;
+    const dx = e.clientX - d.x;
+    if (!d.on) {
+      if (Math.hypot(dx, e.clientY - d.y) < 12) return; // todavía puede ser un toque
+      if (dx < Math.abs(e.clientY - d.y) * 1.5) return (d = null); // desplazamiento vertical o hacia la izquierda
+      d.on = true;
+      d.li.classList.add('swipe');
+      ul.setPointerCapture(e.pointerId);
+    }
+    d.li.style.transition = 'none';
+    d.li.style.transform = `translateX(${Math.min(Math.max(0, dx), 96)}px)`;
+  });
+  const end = (e) => {
+    if (d?.id !== e.pointerId) return;
+    const { li, on, x } = d;
+    d = null;
+    if (!on) return;
+    swallowUntil = e.timeStamp + 400;
+    li.style.transition = 'transform .2s';
+    li.style.transform = '';
+    li.addEventListener('transitionend', () => li.classList.remove('swipe'), { once: true });
+    if (e.type === 'pointerup' && e.clientX - x > 72) enqueue(tracks[[...ul.children].indexOf(li)]);
+  };
+  ul.addEventListener('pointerup', end);
+  ul.addEventListener('pointercancel', end);
+  ul.addEventListener('click', (e) => {
+    if (e.timeStamp > swallowUntil) return;
+    swallowUntil = 0;
+    e.stopPropagation();
+    e.preventDefault();
+  }, true);
+  return ul;
 }

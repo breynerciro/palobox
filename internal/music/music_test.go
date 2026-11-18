@@ -8,8 +8,8 @@ func TestEtiquetas(t *testing.T) {
 		t.Fatalf("respaldo por ruta: %+v", tr)
 	}
 	applyTags(&tr, []byte(`{"streams":[{"tags":{"TITLE":"De la pista","ARTIST":"Otra"}}],
-		"format":{"duration":"187.52","tags":{"title":" Título real ","album":"Disco","track":"3/12","disc":"2/2","date":"2019-05-01"}}}`))
-	if tr.Title != "Título real" || tr.Artist != "Otra" || tr.Album != "Disco" || tr.Num != 3 || tr.disc != 2 || tr.Year != 2019 || tr.Dur != 187.52 {
+		"format":{"duration":"187.52","tags":{"title":" Título real ","album":"Disco","track":"3/12","disc":"2/2","date":"2019-05-01","GENRE":"Flamenco"}}}`))
+	if tr.Title != "Título real" || tr.Artist != "Otra" || tr.Album != "Disco" || tr.Num != 3 || tr.disc != 2 || tr.Year != 2019 || tr.Dur != 187.52 || tr.genre != "Flamenco" {
 		t.Fatalf("etiquetas: %+v", tr)
 	}
 	// ffprobe ausente o archivo corrupto: se conserva lo deducido de la ruta.
