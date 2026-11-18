@@ -16,6 +16,15 @@ let lastView = ''; // vista pintada la última vez: repintarla (buscar mientras 
 const MUSIC = { '': 'inicio', buscar: 'buscar', biblioteca: 'biblioteca' }; // vistas raíz de Música; el resto son páginas de detalle
 
 window.addEventListener('hashchange', () => !$('#app').hidden && render());
+// Cambiar de sección o de pestaña no se apila en el historial, como en una app nativa:
+// «atrás» recorre las páginas dentro de la sección y no devuelve a la sección anterior.
+const TAB_LINKS = '#tabs a, #mtabs a, #side-exit, #side nav a, #side .side-head a';
+document.addEventListener('click', (e) => {
+  const a = e.target.closest(TAB_LINKS);
+  if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  location.replace(a.href);
+});
 
 let renderId = 0;
 let wasMusic; // la vista anterior era de Música (undefined antes de la primera)
