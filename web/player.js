@@ -6,6 +6,10 @@ import { ensureLib, markLikes, toggleLike } from './music.js';
 
 export const audio = new Audio();
 audio.preload = 'metadata';
+audio.hidden = true;
+// Dentro de la página y no suelto: así lo tenía la versión que sí mostraba la reproducción en la
+// Dynamic Island y la pantalla bloqueada del iPhone.
+document.body.append(audio);
 let queue = []; // orden real de reproducción
 let order = []; // orden original de la lista, para volver a él al apagar el aleatorio
 let pos = -1;
@@ -154,6 +158,7 @@ function syncPlayButton() {
     setIcon(b, audio.paused ? 'play' : 'pause');
     b.setAttribute('aria-label', audio.paused ? 'Reproducir' : 'Pausar');
   }
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing';
   markPlaying();
 }
 audio.onplay = syncPlayButton;
