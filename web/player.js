@@ -10,6 +10,11 @@ audio.hidden = true;
 // Dentro de la página y no suelto: así lo tenía la versión que sí mostraba la reproducción en la
 // Dynamic Island y la pantalla bloqueada del iPhone.
 document.body.append(audio);
+// Sesión de audio de reproducción (Audio Session API, Safari 17+): sin esto iOS puede tratar la app como
+// sonido secundario y silenciarla en segundo plano o con el interruptor de silencio.
+// shortcut: iOS sigue sin dejar que una web cambie de pista en segundo plano (WebKit, desde iOS 17); si persiste,
+// la salida es un solo flujo continuo (ManagedMediaSource) o una app nativa.
+try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
 let queue = []; // orden real de reproducción
 let order = []; // orden original de la lista, para volver a él al apagar el aleatorio
 let pos = -1;
