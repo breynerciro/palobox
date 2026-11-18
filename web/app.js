@@ -53,7 +53,7 @@ async function renderView() {
   $('#back').hidden = music ? !detail : !parts.length && !admin;
   $('#back-label').textContent = admin ? TABS[route(lastHash).tab].title : music ? 'Atrás' : parts.at(-2) ?? TABS[tab].title;
   $('#back').onclick = () => {
-    if (admin) location.hash = lastHash || '#/fotos';
+    if (admin) location.hash = lastHash || '#/musica';
     else if (!music) go(tab, parts.slice(0, -1).join('/'));
     else if (history.length > 1) history.back();
     else go('musica', '');

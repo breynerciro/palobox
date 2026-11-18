@@ -11,7 +11,7 @@ export const TABS = {
 
 export function route(hash = location.hash) {
   const [tab, ...rest] = hash.replace(/^#\/?/, '').split('/').map(decodeURIComponent);
-  return TABS[tab] ? { tab, path: rest.filter(Boolean).join('/') } : { tab: 'fotos', path: '' };
+  return TABS[tab] ? { tab, path: rest.filter(Boolean).join('/') } : { tab: 'musica', path: '' }; // sin ruta (al abrir la app) se entra a Música
 }
 export const href = (tab, path = '') => '#/' + [tab, ...path.split('/').filter(Boolean)].map(encodeURIComponent).join('/');
 export const go = (tab, path) => (location.hash = href(tab, path));
