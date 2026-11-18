@@ -88,7 +88,9 @@ $('#toast-close').onclick = () => ($('#toast').hidden = true);
 
 // input: valor inicial del campo (null = sin campo); label y type para pedir algo distinto de un nombre (p. ej. una contraseña).
 // choices: opciones excluyentes [{ value, label, hint }] (la primera viene elegida); con ellas se devuelve { text, choice }.
-export function ask({ heading, text = '', input = null, ok = 'Aceptar', danger = false, cancel = 'Cancelar', label = 'Nombre', type = 'text', choices = null }) {
+// act: lo que hace el botón principal dentro del propio toque (copiar o compartir exigen el gesto del usuario); con él
+// el campo es de solo lectura, para mostrar algo que se va a copiar.
+export function ask({ heading, text = '', input = null, ok = 'Aceptar', danger = false, cancel = 'Cancelar', label = 'Nombre', type = 'text', choices = null, act = null }) {
   const d = $('#ask');
   $('#ask-title').textContent = heading;
   $('#ask-text').textContent = text;
@@ -99,6 +101,8 @@ export function ask({ heading, text = '', input = null, ok = 'Aceptar', danger =
   inp.placeholder = input != null ? label : '';
   inp.type = type;
   inp.autocomplete = type === 'password' ? 'new-password' : 'off';
+  inp.readOnly = !!act;
+  $('#ask-ok').onclick = act ? () => act(inp.value) : null;
   $('#ask-label').textContent = label;
   const group = $('#ask-choice');
   group.hidden = !choices;

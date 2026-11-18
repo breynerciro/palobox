@@ -53,12 +53,16 @@ func (h *Handler) Stats(w http.ResponseWriter, r *http.Request, u httpx.User) er
 		Bytes    int64  `json:"bytes"`
 		Disabled bool   `json:"disabled,omitempty"`
 		Music    bool   `json:"musicOnly,omitempty"`
+		Pending  bool   `json:"pending,omitempty"` // aún no ha creado su contraseña
+		Invite   int64  `json:"invite,omitempty"`  // vencimiento de su enlace vigente; 0 = no tiene
 		Admin    bool   `json:"admin,omitempty"`
 	}
-	rows, err := h.DB.Query(`SELECT u.name, u.seen, u.disabled, u.music_only,
+	now := time.Now().Unix()
+	rows, err := h.DB.Query(`SELECT u.name, u.seen, u.disabled, u.music_only, length(u.pass) = 0,
+		COALESCE((SELECT i.expires FROM invites i WHERE i.user_id = u.id AND i.expires > ?), 0),
 		(SELECT COUNT(*) FROM sessions s WHERE s.user_id = u.id AND s.expires > ?),
 		(SELECT COUNT(*) FROM media m WHERE m.user_id = u.id)
-		FROM users u ORDER BY u.seen DESC, u.name`, time.Now().Unix())
+		FROM users u ORDER BY u.seen DESC, u.name`, now, now)
 	if err != nil {
 		return err
 	}
@@ -66,7 +70,7 @@ func (h *Handler) Stats(w http.ResponseWriter, r *http.Request, u httpx.User) er
 	users, isUser := []usage{}, map[string]bool{}
 	for rows.Next() {
 		var x usage
-		if err := rows.Scan(&x.Name, &x.Seen, &x.Disabled, &x.Music, &x.Sessions, &x.Media); err != nil {
+		if err := rows.Scan(&x.Name, &x.Seen, &x.Disabled, &x.Music, &x.Pending, &x.Invite, &x.Sessions, &x.Media); err != nil {
 			return err
 		}
 		x.Admin = x.Name == h.Auth.Admin
@@ -205,40 +209,38 @@ func (h *Handler) target(r *http.Request, u httpx.User, protect bool) (int64, st
 
 var done = map[string]bool{"ok": true}
 
+// invite responde con el código de la invitación: la interfaz arma con él el enlace que se comparte.
+func invite(w http.ResponseWriter, token string, expires int64, err error) error {
+	if err != nil {
+		return err
+	}
+	return httpx.WriteJSON(w, 200, map[string]any{"token": token, "expires": expires})
+}
+
+// CreateUser crea la cuenta sin contraseña y devuelve su invitación.
 func (h *Handler) CreateUser(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	if !u.Admin {
 		return errOnlyAdmin
 	}
 	var in struct {
-		Name, Pass string
-		MusicOnly  bool
+		Name      string
+		MusicOnly bool
 	}
 	if err := httpx.ReadJSON(w, r, &in); err != nil {
 		return err
 	}
-	if err := h.Auth.CreateUser(in.Name, in.Pass, in.MusicOnly); err != nil {
-		return err
-	}
-	return httpx.WriteJSON(w, 200, done)
+	token, expires, err := h.Auth.CreateUser(in.Name, in.MusicOnly)
+	return invite(w, token, expires, err)
 }
 
-func (h *Handler) SetPassword(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+// Invite genera un enlace nuevo para que el usuario defina su contraseña (invitación perdida o clave olvidada).
+func (h *Handler) Invite(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	id, _, err := h.target(r, u, false)
 	if err != nil {
 		return err
 	}
-	var in struct{ Pass string }
-	if err := httpx.ReadJSON(w, r, &in); err != nil {
-		return err
-	}
-	var keep string
-	if c, err := r.Cookie("s"); err == nil {
-		keep = c.Value
-	}
-	if err := h.Auth.SetPassword(id, in.Pass, keep); err != nil {
-		return err
-	}
-	return httpx.WriteJSON(w, 200, done)
+	token, expires, err := h.Auth.Invite(id)
+	return invite(w, token, expires, err)
 }
 
 func (h *Handler) SetDisabled(w http.ResponseWriter, r *http.Request, u httpx.User) error {

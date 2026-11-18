@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS playlist_tracks(playlist_id INTEGER NOT NULL, path TE
 CREATE TABLE IF NOT EXISTS plays(user_id INTEGER NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL);
 CREATE INDEX IF NOT EXISTS plays_user ON plays(user_id, path);
 CREATE TABLE IF NOT EXISTS saved(user_id INTEGER NOT NULL, kind TEXT NOT NULL, path TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY(user_id, kind, path));
+CREATE TABLE IF NOT EXISTS invites(hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL UNIQUE, expires INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS logins(at INTEGER NOT NULL, name TEXT NOT NULL, ok INTEGER NOT NULL, ip TEXT NOT NULL, agent TEXT NOT NULL);`
 
 // Open crea las carpetas internas de data/.palobox y abre la base con el esquema al día.

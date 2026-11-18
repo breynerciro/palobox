@@ -3,6 +3,7 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
 	"errors"
@@ -61,37 +62,123 @@ func (s *Service) AddUser(name, pass string) error {
 	return err
 }
 
-// CreateUser crea un usuario nuevo; a diferencia de AddUser, falla si ya existe.
-func (s *Service) CreateUser(name, pass string, musicOnly bool) error {
+// CreateUser crea un usuario nuevo sin contraseña y devuelve el código de su invitación: él mismo la define al
+// abrir el enlace. A diferencia de AddUser, falla si ya existe.
+func (s *Service) CreateUser(name string, musicOnly bool) (token string, expires int64, err error) {
 	if err := ValidName(name); err != nil {
-		return httpx.Error(400, err.Error())
+		return "", 0, httpx.Error(400, err.Error())
 	}
-	h, err := hash(pass)
+	// Contraseña vacía: ninguna clave coincide con ella, así que la cuenta no abre hasta que se use la invitación.
+	res, err := s.DB.Exec(`INSERT INTO users(name, pass, music_only) VALUES(?, '', ?) ON CONFLICT(name) DO NOTHING`, name, musicOnly)
 	if err != nil {
-		return httpx.Error(400, err.Error())
-	}
-	res, err := s.DB.Exec(`INSERT INTO users(name, pass, music_only) VALUES(?, ?, ?) ON CONFLICT(name) DO NOTHING`, name, h, musicOnly)
-	if err != nil {
-		return err
+		return "", 0, err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return httpx.Error(409, "Ya existe un usuario con ese nombre.")
+		return "", 0, httpx.Error(409, "Ya existe un usuario con ese nombre.")
 	}
-	return nil
+	id, _ := res.LastInsertId()
+	return s.Invite(id)
 }
 
-// SetPassword cambia la contraseña y cierra las sesiones abiertas menos keep (la de quien la cambia):
-// quien tenía la vieja queda fuera.
-func (s *Service) SetPassword(id int64, pass, keep string) error {
-	h, err := hash(pass)
+// InviteTTL es lo que dura un enlace de invitación sin usar.
+const InviteTTL = 7 * 24 * time.Hour
+
+func inviteHash(token string) string {
+	h := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(h[:])
+}
+
+// Invite genera un código de un solo uso para que el usuario defina su contraseña (cuenta nueva o clave
+// olvidada) y anula el anterior. En la base solo queda su huella: el código no se puede volver a mostrar.
+func (s *Service) Invite(id int64) (token string, expires int64, err error) {
+	b := make([]byte, 32)
+	rand.Read(b)
+	token, expires = hex.EncodeToString(b), time.Now().Add(InviteTTL).Unix()
+	_, err = s.DB.Exec(`INSERT INTO invites(hash, user_id, expires) VALUES(?, ?, ?)
+		ON CONFLICT(user_id) DO UPDATE SET hash = excluded.hash, expires = excluded.expires`, inviteHash(token), id, expires)
+	return token, expires, err
+}
+
+var errInvite = httpx.Error(404, "Este enlace ya se usó o venció. Pídele uno nuevo al administrador.")
+
+// invited busca la invitación vigente de token. Un intento a la vez y el fallido cuesta 1 s, como en Login.
+func (s *Service) invited(token string) (id int64, name string, err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	err = s.DB.QueryRow(`SELECT u.id, u.name FROM invites i JOIN users u ON u.id = i.user_id
+		WHERE i.hash = ? AND i.expires > ? AND u.disabled = 0`, inviteHash(token), time.Now().Unix()).Scan(&id, &name)
 	if err != nil {
-		return httpx.Error(400, err.Error())
+		time.Sleep(time.Second)
+		return 0, "", errInvite
+	}
+	return id, name, nil
+}
+
+// InviteInfo dice para qué usuario es un enlace, antes de pedirle la contraseña.
+func (s *Service) InviteInfo(w http.ResponseWriter, r *http.Request) {
+	_, name, err := s.invited(r.URL.Query().Get("token"))
+	if err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	httpx.WriteJSON(w, 200, map[string]string{"name": name})
+}
+
+// Accept define la contraseña con una invitación, la gasta, cierra las sesiones que hubiera y deja al usuario dentro.
+func (s *Service) Accept(w http.ResponseWriter, r *http.Request) {
+	var in struct{ Token, Pass string }
+	if err := httpx.ReadJSON(w, r, &in); err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	h, err := hash(in.Pass)
+	if err != nil {
+		httpx.Fail(w, httpx.Error(400, err.Error()))
+		return
+	}
+	id, name, err := s.invited(in.Token)
+	if err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	// Borrar la invitación primero y comprobar que se borró: dos usos simultáneos del mismo enlace no pasan los dos.
+	res, err := s.DB.Exec(`DELETE FROM invites WHERE hash = ?`, inviteHash(in.Token))
+	if err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		httpx.Fail(w, errInvite)
+		return
 	}
 	if _, err := s.DB.Exec(`UPDATE users SET pass = ? WHERE id = ?`, h, id); err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	s.CloseSessions(id)
+	if err := s.open(w, r, id); err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	s.DB.Exec(`INSERT INTO logins(at, name, ok, ip, agent) VALUES(?, ?, 1, ?, ?)`, time.Now().Unix(), name, clientIP(r), cut(r.UserAgent(), 256)) // también es una entrada
+	httpx.WriteJSON(w, 200, map[string]string{"name": name})
+}
+
+// open abre una sesión para el usuario id y la deja en la cookie.
+func (s *Service) open(w http.ResponseWriter, r *http.Request, id int64) error {
+	now := time.Now()
+	b := make([]byte, 32)
+	rand.Read(b)
+	tok, exp := hex.EncodeToString(b), now.Add(30*24*time.Hour)
+	s.DB.Exec(`DELETE FROM sessions WHERE expires <= ?`, now.Unix())
+	s.DB.Exec(`UPDATE users SET seen = ? WHERE id = ?`, now.Unix(), id)
+	if _, err := s.DB.Exec(`INSERT INTO sessions(token, user_id, expires, created, seen, ip, agent) VALUES(?, ?, ?, ?, ?, ?, ?)`,
+		tok, id, exp.Unix(), now.Unix(), now.Unix(), clientIP(r), cut(r.UserAgent(), 256)); err != nil {
 		return err
 	}
-	_, err = s.DB.Exec(`DELETE FROM sessions WHERE user_id = ? AND token != ?`, id, keep)
-	return err
+	http.SetCookie(w, &http.Cookie{Name: "s", Value: tok, Path: "/", Expires: exp, HttpOnly: true,
+		SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"})
+	return nil
 }
 
 // SetDisabled bloquea o desbloquea la entrada; al bloquear cierra las sesiones.
@@ -125,6 +212,7 @@ func (s *Service) DeleteUser(id int64) error {
 		`DELETE FROM playlist_tracks WHERE playlist_id IN (SELECT id FROM playlists WHERE user_id = ?)`,
 		`DELETE FROM playlists WHERE user_id = ?`, `DELETE FROM likes WHERE user_id = ?`, `DELETE FROM plays WHERE user_id = ?`,
 		`DELETE FROM saved WHERE user_id = ?`, `DELETE FROM media WHERE user_id = ?`, `DELETE FROM sessions WHERE user_id = ?`,
+		`DELETE FROM invites WHERE user_id = ?`,
 		`DELETE FROM users WHERE id = ?`,
 	} {
 		if _, err := tx.Exec(q, id); err != nil {
@@ -211,18 +299,10 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Esta cuenta está desactivada. Habla con el administrador.", 403)
 		return
 	}
-	b := make([]byte, 32)
-	rand.Read(b)
-	tok, exp := hex.EncodeToString(b), now.Add(30*24*time.Hour)
-	s.DB.Exec(`DELETE FROM sessions WHERE expires <= ?`, now.Unix())
-	s.DB.Exec(`UPDATE users SET seen = ? WHERE id = ?`, now.Unix(), id)
-	if _, err := s.DB.Exec(`INSERT INTO sessions(token, user_id, expires, created, seen, ip, agent) VALUES(?, ?, ?, ?, ?, ?, ?)`,
-		tok, id, exp.Unix(), now.Unix(), now.Unix(), ip, agent); err != nil {
+	if err := s.open(w, r, id); err != nil {
 		httpx.Fail(w, err)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: "s", Value: tok, Path: "/", Expires: exp, HttpOnly: true,
-		SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"})
 	httpx.WriteJSON(w, 200, map[string]string{"name": in.Name})
 }
 

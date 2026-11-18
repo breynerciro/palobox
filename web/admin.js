@@ -77,26 +77,40 @@ function alerts(s, sp) {
 // Al crear la cuenta se elige su nivel; después se cambia desde el menú del usuario.
 async function newUser() {
   const who = await ask({
-    heading: 'Nuevo usuario', text: 'El nombre va en minúsculas, con números, - o _.', input: '', label: 'Usuario', ok: 'Siguiente',
+    heading: 'Nuevo usuario', text: 'El nombre va en minúsculas, con números, - o _.', input: '', label: 'Usuario', ok: 'Crear usuario',
     choices: [
       { value: 'full', label: 'Acceso completo', hint: 'Sus propias fotos y archivos, y la música.' },
       { value: 'music', label: 'Solo música', hint: 'Escuchar, armar playlists y pedir descargas.' },
     ],
   });
   if (!who?.text) return;
-  const name = who.text;
-  const musicOnly = who.choice === 'music';
-  const pass = await ask({ heading: `Contraseña de ${name}`, text: 'Mínimo 8 caracteres. Compártela con esa persona por un medio seguro.', input: '', label: 'Contraseña', type: 'password', ok: 'Crear usuario' });
-  if (pass) send('/api/admin/users', json('POST', { name, pass, musicOnly }), `Listo: ${name} ya puede entrar${musicOnly ? ', solo a Música' : ''}.`);
+  invite('/api/admin/users', json('POST', { name: who.text, musicOnly: who.choice === 'music' }), who.text);
+}
+
+// invite pide al servidor un enlace de un solo uso y lo muestra para compartirlo. Quien lo abre define su
+// contraseña: el administrador nunca la conoce. El código no se guarda, así que el enlace solo se ve esta vez.
+async function invite(url, opts, name) {
+  const r = await api(url, opts).catch(() => null);
+  if (!r?.ok) return toast(r ? await r.text() : OFFLINE, { kind: 'warn' });
+  const link = `${location.origin}/#/invitacion/${(await r.json()).token}`;
+  render();
+  ask({
+    heading: `Enlace para ${name}`,
+    text: 'Compártelo con esa persona por un medio privado: al abrirlo crea su contraseña y entra. Sirve una sola vez, vence en 7 días y no se vuelve a mostrar (puedes generar otro desde su menú).',
+    input: link, label: 'Enlace', cancel: 'Cerrar', ok: navigator.share ? 'Compartir enlace' : 'Copiar enlace',
+    act: async () => {
+      try {
+        if (navigator.share) await navigator.share({ title: 'PaloBox', text: `Tu acceso a PaloBox, ${name}:`, url: link });
+        else { await navigator.clipboard.writeText(link); toast('Enlace copiado.', { kind: 'ok' }); }
+      } catch {} // se cerró el menú de compartir, o el navegador no deja copiar: el enlace sigue a la vista
+    },
+  });
 }
 
 function userMenu(u, anchor) {
   const path = `/api/admin/users/${encodeURIComponent(u.name)}`;
   menu(anchor, `Acciones para ${u.name}`, [
-    { icon: 'edit', label: 'Cambiar contraseña', run: async () => {
-      const pass = await ask({ heading: `Nueva contraseña de ${u.name}`, text: u.admin ? 'Tus otras sesiones se cerrarán; esta sigue abierta.' : 'Se cerrarán sus sesiones abiertas.', input: '', label: 'Contraseña', type: 'password', ok: 'Cambiar' });
-      if (pass) send(`${path}/password`, json('PUT', { pass }), 'Contraseña cambiada.');
-    } },
+    { icon: 'edit', label: u.pending ? 'Nuevo enlace de invitación' : 'Enlace para nueva contraseña', run: () => invite(`${path}/invite`, { method: 'POST' }, u.name) },
     u.sessions > 0 && !u.admin && { icon: 'logout', label: `Cerrar ${plural(u.sessions, 'sesión', 'sesiones')}`, run: () => send(`${path}/sessions`, { method: 'DELETE' }, `${u.name} tendrá que volver a entrar.`) },
     !u.admin && (u.musicOnly
       ? { icon: 'folder', label: 'Dar acceso completo', run: () => send(`${path}/access`, json('PUT', { musicOnly: false }), `${u.name} ahora tiene fotos, archivos y música.`) }
@@ -128,7 +142,8 @@ function usersSection(s) {
     el('div', { className: 'section-head' }, heading('Usuarios', `${s.users.filter(online).length} en línea de ${s.users.length}`), add),
     el('ul', { className: 'list' }, s.users.map((u) => el('li', { className: `row-wrap${u.disabled ? ' off' : ''}` },
       usageRow(u.musicOnly ? 'audio' : 'image', u.musicOnly ? 'music' : 'user', joinText(u.name, u.admin && 'administrador', u.musicOnly && 'solo música'),
-        joinText(u.disabled ? 'Desactivado' : ago(u.seen), plural(u.sessions, 'sesión', 'sesiones'), size(u.bytes)),
+        joinText(u.disabled ? 'Desactivado' : !u.pending ? ago(u.seen) : u.invite ? `Invitación pendiente · vence el ${fmtDate(u.invite * 1000)}` : 'Invitación vencida',
+          !u.pending && plural(u.sessions, 'sesión', 'sesiones'), size(u.bytes)),
         null, online(u)),
       iconBtn('more', `Acciones para ${u.name}`, (b) => userMenu(u, b))))),
   ];

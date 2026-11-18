@@ -79,6 +79,25 @@
   </div>
 </main>
 
+<!-- Enlace de invitación (#/invitacion/CÓDIGO): la persona define su propia contraseña. -->
+<main id="invite" class="login" hidden>
+  <div class="login-card">
+    <img class="logo" src="icon.svg" alt="">
+    <h1>Crea tu contraseña</h1>
+    <p id="invite-text" class="muted"></p>
+    <form id="invite-form" novalidate hidden>
+      <input id="invite-user" class="sr-only" autocomplete="username" readonly tabindex="-1" aria-hidden="true">
+      <label for="ip1">Contraseña</label>
+      <input id="ip1" type="password" autocomplete="new-password" required>
+      <label for="ip2">Repite la contraseña</label>
+      <input id="ip2" type="password" autocomplete="new-password" required>
+      <p id="invite-error" class="field-error" role="alert"></p>
+      <button class="btn primary block" id="invite-btn">Crear contraseña y entrar</button>
+    </form>
+    <button id="invite-login" class="btn secondary block" hidden>Ir a iniciar sesión</button>
+  </div>
+</main>
+
 <div id="app" hidden>
   <!-- Barra lateral de Música: solo en escritorio (≥ 900 px). -->
   <aside id="side" class="side" aria-label="Música" hidden>

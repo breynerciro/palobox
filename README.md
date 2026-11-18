@@ -41,7 +41,8 @@ docker compose run --rm palobox adduser admin 'una-clave-larga'
 La app queda en `http://127.0.0.1:8080`. El mismo comando `adduser` crea más usuarios o le
 cambia la contraseña a uno que ya existe.
 
-Desde el panel de administración también se crean usuarios y se elige su nivel: **acceso completo**
+Desde el panel de administración también se crean usuarios: la app genera un enlace de un solo uso para que
+cada persona defina su propia contraseña (sirve igual para una contraseña olvidada). Ahí se elige su nivel: **acceso completo**
 (fotos, archivos y música) o **solo música**, para invitados que escuchan y ayudan a llenar la biblioteca.
 
 ### Acceso desde otros dispositivos

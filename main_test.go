@@ -314,21 +314,44 @@ func TestAdminControl(t *testing.T) {
 		}
 	}
 
-	// Crear usuarios.
-	create := func(name, pass string) int {
-		code, _, _ := ana.do("POST", "/api/admin/users", mustJSON(map[string]string{"name": name, "pass": pass}))
+	// Crear usuarios: el administrador no pone la contraseña, recibe una invitación de un solo uso.
+	create := func(name string, musicOnly bool) (int, string) {
+		code, m, _ := ana.do("POST", "/api/admin/users", mustJSON(map[string]any{"name": name, "musicOnly": musicOnly}))
+		tok, _ := m["token"].(string)
+		return code, tok
+	}
+	accept := func(c client, token, pass string) int {
+		code, _, _ := c.do("POST", "/api/invite", mustJSON(map[string]string{"token": token, "pass": pass}))
 		return code
 	}
-	if create("pepe", "clave-de-pepe") != 200 || create("pepe", "clave-de-pepe") != 409 || create("../x", "clave-de-pepe") != 400 || create("otro", "corta") != 400 {
+	code, invite := create("pepe", false)
+	if c2, _ := create("pepe", false); code != 200 || len(invite) != 64 || c2 != 409 {
 		t.Fatal("crear usuario")
 	}
-	if pepe.login("pepe", "clave-de-pepe") != 200 {
-		t.Fatal("el usuario creado debe poder entrar")
+	if c, _ := create("../x", false); c != 400 {
+		t.Fatal("nombre inválido")
+	}
+	// Sin usar la invitación la cuenta no abre con ninguna clave, ni vacía.
+	if pepe.login("pepe", "") != 401 || pepe.login("pepe", "clave-de-pepe") != 401 {
+		t.Fatal("una cuenta sin contraseña no debe abrir")
+	}
+	if _, m, _ := pepe.do("GET", "/api/invite?token="+invite, nil); m["name"] != "pepe" {
+		t.Fatalf("la invitación dice para quién es: %v", m)
+	}
+	if accept(pepe, invite, "corta") != 400 || accept(pepe, strings.Repeat("0", 64), "clave-de-pepe") != 404 {
+		t.Fatal("contraseña corta o código inventado")
+	}
+	// Al aceptarla queda dentro; el enlace no sirve una segunda vez.
+	if accept(pepe, invite, "clave-de-pepe") != 200 || me(pepe) != 200 || accept(newClient(), invite, "otra-clave-1") != 404 {
+		t.Fatal("aceptar la invitación")
+	}
+	if c, _, _ := pepe.do("GET", "/api/invite?token="+invite, nil); c != 404 {
+		t.Fatal("la invitación usada ya no existe")
 	}
 
 	// Cuenta de solo Música: entra a la música pero no a fotos, archivos ni subidas, ni pidiéndolos a mano.
 	inv := newClient()
-	if code, _, _ := ana.do("POST", "/api/admin/users", mustJSON(map[string]any{"name": "invitado", "pass": "clave-invitado", "musicOnly": true})); code != 200 || inv.login("invitado", "clave-invitado") != 200 {
+	if code, tok := create("invitado", true); code != 200 || accept(inv, tok, "clave-invitado") != 200 {
 		t.Fatal("crear invitado")
 	}
 	if _, m, _ := inv.do("GET", "/api/me", nil); m["musicOnly"] != true {
@@ -376,7 +399,7 @@ func TestAdminControl(t *testing.T) {
 			current++
 		}
 	}
-	if len(ss) != 3 || current != 1 || len(ls) != 5 || m["failed24h"].(float64) != 1 || m["music"] == nil {
+	if len(ss) != 3 || current != 1 || len(ls) != 7 || m["failed24h"].(float64) != 3 || m["music"] == nil {
 		t.Fatalf("panel: %s", raw)
 	}
 
@@ -391,13 +414,30 @@ func TestAdminControl(t *testing.T) {
 		t.Fatal("reactivar")
 	}
 
-	// Cambiar la contraseña cierra sus sesiones; la del admin que se la cambia a sí mismo sigue abierta.
-	if put("/api/admin/users/pepe/password", map[string]string{"pass": "nueva-clave"}) != 200 || me(pepe) != 401 ||
-		pepe.login("pepe", "clave-de-pepe") != 401 || pepe.login("pepe", "nueva-clave") != 200 {
-		t.Fatal("cambiar contraseña")
+	// Clave olvidada: un enlace nuevo. La clave vieja sirve hasta que se usa; un segundo enlace anula el primero;
+	// al usarlo se cierran las sesiones anteriores. Solo el administrador los genera.
+	relink := func(name string) string {
+		_, m, _ := ana.do("POST", "/api/admin/users/"+name+"/invite", nil)
+		tok, _ := m["token"].(string)
+		return tok
 	}
-	if put("/api/admin/users/ana/password", map[string]string{"pass": "otra-clave"}) != 200 || me(ana) != 200 {
-		t.Fatal("cambiar la propia contraseña no debe cerrar la sesión actual")
+	if c, _, _ := luis.do("POST", "/api/admin/users/pepe/invite", nil); c != 403 {
+		t.Fatal("solo el administrador genera enlaces")
+	}
+	first, second := relink("pepe"), relink("pepe")
+	otro := newClient()
+	if me(pepe) != 200 || accept(otro, first, "nueva-clave") != 404 || accept(otro, second, "nueva-clave") != 200 || me(otro) != 200 || me(pepe) != 401 {
+		t.Fatal("enlace para nueva contraseña")
+	}
+	if pepe.login("pepe", "clave-de-pepe") != 401 || pepe.login("pepe", "nueva-clave") != 200 {
+		t.Fatal("la contraseña nueva reemplaza a la vieja")
+	}
+	otro.do("POST", "/api/logout", nil)
+	// Vencida no sirve.
+	old := relink("luis")
+	a.auth.DB.Exec(`UPDATE invites SET expires = 1`)
+	if accept(newClient(), old, "clave-de-luis") != 404 {
+		t.Fatal("una invitación vencida no debe servir")
 	}
 
 	// Cerrar una sesión puntual o todas las de un usuario.

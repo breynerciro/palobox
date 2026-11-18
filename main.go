@@ -79,12 +79,14 @@ func (a *app) routes() http.Handler {
 	}
 	mux.HandleFunc("POST /api/login", a.auth.Login)
 	mux.HandleFunc("POST /api/logout", a.auth.Logout)
+	mux.HandleFunc("GET /api/invite", a.auth.InviteInfo)
+	mux.HandleFunc("POST /api/invite", a.auth.Accept)
 	mux.HandleFunc("GET /api/me", auth(func(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 		return httpx.WriteJSON(w, 200, map[string]any{"name": u.Name, "admin": u.Admin, "musicOnly": u.MusicOnly})
 	}))
 	mux.HandleFunc("GET /api/admin", auth(a.admin.Stats))
 	mux.HandleFunc("POST /api/admin/users", auth(a.admin.CreateUser))
-	mux.HandleFunc("PUT /api/admin/users/{name}/password", auth(a.admin.SetPassword))
+	mux.HandleFunc("POST /api/admin/users/{name}/invite", auth(a.admin.Invite))
 	mux.HandleFunc("PUT /api/admin/users/{name}/access", auth(a.admin.SetAccess))
 	mux.HandleFunc("PUT /api/admin/users/{name}/disabled", auth(a.admin.SetDisabled))
 	mux.HandleFunc("DELETE /api/admin/users/{name}", auth(a.admin.DeleteUser))
