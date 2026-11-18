@@ -1,8 +1,9 @@
 // Reproductor de música: cola, aleatorio, repetir y la barra que sigue sonando al cambiar de sección.
-import { $, el, icon, setIcon, json, joinText, lazyImg, toast, clock, plural, sleep } from './lib.js';
+import { $, el, icon, setIcon, json, joinText, lazyImg, toast, clock, plural, sleep, ask } from './lib.js';
 import { rawUrl, thumbUrl } from './nav.js';
 import { api } from './session.js';
 import { ensureLib, markLikes, toggleLike } from './music.js';
+import * as jam from './jam.js';
 
 export const audio = new Audio();
 audio.preload = 'metadata';
@@ -28,6 +29,27 @@ let resume = 0; // posición restaurada que el audio aún no ha cargado
 let epoch = 0; // cambia al reemplazar la cola: descarta sugerencias pedidas para lo anterior
 let filling = false;
 
+// Sala de reproducción (jam.js): con sala, la cola y la posición son las del servidor y este reproductor
+// las refleja; cada acción se manda como comando en vez de cambiar el estado local. Hay sala cuando elijo
+// en cuál de mis dispositivos suena, o en un jam con otros usuarios.
+let room = null; // la foto de la sala; null = reproductor local
+let devices = []; // mis dispositivos conectados
+let here = true; // en este dispositivo es donde suena para mi cuenta
+let offset = 0; // reloj del servidor menos el de este dispositivo
+let curPath = ''; // pista cargada en el audio
+let warned = false; // ya se avisó que el navegador no dejó sonar sin un toque
+let syncedAt = 0;
+const roomTime = () => (room.playing ? room.at + (Date.now() + offset - room.stamp) / 1000 : room.at);
+const playing = () => (room && !here ? room.playing : !audio.paused);
+const dur = () => audio.duration || queue[pos]?.dur || 0;
+// begin pone a sonar t dentro del toque del usuario: el navegador solo deja empezar el audio tras un gesto,
+// y la foto de la sala llega después.
+function begin(t) {
+  curPath = t.path;
+  audio.src = rawUrl('musica', t.path);
+  audio.play().catch(() => {});
+}
+
 const mix = (a) => {
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -43,8 +65,11 @@ function load(i, { play = true, at = 0 } = {}) {
   counted = false;
   resume = at;
   const t = queue[i];
-  audio.src = rawUrl('musica', t.path);
-  if (at) audio.addEventListener('loadedmetadata', () => (audio.currentTime = at), { once: true });
+  if (!room || curPath !== t.path) { // en una sala la pista que ya está cargada no se vuelve a pedir
+    curPath = t.path;
+    audio.src = rawUrl('musica', t.path);
+    if (at) audio.addEventListener('loadedmetadata', () => (audio.currentTime = room ? roomTime() : at), { once: true });
+  }
   if (play) audio.play().catch(() => {}); // si el formato no sirve, lo informa onerror
   const sub = joinText(t.artist, t.album);
   for (const [titleEl, subEl, coverEl] of [['#now', '#now-sub', '#player-cover'], ['#np-title', '#np-sub', '#np-cover']]) {
@@ -72,7 +97,7 @@ function load(i, { play = true, at = 0 } = {}) {
 
 // Sugerencias: cuando a la cola le quedan menos de 3 pistas, el servidor propone qué sigue y la música no se detiene.
 async function refill() {
-  if (filling || repeat || pos < 0 || queue.length - pos > 3) return;
+  if (room || filling || repeat || pos < 0 || queue.length - pos > 3) return; // en una sala las sugerencias las pone el servidor
   filling = true;
   const e = epoch;
   let more = null;
@@ -95,6 +120,11 @@ async function refill() {
 // playAt reemplaza la cola por tracks y empieza en la pista i.
 export function playAt(tracks, i) {
   if (i < 0 || i >= tracks.length) return;
+  if (room) {
+    const from = Math.max(0, i - 50); // la sala guarda hasta 500 pistas alrededor de la elegida
+    if (here) begin(tracks[i]);
+    return void jam.send('queue', { paths: tracks.slice(from, from + 500).map((t) => t.path), pos: i - from });
+  }
   order = tracks.map((t) => ({ ...t })); // copias: la misma pista puede estar dos veces en la cola
   manual = 0;
   epoch++;
@@ -108,18 +138,22 @@ export function playAt(tracks, i) {
   }
 }
 
-function addAt(t, i, text) {
+function addAt(t, nextUp) {
+  const done = () => toast(`«${t.title}» ${nextUp ? 'suena a continuación' : 'se agregó a la cola'}.`, { kind: 'ok' });
+  if (room) return void jam.send('add', { paths: [t.path], next: nextUp }).then((ok) => ok && done());
   if (pos < 0) return playAt([t], 0);
-  queue.splice(i, 0, { ...t });
+  queue.splice(nextUp ? pos + 1 : pos + 1 + manual, 0, { ...t });
   manual++;
-  toast(`«${t.title}» ${text}.`, { kind: 'ok' });
+  done();
   paintQueue();
   save();
 }
-export const playNext = (t) => addAt(t, pos + 1, 'suena a continuación');
-export const enqueue = (t) => addAt(t, pos + 1 + manual, 'se agregó a la cola');
+export const playNext = (t) => addAt(t, true);
+export const enqueue = (t) => addAt(t, false);
 
 function next(ended = false) {
+  // «ended» lleva la pista que terminó: si otro dispositivo de la sala ya avisó, el servidor no avanza dos veces.
+  if (room) return void jam.send(ended ? 'ended' : 'next', { pos });
   if (ended && repeat === 2) return load(pos);
   let n = pos + 1;
   if (n >= queue.length) {
@@ -130,6 +164,7 @@ function next(ended = false) {
   load(n);
 }
 function prev() {
+  if (room) return void (roomTime() > 3 || pos === 0 ? jam.send('seek', { at: 0 }) : jam.send('prev'));
   if (audio.currentTime > 3 || pos === 0) return (audio.currentTime = 0);
   manual = 0;
   load(pos - 1);
@@ -166,7 +201,9 @@ export function syncToggles() {
 // Los botones de aleatorio, repetir y cola existen en la barra, en pantalla completa y en las vistas.
 document.addEventListener('click', (e) => {
   const act = e.target.closest?.('[data-act]')?.dataset.act;
-  if (act === 'shuffle') setShuffle(!shuffle);
+  if (act === 'jam') { $('#jam').showModal(); paintJam(); }
+  else if (room && (act === 'shuffle' || act === 'repeat')) toast('Aleatorio y repetir no están disponibles mientras la reproducción es compartida.');
+  else if (act === 'shuffle') setShuffle(!shuffle);
   else if (act === 'repeat') { repeat = (repeat + 1) % 3; syncToggles(); save(); refill(); }
   else if (act === 'queue') { $('#queue').showModal(); paintQueue(); }
 });
@@ -179,7 +216,7 @@ export function markPlaying() {
     const on = r.dataset.track === current;
     r.classList.toggle('playing', on);
     if (on) r.setAttribute('aria-current', 'true'); else r.removeAttribute('aria-current');
-    r.querySelector('.num')?.replaceChildren(on ? icon(audio.paused ? 'pause' : 'play') : String([...r.closest('ul').children].indexOf(r.parentElement) + 1));
+    r.querySelector('.num')?.replaceChildren(on ? icon(playing() ? 'play' : 'pause') : String([...r.closest('ul').children].indexOf(r.parentElement) + 1));
   }
   syncToggles();
 }
@@ -189,13 +226,14 @@ export function markPlaying() {
 let pausedTimer;
 function syncPlayButton() {
   clearTimeout(pausedTimer);
-  if (!audio.paused) document.body.classList.remove('paused');
-  else pausedTimer = setTimeout(() => audio.paused && document.body.classList.add('paused'), 600);
+  const on = playing();
+  if (on) document.body.classList.remove('paused');
+  else pausedTimer = setTimeout(() => !playing() && document.body.classList.add('paused'), 600);
   for (const b of [$('#playpause'), $('#np-play')]) {
-    setIcon(b, audio.paused ? 'play' : 'pause');
-    b.setAttribute('aria-label', audio.paused ? 'Reproducir' : 'Pausar');
+    setIcon(b, on ? 'pause' : 'play');
+    b.setAttribute('aria-label', on ? 'Pausar' : 'Reproducir');
   }
-  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = audio.paused ? 'paused' : 'playing';
+  if ('mediaSession' in navigator) navigator.mediaSession.playbackState = on ? 'playing' : 'paused';
   markPlaying();
 }
 audio.onplay = syncPlayButton;
@@ -225,6 +263,11 @@ audio.ontimeupdate = () => {
   if (!audio.duration) return;
   if (!audio.paused && audio.currentTime >= 30) count();
   if (Date.now() - savedAt > 5000) save();
+  // En una sala, este dispositivo se vuelve a alinear si se alejó de la posición común (como mucho cada 5 s).
+  if (room && here && room.playing && Date.now() - syncedAt > 5000 && Math.abs(audio.currentTime - roomTime()) > 1.5) {
+    syncedAt = Date.now();
+    audio.currentTime = roomTime();
+  }
   if (seeking) return;
   for (const s of seeks) setSeek(s, audio.currentTime / audio.duration);
   paintTimes(audio.currentTime, audio.duration);
@@ -233,10 +276,10 @@ for (const s of seeks) {
   s.oninput = () => {
     seeking = true;
     s.style.setProperty('--p', `${s.value / 10}%`);
-    if (audio.duration) $('#np-cur').textContent = $('#cur').textContent = clock((s.value / 1000) * audio.duration);
+    if (dur()) $('#np-cur').textContent = $('#cur').textContent = clock((s.value / 1000) * dur());
   };
   s.onchange = () => {
-    if (audio.duration) audio.currentTime = (s.value / 1000) * audio.duration;
+    if (dur()) seekTo((s.value / 1000) * dur());
     seeking = false;
   };
 }
@@ -247,7 +290,17 @@ function setVolume(v) {
 }
 $('#volume').oninput = (e) => { setVolume(e.target.value / 100); save(); };
 
-const toggle = () => (audio.paused ? audio.play().catch(() => {}) : audio.pause());
+const seekTo = (at) => (room ? void jam.send('seek', { at }) : (audio.currentTime = at));
+function toggle() {
+  if (!room) return audio.paused ? audio.play().catch(() => {}) : audio.pause();
+  if (!here && !devices.some((d) => d.active)) { // el dispositivo donde sonaba se desconectó: reproducir aquí lo toma
+    here = true;
+    jam.send('here', { target: jam.deviceId });
+  }
+  const on = playing();
+  if (here && !on) audio.play().catch(() => {}); // dentro del toque; también destraba el audio si el navegador no lo dejó empezar solo
+  if (on || !room.playing) jam.send(on ? 'pause' : 'play');
+}
 $('#playpause').onclick = $('#np-play').onclick = toggle;
 $('#next').onclick = $('#np-next').onclick = () => next();
 $('#prev').onclick = $('#np-prev').onclick = prev;
@@ -257,11 +310,11 @@ $('#queue-close').onclick = () => $('#queue').close();
 $('#queue').onclick = (e) => e.target === e.currentTarget && e.currentTarget.close(); // clic en el telón
 if ('mediaSession' in navigator) {
   const ms = navigator.mediaSession;
-  ms.setActionHandler('play', () => audio.play());
-  ms.setActionHandler('pause', () => audio.pause());
+  ms.setActionHandler('play', () => !playing() && toggle());
+  ms.setActionHandler('pause', () => playing() && toggle());
   ms.setActionHandler('nexttrack', () => next());
   ms.setActionHandler('previoustrack', prev);
-  try { ms.setActionHandler('seekto', (d) => (audio.currentTime = d.seekTime)); } catch {}
+  try { ms.setActionHandler('seekto', (d) => seekTo(d.seekTime)); } catch {}
 }
 
 // Gestos de la barra mini: deslizar a los lados cambia de canción; hacia abajo la oculta (solo en la Nube:
@@ -290,6 +343,7 @@ async function swipeTo(dir) {
   slideTo(strip, `translateX(${-dir * bar.offsetWidth}px)`, 0, ms);
   await sleep(ms);
   if (dir > 0) next();
+  else if (room) jam.send('prev');
   else { manual = 0; load(pos - 1); } // a diferencia del botón, deslizar siempre cambia de canción
   slideTo(strip, `translateX(${dir * 48}px)`, 0);
   strip.offsetWidth; // aplica la posición de entrada antes de animar
@@ -339,8 +393,8 @@ document.addEventListener('keydown', (e) => {
   if (pos < 0 || e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, textarea, select')) return;
   if (document.querySelector('dialog[open]:not(#np)')) return; // el visor de fotos y los menús usan las mismas teclas
   if (e.key === ' ' && !e.target.closest?.('button, a')) { e.preventDefault(); toggle(); }
-  else if (e.key === 'ArrowRight') e.shiftKey ? next() : (audio.currentTime += 5);
-  else if (e.key === 'ArrowLeft') e.shiftKey ? prev() : (audio.currentTime -= 5);
+  else if (e.key === 'ArrowRight') e.shiftKey ? next() : seekTo((room ? roomTime() : audio.currentTime) + 5);
+  else if (e.key === 'ArrowLeft') e.shiftKey ? prev() : seekTo((room ? roomTime() : audio.currentTime) - 5);
 });
 
 // Cola «A continuación»
@@ -356,10 +410,15 @@ function queueRow(t, i) {
     return el('li', {}, b);
   }
   b.setAttribute('aria-label', `Saltar a ${t.title}`);
-  b.onclick = () => { manual = Math.max(0, manual - (i - pos)); load(i); };
+  b.onclick = () => {
+    if (!room) { manual = Math.max(0, manual - (i - pos)); return load(i); }
+    if (here) begin(t);
+    jam.send('jump', { index: i });
+  };
   const rm = el('button', { className: 'icon-btn' }, icon('x'));
   rm.setAttribute('aria-label', `Quitar ${t.title} de la cola`);
   rm.onclick = () => {
+    if (room) { jam.send('remove', { index: i, path: t.path }); return $('#queue-close').focus(); }
     if (i <= pos + manual) manual--;
     order = order.filter((x) => x !== t);
     queue.splice(i, 1);
@@ -391,7 +450,7 @@ function paintQueue() {
 const KEEP = 500; // pistas guardadas alrededor de la actual: localStorage tiene cupo
 function save() {
   savedAt = Date.now();
-  if (pos < 0 || !user) return;
+  if (room || pos < 0 || !user) return; // la cola de una sala es del servidor: aquí se conserva la propia
   const from = Math.max(0, pos - 50);
   try {
     localStorage.setItem('palobox.player', JSON.stringify({
@@ -405,6 +464,7 @@ window.addEventListener('pagehide', save);
 export function restore(name) {
   if (user === name) return;
   user = name;
+  jam.connect(applyJam);
   let s;
   try { s = JSON.parse(localStorage.getItem('palobox.player')); } catch {}
   if (!s || s.user !== name || !Array.isArray(s.queue) || !s.queue[s.pos]?.path) return;
@@ -422,11 +482,164 @@ export function restore(name) {
 export function reset() {
   audio.pause();
   audio.removeAttribute('src');
+  jam.close();
+  room = null;
+  devices = [];
+  here = true;
+  curPath = '';
+  document.body.classList.remove('in-room');
   queue = order = [];
   pos = -1;
   epoch++;
   user = '';
-  for (const d of [$('#np'), $('#queue')]) d.close();
+  for (const d of [$('#np'), $('#queue'), $('#jam')]) d.close();
   $('#player').hidden = true;
   document.body.classList.remove('has-player'); // player-tucked se queda: el siguiente usuario también lo ve minimizado
 }
+
+// Salas: elegir en qué dispositivo suena y jam con otros usuarios
+
+// applyJam recibe cada foto del servidor: mis dispositivos y, si hay sala, su estado.
+function applyJam(s) {
+  const before = devices.length;
+  offset = s.now - Date.now();
+  devices = s.devices.map((d) => ({ ...d, me: d.id === s.me }));
+  const was = room;
+  room = s.room;
+  here = !room || devices.some((d) => d.me && d.active);
+  document.body.classList.toggle('in-room', !!room);
+  if (room) return syncRoom();
+  if (was) { // la sala terminó: lo que sonaba aquí sigue sonando, ya como reproductor local
+    order = queue.slice();
+    save();
+  } else if (devices.length > before && devices.length > 1 && pos >= 0 && !audio.paused) {
+    startRoom(); // apareció otro dispositivo mío mientras suena aquí: comparto la reproducción para que la vea y la maneje
+  }
+  syncPlayButton();
+  paintJam();
+}
+
+// startRoom pasa la cola de este dispositivo a una sala nueva.
+function startRoom(extra = {}) {
+  const from = Math.max(0, pos - 50);
+  return jam.send('start', {
+    paths: queue.slice(from, from + 500).map((t) => t.path), pos: Math.max(0, pos - from),
+    at: audio.currentTime || resume, playing: !audio.paused, ...extra,
+  });
+}
+
+// syncRoom deja este reproductor igual a la sala: misma cola, misma pista y, si suena aquí, misma posición.
+function syncRoom() {
+  queue = order = room.queue;
+  const t = queue[room.pos];
+  if (!t) { // sala recién creada sin música
+    audio.pause();
+    pos = -1;
+    $('#player').hidden = true;
+    document.body.classList.remove('has-player');
+  } else {
+    if (pos !== room.pos || curPath !== t.path) load(room.pos, { play: false, at: roomTime() });
+    if (!here) audio.pause();
+    else {
+      if (audio.readyState > 0 && Math.abs(audio.currentTime - roomTime()) > 1.5) audio.currentTime = roomTime();
+      if (!room.playing) audio.pause();
+      else if (audio.paused) {
+        audio.play().then(() => (warned = false)).catch((e) => {
+          if (e.name !== 'NotAllowedError' || warned) return;
+          warned = true; // el navegador exige un toque antes de sonar: el botón de reproducir lo destraba
+          toast('Toca reproducir para escuchar en este dispositivo.', { kind: 'warn', sticky: true });
+        });
+      }
+    }
+  }
+  syncPlayButton();
+  paintQueue();
+  paintJam();
+  paintRemote();
+}
+
+// Con la música sonando en otro dispositivo el audio de aquí está quieto: el avance se calcula.
+function paintRemote() {
+  if (!room || here || seeking || pos < 0) return;
+  const d = queue[pos].dur || 0;
+  const cur = d ? Math.min(roomTime(), d) : roomTime();
+  for (const s of seeks) setSeek(s, d ? cur / d : 0);
+  paintTimes(cur, d);
+}
+setInterval(paintRemote, 500);
+
+export async function joinJam(code) {
+  code = code.trim().toUpperCase();
+  if (code && await jam.send('join', { code })) toast('Te uniste al jam. Todos pueden agregar canciones y cambiar la que suena.', { kind: 'ok' });
+}
+
+// playOn elige en cuál de mis dispositivos suena.
+function playOn(d) {
+  if (d.me && room?.playing) audio.play().catch(() => {}); // dentro del toque, para que el navegador lo deje sonar
+  if (room) return void jam.send('here', { target: d.id });
+  if (d.me) return; // sin sala ya suena aquí
+  if (pos < 0) return toast('Pon a sonar algo primero y luego elige el dispositivo.');
+  startRoom({ target: d.id });
+}
+
+function paintJam() {
+  const active = devices.find((d) => d.active);
+  const shared = !!room && (room.members.length > 1 || !here);
+  for (const b of document.querySelectorAll('[data-act=jam]')) b.classList.toggle('on', shared);
+  $('#np-where').textContent = room && !here ? (active ? `Sonando en ${active.name}` : 'En pausa: ningún dispositivo') : room?.members.length > 1 ? `Jam con ${plural(room.members.length - 1, 'persona', 'personas')}` : 'Reproduciendo';
+  if (!$('#jam').open) return;
+  const title = (text) => el('h3', { className: 'section-title', textContent: text });
+  const note = (text) => el('p', { className: 'muted note', textContent: text });
+  const btn = (cls, glyph, text, run) => {
+    const b = el('button', { className: `btn ${cls}` }, glyph && icon(glyph), text);
+    b.onclick = run;
+    return b;
+  };
+  const out = [title('Reproducir en')];
+  out.push(el('ul', { className: 'list' }, devices.map((d) => {
+    const on = room ? d.active : d.me;
+    const b = el('button', { className: 'row' }, el('span', { className: 'type', style: `--tc: var(--t-${on ? 'audio' : 'doc'})` }, icon('cast')),
+      el('div', { className: 'row-text' }, el('p', { textContent: d.name }), el('p', { className: 'muted', textContent: joinText(d.me && 'Este dispositivo', on && 'Suena aquí') })),
+      on && icon('check'));
+    if (on) b.setAttribute('aria-current', 'true');
+    b.onclick = () => playOn(d);
+    return el('li', { className: 'row-wrap' }, b);
+  })));
+  out.push(note(devices.length > 1
+    ? 'El sonido sale por lo que tenga conectado el dispositivo elegido: su parlante, audífonos o un equipo Bluetooth.'
+    : 'Abre PaloBox con tu cuenta en otro dispositivo y aparecerá aquí para pasarle la música o controlarla desde este.'));
+  if (audio.webkitShowPlaybackTargetPicker) { // Safari: AirPlay y salidas del sistema
+    out.push(el('div', { className: 'jam-actions' }, btn('secondary small', 'volume', 'AirPlay y otras salidas', () => audio.webkitShowPlaybackTargetPicker())));
+  }
+
+  out.push(title('Jam'));
+  if (room?.open) {
+    const link = `${location.origin}/#/jam/${room.code}`;
+    out.push(note('Comparte este código con otra persona de PaloBox. Cada quien oye en su dispositivo y todos manejan la cola.'),
+      el('p', { className: 'jam-code', textContent: room.code }),
+      el('div', { className: 'jam-actions' }, btn('primary small', null, navigator.share ? 'Compartir enlace' : 'Copiar enlace', async () => {
+        try {
+          if (navigator.share) await navigator.share({ title: 'Jam en PaloBox', url: link });
+          else { await navigator.clipboard.writeText(link); toast('Enlace copiado.', { kind: 'ok' }); }
+        } catch {} // se cerró el menú de compartir
+      })),
+      el('ul', { className: 'list' }, room.members.map((m) => el('li', {}, el('div', { className: 'row static' },
+        el('span', { className: 'type', style: '--tc: var(--t-image)' }, icon('user')),
+        el('div', { className: 'row-text' }, el('p', { textContent: m.name }),
+          el('p', { className: 'muted', textContent: !m.online ? 'Sin conexión' : m.device ? `Oye en ${m.device}` : 'Conectado, sin sonido' })))))));
+  } else {
+    out.push(note('Escucha lo mismo con otras personas de PaloBox: cada quien en su dispositivo, al mismo tiempo.'),
+      el('div', { className: 'jam-actions' },
+        btn('primary small', 'plus', 'Iniciar jam', () => (room ? jam.send('open') : startRoom({ open: true }))),
+        btn('secondary small', null, 'Unirme con un código', async () => {
+          const code = await ask({ heading: 'Unirme a un jam', text: 'Escribe el código de 6 caracteres que te compartieron.', input: '', label: 'Código', ok: 'Unirme' });
+          if (code) joinJam(code);
+        })));
+  }
+  if (room) {
+    out.push(el('div', { className: 'jam-actions' }, btn('secondary small', 'logout', room.open ? 'Salir del jam' : 'Dejar de compartir entre dispositivos', () => jam.send('leave'))));
+  }
+  $('#jam-body').replaceChildren(...out);
+}
+$('#jam-close').onclick = () => $('#jam').close();
+$('#jam').onclick = (e) => e.target === e.currentTarget && e.currentTarget.close(); // clic en el telón

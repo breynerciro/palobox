@@ -20,6 +20,7 @@ import (
 	"palobox/internal/auth"
 	"palobox/internal/files"
 	"palobox/internal/httpx"
+	"palobox/internal/jam"
 	"palobox/internal/media"
 	"palobox/internal/module"
 	"palobox/internal/music"
@@ -40,6 +41,7 @@ type app struct {
 	uploads *uploads.Handler
 	music   *music.Library
 	spotdl  *spotdl.Handler // sin Module.URL = sección desactivada
+	jam     *jam.Hub
 }
 
 func open(data string) (*app, error) {
@@ -59,6 +61,7 @@ func open(data string) (*app, error) {
 		uploads: uploads.New(db, data, thumbs),
 		music:   lib,
 		spotdl:  &spotdl.Handler{},
+		jam:     &jam.Hub{Lookup: lib.ByPaths, More: lib.Random},
 	}, nil
 }
 
@@ -108,6 +111,8 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("POST /api/music/playlists/{id}/tracks", auth(a.music.PlaylistAdd))
 	mux.HandleFunc("DELETE /api/music/playlists/{id}/tracks", auth(a.music.PlaylistRemove))
 	mux.HandleFunc("PUT /api/music/playlists/{id}/order", auth(a.music.PlaylistOrder))
+	mux.HandleFunc("GET /api/jam/events", auth(a.jam.Events))
+	mux.HandleFunc("POST /api/jam", auth(a.jam.Cmd))
 	mux.HandleFunc("GET /api/spotdl", auth(a.spotdl.List))
 	mux.HandleFunc("POST /api/spotdl", auth(a.spotdl.Add))
 	mux.HandleFunc("DELETE /api/spotdl/{id}", auth(a.spotdl.Delete))

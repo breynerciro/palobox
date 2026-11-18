@@ -8,6 +8,8 @@ propio servidor y con una interfaz web que se instala en el celular como app (PW
 - **Archivos**: una carpeta privada por usuario.
 - **Música**: biblioteca compartida con álbumes, artistas, búsqueda, favoritos, listas y cola
   de reproducción.
+- **Dispositivos y jam**: eliges en cuál de tus dispositivos suena y lo controlas desde otro, o abres
+  un jam para que otras personas escuchen lo mismo a la vez y manejen la cola contigo.
 - **Descargas de Spotify** (opcional): pegas un enlace y un servicio aparte lo baja con
   [spotDL](https://github.com/spotDL/spotify-downloader). Ver [`spotdl/README.md`](spotdl/README.md).
 

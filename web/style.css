@@ -253,8 +253,8 @@ li[draggable=true] { cursor: grab; }
 .panel::backdrop { background: rgb(0 0 0 / .5); }
 .panel-head { display: flex; align-items: center; justify-content: space-between; padding: calc(env(safe-area-inset-top) + 8px) 8px 0 var(--gutter); }
 .panel-head h2 { font-size: 1.15rem; }
-#queue-body { flex: 1; overflow-y: auto; padding-bottom: calc(var(--safe-b) + 16px); }
-#queue-body .list { background: var(--surface-2); }
+#queue-body, #jam-body { flex: 1; overflow-y: auto; padding-bottom: calc(var(--safe-b) + 16px); }
+#queue-body .list, #jam-body .list { background: var(--surface-2); }
 
 /* ---- Buscador y descargas ---- */
 .searchbox { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 0 6px 0 12px; min-height: 44px; background: var(--surface-2); border-radius: 12px; color: var(--muted); }
@@ -477,3 +477,10 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .stat-card.warn .stat-num { color: var(--danger); }
 .section-head.sub .section-title { font-size: .95rem; margin-top: 16px; margin-bottom: 8px; }
 .section-head.sub .btn { margin-top: 6px; }
+
+/* ---- Dispositivos y jam ---- */
+.icon-btn.on { color: var(--accent); } /* la reproducción es compartida; el panel dice con quién o dónde suena */
+.in-room [data-act=shuffle], .in-room [data-act=repeat] { opacity: .35; }
+.jam-code { margin: 4px var(--gutter) 8px; font-size: 2rem; font-weight: 700; letter-spacing: .2em; text-align: center; font-variant-numeric: tabular-nums; -webkit-user-select: all; user-select: all; }
+.jam-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px var(--gutter) 8px; }
+.np-bar-btns { display: flex; }

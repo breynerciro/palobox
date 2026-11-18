@@ -1,7 +1,7 @@
 // Punto de entrada: decide qué vista pintar según la ruta y mantiene la interfaz al día.
 import { $, el, empty } from './lib.js';
 import { TABS, route, go, setRenderer, render } from './nav.js';
-import { audio, markPlaying } from './player.js';
+import { audio, markPlaying, joinJam } from './player.js';
 import { isAdmin, start } from './session.js';
 import { uploading } from './uploads.js';
 import { photosView } from './photos.js';
@@ -20,6 +20,12 @@ window.addEventListener('hashchange', () => !$('#app').hidden && render());
 let renderId = 0;
 let wasMusic; // la vista anterior era de Música (undefined antes de la primera)
 async function renderView() {
+  // Enlace de invitación a un jam (#/jam/CÓDIGO): se une y sigue en Música.
+  const invite = location.hash.match(/^#\/jam\/([a-z0-9]{6})$/i);
+  if (invite) {
+    history.replaceState(null, '', '#/musica');
+    joinJam(invite[1]);
+  }
   const { tab, path } = route();
   const id = ++renderId;
   for (const a of document.querySelectorAll('#tabs a')) {
@@ -50,6 +56,7 @@ async function renderView() {
   $('#title').hidden = detail;
   $('#subtitle').textContent = '';
   $('#admin-link').hidden = !isAdmin || admin;
+  $('#jam-link').hidden = !music;
   $('#back').hidden = music ? !detail : !parts.length && !admin;
   $('#back-label').textContent = admin ? TABS[route(lastHash).tab].title : music ? 'Atrás' : parts.at(-2) ?? TABS[tab].title;
   $('#back').onclick = () => {

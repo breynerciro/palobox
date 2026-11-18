@@ -57,6 +57,7 @@
     <symbol id="i-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="M21.17 6.81a1 1 0 0 0-3.98-3.98L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.36a.5.5 0 0 0 .62.62L7 20.66a2 2 0 0 0 .83-.5Z"/></symbol>
     <symbol id="i-grid" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></symbol>
+    <symbol id="i-cast" viewBox="0 0 24 24"><path d="M5.5 20H8M17 9h.01"/><rect width="10" height="16" x="12" y="4" rx="2"/><path d="M8 6H4a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h4"/><circle cx="17" cy="15" r="1"/></symbol>
     <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
     <symbol id="i-disc" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="2"/></symbol>
   </defs>
@@ -103,6 +104,7 @@
       <span class="spacer"></span>
       <button id="mkdir" class="icon-btn" aria-label="Nueva carpeta" hidden><svg><use href="#i-folder-plus"/></svg></button>
       <button id="add" class="btn primary small" hidden><svg><use href="#i-upload"/></svg>Subir</button>
+      <button id="jam-link" class="icon-btn" data-act="jam" aria-label="Dispositivos y jam" hidden><svg><use href="#i-cast"/></svg></button>
       <a id="admin-link" class="icon-btn" href="#/admin" aria-label="Administración" hidden><svg><use href="#i-activity"/></svg></a>
       <button id="logout" class="icon-btn" aria-label="Cerrar sesión"><svg><use href="#i-logout"/></svg></button>
     </div>
@@ -166,6 +168,7 @@
         </div>
       </div>
       <div class="player-right wide">
+        <button class="icon-btn" data-act="jam" aria-label="Dispositivos y jam"><svg><use href="#i-cast"/></svg></button>
         <button class="icon-btn" data-act="queue" aria-label="Cola de reproducción"><svg><use href="#i-queue"/></svg></button>
         <svg class="muted"><use href="#i-volume"/></svg>
         <input id="volume" class="seek" type="range" min="0" max="100" value="100" aria-label="Volumen">
@@ -203,8 +206,11 @@
 <dialog id="np" aria-label="Reproduciendo">
   <div class="np-bar">
     <button id="np-close" class="icon-btn" aria-label="Cerrar reproductor"><svg><use href="#i-down"/></svg></button>
-    <p class="muted">Reproduciendo</p>
-    <button class="icon-btn" data-act="queue" aria-label="Cola de reproducción"><svg><use href="#i-queue"/></svg></button>
+    <p id="np-where" class="muted ellipsis">Reproduciendo</p>
+    <span class="np-bar-btns">
+      <button class="icon-btn" data-act="jam" aria-label="Dispositivos y jam"><svg><use href="#i-cast"/></svg></button>
+      <button class="icon-btn" data-act="queue" aria-label="Cola de reproducción"><svg><use href="#i-queue"/></svg></button>
+    </span>
   </div>
   <div class="cover np-cover" id="np-cover" style="--tc: var(--t-audio)"><svg><use href="#i-music"/></svg></div>
   <div class="np-head">
@@ -233,6 +239,14 @@
     <button id="queue-close" class="icon-btn" aria-label="Cerrar cola"><svg><use href="#i-x"/></svg></button>
   </div>
   <div id="queue-body"></div>
+</dialog>
+
+<dialog id="jam" class="panel" aria-labelledby="jam-title">
+  <div class="panel-head">
+    <h2 id="jam-title">Dispositivos y jam</h2>
+    <button id="jam-close" class="icon-btn" aria-label="Cerrar"><svg><use href="#i-x"/></svg></button>
+  </div>
+  <div id="jam-body"></div>
 </dialog>
 
 <dialog id="menu" class="menu"><ul id="menu-list" role="menu"></ul></dialog>

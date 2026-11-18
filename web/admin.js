@@ -1,5 +1,5 @@
 // Panel del administrador: estado del servidor, usuarios, sesiones, entradas, música y descargas.
-import { $, el, icon, size, fmtDate, plural, joinText, json, toast, ask, menu, fmtLong } from './lib.js';
+import { $, el, icon, size, fmtDate, plural, joinText, json, toast, ask, menu, fmtLong, deviceName as device } from './lib.js';
 import { api } from './session.js';
 import { render } from './nav.js';
 import { jobRow } from './music-views.js';
@@ -18,14 +18,6 @@ function ago(sec) {
   if (!sec) return 'Nunca ha entrado';
   const s = since(sec);
   return s === 'ahora' ? 'En línea ahora' : s.startsWith('hace') ? s[0].toUpperCase() + s.slice(1) : `Último uso: ${s}`;
-}
-
-// device resume el navegador y el sistema a partir del User-Agent: «Chrome en Android».
-function device(ua) {
-  if (!ua) return 'Dispositivo sin registrar'; // sesiones abiertas antes de que se guardara el navegador
-  const os = [[/iPhone/, 'iPhone'], [/iPad/, 'iPad'], [/Android/, 'Android'], [/Windows/, 'Windows'], [/Mac OS X/, 'Mac'], [/CrOS/, 'ChromeOS'], [/Linux/, 'Linux']].find(([re]) => re.test(ua))?.[1];
-  const br = [[/Edg\//, 'Edge'], [/OPR\//, 'Opera'], [/Firefox\/|FxiOS/, 'Firefox'], [/Chrome\/|CriOS/, 'Chrome'], [/Safari\//, 'Safari'], [/curl|Go-http|python/i, 'Script']].find(([re]) => re.test(ua))?.[1];
-  return os ? `${br ?? 'Navegador'} en ${os}` : br ?? 'Dispositivo desconocido';
 }
 
 // send hace una acción del panel y vuelve a pintarlo; devuelve si salió bien.

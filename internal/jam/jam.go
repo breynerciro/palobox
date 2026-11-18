@@ -1,0 +1,489 @@
+// Package jam sincroniza la reproducción entre dispositivos. Una sala guarda la cola, la pista y la
+// posición; cada dispositivo conectado la recibe por un flujo de eventos (SSE) y manda sus acciones como
+// comandos. Sirve para dos cosas con el mismo mecanismo:
+//   - Elegir en qué dispositivo suena tu música: una sala de un solo usuario con varios dispositivos.
+//   - Un jam: varios usuarios en la misma sala; cada uno oye en su dispositivo y todos manejan la cola.
+//
+// Todo vive en memoria: un reinicio de la app termina las salas y cada dispositivo sigue con su cola local.
+package jam
+
+import (
+	"crypto/rand"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"regexp"
+	"sort"
+	"strings"
+	"sync"
+	"time"
+
+	"palobox/internal/httpx"
+	"palobox/internal/music"
+)
+
+const (
+	maxQueue   = 500
+	beat       = 25 * time.Second // latido del flujo: mantiene viva la conexión tras un proxy y revisa las salas
+	soloGrace  = 2 * time.Minute  // una sala personal se disuelve si a su dueño le queda un solo dispositivo
+	emptyGrace = 30 * time.Minute // una sala sin nadie conectado se borra
+)
+
+type Hub struct {
+	Lookup func(paths []string) ([]music.Track, error)    // pistas del índice, en el orden pedido
+	More   func(n int, not string) ([]music.Track, error) // sugerencias cuando se acaba la cola
+
+	mu    sync.Mutex
+	seq   int64 // crece con cada foto enviada: el cliente descarta las que llegan en desorden
+	users map[string]*user
+	rooms map[string]*jamRoom
+}
+
+// conn es un dispositivo conectado al flujo de eventos.
+type conn struct {
+	id, name string
+	wake     chan struct{} // capacidad 1: "hay cambios"
+	gone     chan struct{} // se cierra si el mismo dispositivo abre otra conexión
+	qrev     int           // versión de la cola que ya se le envió
+}
+
+type user struct {
+	name   string
+	conns  map[string]*conn
+	room   *jamRoom
+	active string // dispositivo en el que suena para este usuario
+}
+
+type jamRoom struct {
+	code    string
+	open    bool // jam: admite invitados; las salas personales (elegir dispositivo) no lo están hasta que se invita
+	members []*user
+	queue   []music.Track
+	qrev    int
+	manual  int // pistas agregadas justo después de la actual: «agregar a la cola» va detrás de ellas
+	pos     int
+	playing bool
+	at      float64   // posición en segundos en el momento stamp
+	stamp   time.Time // si playing, la posición actual es at + lo transcurrido desde stamp
+	empty   time.Time // desde cuándo no hay nadie conectado
+	solo    time.Time // desde cuándo es una sala personal con menos de dos dispositivos
+}
+
+func (r *jamRoom) dur() float64 {
+	if r.pos >= 0 && r.pos < len(r.queue) {
+		return r.queue[r.pos].Dur
+	}
+	return 0
+}
+
+func (r *jamRoom) cur(now time.Time) float64 {
+	p := r.at
+	if r.playing {
+		p += now.Sub(r.stamp).Seconds()
+	}
+	if d := r.dur(); d > 0 && p > d {
+		p = d
+	}
+	return max(p, 0)
+}
+
+func (r *jamRoom) set(pos int, at float64, playing bool) {
+	r.pos, r.at, r.playing, r.stamp = pos, at, playing, time.Now()
+}
+
+// Lo que recibe cada dispositivo.
+type deviceView struct {
+	ID     string `json:"id"`
+	Name   string `json:"name"`
+	Active bool   `json:"active"`
+}
+type memberView struct {
+	Name   string `json:"name"`
+	Device string `json:"device"` // dónde le suena; vacío si en ninguno
+	Online bool   `json:"online"`
+}
+type roomView struct {
+	Code    string         `json:"code"`
+	Open    bool           `json:"open"`
+	Pos     int            `json:"pos"`
+	Playing bool           `json:"playing"`
+	At      float64        `json:"at"`
+	Stamp   int64          `json:"stamp"`
+	Qrev    int            `json:"qrev"`
+	Queue   *[]music.Track `json:"queue,omitempty"` // solo cuando el dispositivo no tiene esta versión
+	Members []memberView   `json:"members"`
+}
+type view struct {
+	Seq     int64        `json:"seq"`
+	Now     int64        `json:"now"` // reloj del servidor, para que el cliente calcule su desfase
+	Me      string       `json:"me"`
+	Devices []deviceView `json:"devices"`
+	Room    *roomView    `json:"room"`
+}
+
+func (h *Hub) get(name string) *user {
+	if h.users == nil {
+		h.users, h.rooms = map[string]*user{}, map[string]*jamRoom{}
+	}
+	u := h.users[name]
+	if u == nil {
+		u = &user{name: name, conns: map[string]*conn{}}
+		h.users[name] = u
+	}
+	return u
+}
+
+// snapshot arma la foto para un dispositivo; have es la versión de la cola que ya tiene.
+func (h *Hub) snapshot(u *user, device string, have int) view {
+	h.seq++
+	now := time.Now()
+	v := view{Seq: h.seq, Now: now.UnixMilli(), Me: device, Devices: []deviceView{}}
+	for _, c := range u.conns {
+		v.Devices = append(v.Devices, deviceView{c.id, c.name, c.id == u.active})
+	}
+	sort.Slice(v.Devices, func(i, j int) bool {
+		return v.Devices[i].Name+v.Devices[i].ID < v.Devices[j].Name+v.Devices[j].ID
+	})
+	if r := u.room; r != nil {
+		rv := &roomView{Code: r.code, Open: r.open, Pos: r.pos, Playing: r.playing, At: r.cur(now), Stamp: now.UnixMilli(), Qrev: r.qrev}
+		if have != r.qrev {
+			q := r.queue
+			if q == nil {
+				q = []music.Track{}
+			}
+			rv.Queue = &q
+		}
+		for _, m := range r.members {
+			mv := memberView{Name: m.name, Online: len(m.conns) > 0}
+			if c := m.conns[m.active]; c != nil {
+				mv.Device = c.name
+			}
+			rv.Members = append(rv.Members, mv)
+		}
+		v.Room = rv
+	}
+	return v
+}
+
+func (u *user) poke() {
+	for _, c := range u.conns {
+		select {
+		case c.wake <- struct{}{}:
+		default:
+		}
+	}
+}
+
+// notify avisa a todos los dispositivos que ven lo mismo que u.
+func notify(u *user) {
+	if u.room == nil {
+		u.poke()
+		return
+	}
+	for _, m := range u.room.members {
+		m.poke()
+	}
+}
+
+func (h *Hub) leave(u *user) {
+	r := u.room
+	if r == nil {
+		return
+	}
+	for i, m := range r.members {
+		if m == u {
+			r.members = append(r.members[:i], r.members[i+1:]...)
+			break
+		}
+	}
+	u.room = nil
+	u.poke()
+	if len(r.members) == 0 {
+		delete(h.rooms, r.code)
+		return
+	}
+	for _, m := range r.members {
+		m.poke()
+	}
+}
+
+// sweep disuelve las salas que ya no hacen falta y olvida a los usuarios sin nada pendiente.
+func (h *Hub) sweep() {
+	now := time.Now()
+	for _, r := range h.rooms {
+		online := false
+		for _, m := range r.members {
+			online = online || len(m.conns) > 0
+		}
+		lonely := !r.open && len(r.members) == 1 && len(r.members[0].conns) < 2
+		switch {
+		case online:
+			r.empty = time.Time{}
+		case r.empty.IsZero():
+			r.empty = now
+		}
+		switch {
+		case !lonely:
+			r.solo = time.Time{}
+		case r.solo.IsZero():
+			r.solo = now
+		}
+		if (!r.empty.IsZero() && now.Sub(r.empty) > emptyGrace) || (lonely && now.Sub(r.solo) > soloGrace) {
+			for _, m := range append([]*user(nil), r.members...) {
+				h.leave(m)
+			}
+		}
+	}
+	for name, u := range h.users {
+		if len(u.conns) == 0 && u.room == nil {
+			delete(h.users, name)
+		}
+	}
+}
+
+var deviceRe = regexp.MustCompile(`^[a-z0-9]{8,32}$`)
+
+// Events es el flujo de eventos de un dispositivo: una foto al conectarse y otra con cada cambio.
+func (h *Hub) Events(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
+	id, name := r.URL.Query().Get("device"), strings.TrimSpace(r.URL.Query().Get("name"))
+	fl, ok := w.(http.Flusher)
+	if !deviceRe.MatchString(id) || !ok {
+		return httpx.Error(400, "Dispositivo no válido.")
+	}
+	if name == "" {
+		name = "Dispositivo"
+	}
+	if len(name) > 40 {
+		name = name[:40]
+	}
+	c := &conn{id: id, name: name, wake: make(chan struct{}, 1), gone: make(chan struct{})}
+	h.mu.Lock()
+	u := h.get(hu.Name)
+	if old := u.conns[id]; old != nil {
+		close(old.gone)
+	}
+	u.conns[id] = c
+	h.sweep()
+	notify(u)
+	<-c.wake // el aviso propio sobra: la primera foto sale enseguida
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		if u.conns[id] == c {
+			delete(u.conns, id)
+			notify(u)
+		}
+		h.sweep()
+		h.mu.Unlock()
+	}()
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Accel-Buffering", "no") // que un proxy no retenga los eventos
+	tick := time.NewTicker(beat)
+	defer tick.Stop()
+	for {
+		h.mu.Lock()
+		v := h.snapshot(u, id, c.qrev)
+		if v.Room != nil {
+			c.qrev = v.Room.Qrev
+		} else {
+			c.qrev = 0
+		}
+		h.mu.Unlock()
+		b, _ := json.Marshal(v)
+		if _, err := fmt.Fprintf(w, "data: %s\n\n", b); err != nil {
+			return nil
+		}
+		fl.Flush()
+		select {
+		case <-c.wake:
+		case <-tick.C:
+			h.mu.Lock()
+			h.sweep()
+			h.mu.Unlock()
+		case <-c.gone:
+			return nil
+		case <-r.Context().Done():
+			return nil
+		}
+	}
+}
+
+const codeChars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789" // sin 0/O ni 1/I: el código se dicta o se escribe a mano
+
+func (h *Hub) newCode() string {
+	for {
+		b := make([]byte, 6)
+		rand.Read(b)
+		for i := range b {
+			b[i] = codeChars[int(b[i])%len(codeChars)]
+		}
+		if h.rooms[string(b)] == nil {
+			return string(b)
+		}
+	}
+}
+
+var errNoRoom = httpx.Error(409, "Esa sesión ya terminó.")
+
+// advance pasa a la siguiente pista; si la cola se acaba, pide sugerencias y si no hay, se detiene.
+func (h *Hub) advance(r *jamRoom) {
+	if len(r.queue)-(r.pos+1) < 3 && h.More != nil && len(r.queue) > 0 && len(r.queue) < maxQueue {
+		have := map[string]bool{}
+		for _, t := range r.queue {
+			have[t.Path] = true
+		}
+		if more, err := h.More(20, r.queue[r.pos].Path); err == nil {
+			for _, t := range more {
+				if !have[t.Path] && len(r.queue) < maxQueue {
+					r.queue = append(r.queue, t)
+					r.qrev++
+				}
+			}
+		}
+	}
+	r.manual = max(0, r.manual-1)
+	if r.pos+1 < len(r.queue) {
+		r.set(r.pos+1, 0, true)
+	} else {
+		r.set(r.pos, 0, false)
+	}
+}
+
+// Cmd aplica una acción de un dispositivo y le devuelve la foto resultante.
+func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
+	var in struct {
+		Device, Op, Code, Target, Path string
+		Paths                          []string
+		Pos, Index, Qrev               int
+		At                             float64
+		Playing, Open, Next            bool
+	}
+	// Una cola de 500 rutas no cabe en el límite de httpx.ReadJSON.
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil || !deviceRe.MatchString(in.Device) || len(in.Paths) > maxQueue {
+		return httpx.Error(400, "petición inválida")
+	}
+	var tracks []music.Track
+	if len(in.Paths) > 0 {
+		var err error
+		if tracks, err = h.Lookup(in.Paths); err != nil {
+			return err
+		}
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	u := h.get(hu.Name)
+	room := u.room
+	clampPos := func(n int) int { return max(0, min(in.Pos, n-1)) }
+	switch in.Op {
+	case "start": // crea la sala con la cola de este dispositivo; target = dónde debe sonar
+		if room == nil {
+			if len(tracks) > maxQueue {
+				tracks = tracks[:maxQueue]
+			}
+			room = &jamRoom{code: h.newCode(), queue: tracks, qrev: 1}
+			h.rooms[room.code] = room
+			room.set(clampPos(len(tracks)), max(in.At, 0), in.Playing && len(tracks) > 0)
+			room.members, u.room, u.active = []*user{u}, room, in.Device
+		}
+		if u.conns[in.Target] != nil {
+			u.active = in.Target
+		}
+		room.open = room.open || in.Open
+	case "join":
+		target := h.rooms[strings.ToUpper(strings.TrimSpace(in.Code))]
+		if target == nil || !target.open {
+			return httpx.Error(404, "No hay un jam con ese código.")
+		}
+		if room != target {
+			h.leave(u)
+			target.members, u.room = append(target.members, u), target
+		}
+		u.active, room = in.Device, target
+	case "leave":
+		h.leave(u)
+		room = nil
+	default:
+		if room == nil {
+			return errNoRoom
+		}
+		now := time.Now()
+		switch in.Op {
+		case "open":
+			room.open = true
+		case "here":
+			if u.conns[in.Target] == nil {
+				return httpx.Error(409, "Ese dispositivo ya no está conectado.")
+			}
+			u.active = in.Target
+		case "queue": // alguien puso a sonar otra lista
+			if len(tracks) == 0 {
+				return httpx.Error(404, "Esa música ya no está en la biblioteca.")
+			}
+			room.queue, room.manual = tracks, 0
+			room.qrev++
+			room.set(clampPos(len(tracks)), 0, true)
+		case "add":
+			if len(tracks) == 0 {
+				return httpx.Error(404, "Esa canción ya no está en la biblioteca.")
+			}
+			if len(room.queue)+len(tracks) > maxQueue {
+				return httpx.Error(409, "La cola está llena.")
+			}
+			if len(room.queue) == 0 {
+				room.queue = tracks
+				room.set(0, 0, true)
+			} else {
+				i := room.pos + 1
+				if !in.Next {
+					i += room.manual
+				}
+				i = min(i, len(room.queue))
+				room.queue = append(room.queue[:i:i], append(tracks, room.queue[i:]...)...)
+				room.manual += len(tracks)
+			}
+			room.qrev++
+		case "remove":
+			i := in.Index
+			if i <= room.pos || i >= len(room.queue) || room.queue[i].Path != in.Path {
+				break // la cola cambió mientras tanto: la foto que vuelve lo muestra
+			}
+			if i <= room.pos+room.manual {
+				room.manual--
+			}
+			room.queue = append(room.queue[:i:i], room.queue[i+1:]...)
+			room.qrev++
+		case "jump":
+			if in.Index < 0 || in.Index >= len(room.queue) {
+				break
+			}
+			room.manual = max(0, room.manual-(in.Index-room.pos))
+			room.set(in.Index, 0, true)
+		case "ended": // un dispositivo terminó la pista pos; si otro ya avisó, no se avanza dos veces
+			if in.Pos == room.pos {
+				h.advance(room)
+			}
+		case "next":
+			h.advance(room)
+		case "prev":
+			room.manual = 0
+			room.set(max(room.pos-1, 0), 0, room.playing || room.pos > 0)
+		case "play":
+			room.set(room.pos, room.cur(now), len(room.queue) > 0)
+		case "pause":
+			room.set(room.pos, room.cur(now), false)
+		case "seek":
+			at := max(in.At, 0)
+			if d := room.dur(); d > 0 {
+				at = min(at, d)
+			}
+			room.set(room.pos, at, room.playing)
+		default:
+			return httpx.Error(400, "petición inválida")
+		}
+	}
+	h.sweep()
+	notify(u)
+	return httpx.WriteJSON(w, 200, h.snapshot(u, in.Device, in.Qrev))
+}

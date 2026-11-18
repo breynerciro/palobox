@@ -39,6 +39,40 @@ type track struct {
 	genre      string
 }
 
+// Track es una pista del índice tal como la recibe la interfaz (para otros paquetes, como jam).
+type Track = track
+
+// ByPaths devuelve las pistas del índice en el orden pedido (con repetidas); las que no existen se omiten.
+func (l *Library) ByPaths(paths []string) ([]Track, error) {
+	if len(paths) == 0 {
+		return []Track{}, nil
+	}
+	args := make([]any, len(paths))
+	for i, p := range paths {
+		args[i] = p
+	}
+	ts, err := l.tracks(`WHERE t.path IN (?`+strings.Repeat(",?", len(paths)-1)+`)`, args...)
+	if err != nil {
+		return nil, err
+	}
+	by := make(map[string]Track, len(ts))
+	for _, t := range ts {
+		by[t.Path] = t
+	}
+	out := make([]Track, 0, len(paths))
+	for _, p := range paths {
+		if t, ok := by[p]; ok {
+			out = append(out, t)
+		}
+	}
+	return out, nil
+}
+
+// Random devuelve hasta n pistas al azar de toda la biblioteca, menos not.
+func (l *Library) Random(n int, not string) ([]Track, error) {
+	return l.tracks(`WHERE t.path != ? ORDER BY RANDOM() LIMIT ?`, not, n)
+}
+
 type album struct {
 	Path       string  `json:"path"`
 	Name       string  `json:"name"`
@@ -510,7 +544,7 @@ func (l *Library) Search(w http.ResponseWriter, r *http.Request, u httpx.User) e
 // Radio sugiere qué sigue cuando se acaba la cola: pistas al azar de toda la biblioteca menos ?path=.
 func (l *Library) Radio(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	l.fresh()
-	ts, err := l.tracks(`WHERE t.path != ? ORDER BY RANDOM() LIMIT 40`, r.URL.Query().Get("path"))
+	ts, err := l.Random(40, r.URL.Query().Get("path"))
 	if err != nil {
 		return err
 	}
