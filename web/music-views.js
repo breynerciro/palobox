@@ -137,9 +137,9 @@ function searchView() {
   return query.length < 2 ? suggestView() : resultsView(query);
 }
 
-// Con el campo vacío: búsquedas recientes y sugerencias de la biblioteca, y debajo las descargas.
+// Con el campo vacío: búsquedas recientes y sugerencias de la biblioteca. Las descargas se ven en Tu biblioteca.
 async function suggestView() {
-  const [d, dl] = await Promise.all([ensureLib().catch(() => null), downloads()]);
+  const d = await ensureLib().catch(() => null);
   const recents = recentSearches();
   const recentRow = (q) => {
     const b = el('button', { className: 'row' }, el('span', { className: 'type', style: '--tc: var(--muted)' }, icon('search')),
@@ -153,8 +153,7 @@ async function suggestView() {
   };
   return frag(
     recents.length > 0 && frag(heading('Búsquedas recientes'), el('ul', { className: 'list' }, recents.map(recentRow))),
-    d?.albums.length ? shelves(d) : empty('search', 'Busca en tu música', 'Artistas, álbumes, canciones o tus playlists. Pega un enlace de Spotify para descargar lo que falta.'),
-    dl?.node);
+    d?.albums.length ? shelves(d) : empty('search', 'Busca en tu música', 'Artistas, álbumes, canciones o tus playlists. Pega un enlace de Spotify para descargar lo que falta.'));
 }
 
 async function resultsView(q) {
@@ -186,7 +185,8 @@ async function resultsView(q) {
   return el('div', { onclick: (e) => e.target.closest('a, button') && remember(q) }, out);
 }
 
-// Un enlace pegado: la acción destacada es descargarlo, no buscarlo.
+// Un enlace pegado: la acción destacada es descargarlo, no buscarlo. downloads() solo dice si el servicio está
+// activo; la lista con el avance queda en Tu biblioteca.
 async function linkView(link) {
   const dl = await downloads();
   const what = KINDS[link.kind];
@@ -201,17 +201,18 @@ async function linkView(link) {
     const r = await api('/api/spotdl', json('POST', { url: link.url })).catch(() => null);
     btn.disabled = false;
     if (!r?.ok) return toast(r ? await r.text() : OFFLINE, { kind: 'warn' });
-    toast('Quedó pedido. Aparece en Inicio cuando termine de descargar.', { kind: 'ok' });
-    setQuery(''); // vuelve a las sugerencias, donde se ve el avance
+    toast('Quedó pedido. El avance lo ves aquí, en Tu biblioteca.', { kind: 'ok' });
+    setQuery('');
+    go('musica', 'biblioteca'); // el avance de las descargas solo se muestra ahí
   };
   return frag(el('section', { className: 'dl-card' },
     el('span', { className: 'type', style: '--tc: var(--t-audio)' }, icon('download')),
     el('div', { className: 'row-text' }, el('p', { textContent: `Enlace de Spotify: ${what}` }),
-      el('p', { className: 'muted', textContent: 'Aparece en Inicio cuando termine de descargar; desde ahí la guardas en Tu biblioteca.' })),
-    btn), dl.node);
+      el('p', { className: 'muted', textContent: 'El avance se ve en Tu biblioteca; al terminar aparece en Inicio.' })),
+    btn));
 }
 
-// Descargas de Spotify (/api/spotdl): el avance se ve en Buscar y en Tu biblioteca.
+// Descargas de Spotify (/api/spotdl): el avance se ve solo en Tu biblioteca.
 // downloads devuelve { node, paint }, false si el servicio no está activado o null si no responde.
 // El servicio decide los estados: queued/downloading corren, error se puede reintentar y
 // finished ya no es una fila sino un aviso que se muestra una vez y se borra.
