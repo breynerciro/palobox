@@ -88,6 +88,7 @@ function load(i, { play = true, at = 0 } = {}) {
       title: t.title, artist: t.artist, album: t.album, artwork: [{ src: thumbUrl('musica', t.albumPath), sizes: '400x400', type: 'image/jpeg' }],
     });
   }
+  mediaActions();
   markLikes();
   syncPlayButton();
   paintQueue();
@@ -308,14 +309,22 @@ $('#player-open').onclick = () => $('#np').showModal();
 $('#np-close').onclick = () => $('#np').close();
 $('#queue-close').onclick = () => $('#queue').close();
 $('#queue').onclick = (e) => e.target === e.currentTarget && e.currentTarget.close(); // clic en el telón
-if ('mediaSession' in navigator) {
-  const ms = navigator.mediaSession;
-  ms.setActionHandler('play', () => !playing() && toggle());
-  ms.setActionHandler('pause', () => playing() && toggle());
-  ms.setActionHandler('nexttrack', () => next());
-  ms.setActionHandler('previoustrack', prev);
-  try { ms.setActionHandler('seekto', (d) => seekTo(d.seekTime)); } catch {}
+// Controles de la pantalla de bloqueo y la notificación. iOS decide qué botones muestra cuando empieza a sonar
+// cada pista: con «adelantar/atrasar» registrados, o sin «siguiente/anterior» en ese momento, pone los de ±10 s.
+// Por eso se registran de nuevo con cada pista y los de salto quedan explícitamente apagados.
+function mediaActions() {
+  if (!('mediaSession' in navigator)) return;
+  const set = (name, run) => { try { navigator.mediaSession.setActionHandler(name, run); } catch {} }; // acción que este navegador no conoce
+  set('play', () => !playing() && toggle());
+  set('pause', () => playing() && toggle());
+  set('seekbackward', null);
+  set('seekforward', null);
+  set('nexttrack', () => next());
+  set('previoustrack', prev);
+  set('seekto', (d) => seekTo(d.seekTime));
 }
+mediaActions();
+audio.addEventListener('playing', mediaActions);
 
 // Gestos de la barra mini: deslizar a los lados cambia de canción; hacia abajo la oculta (solo en la Nube:
 // en Música el reproductor es el centro de la sección y ese arrastre debe seguir desplazando la página).
