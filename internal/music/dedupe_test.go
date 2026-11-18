@@ -107,6 +107,22 @@ func TestAlbumAMedioBajarGana(t *testing.T) {
 	}
 }
 
+// La carpeta del sencillo tiene más pistas que el álbum, pero igual gana el álbum.
+func TestAlbumGanaAunqueTengaMenosPistas(t *testing.T) {
+	const sencillo, delAlbum = "Penyair/Nada/Nada.mp3", "Penyair/La Ley del Todo/Nada.mp3"
+	const acustico = "Penyair/Nada/Nada (Acústico).mp3"
+	l := biblioteca(t, map[string]time.Time{sencillo: antes, acustico: antes, delAlbum: despues})
+	l.Sync()
+	l.exec(t, `UPDATE tracks SET dur = 200`)
+	l.dedupe()
+	if existe(l, sencillo) || !existe(l, delAlbum) || !existe(l, acustico) {
+		t.Fatal("debía quedar la versión del álbum y la acústica")
+	}
+	if got := l.lista(t, `SELECT path FROM tracks ORDER BY path`); got != delAlbum+"|"+acustico {
+		t.Fatalf("índice: %s", got)
+	}
+}
+
 func TestAlbumPartidoSeUne(t *testing.T) {
 	l := biblioteca(t, map[string]time.Time{
 		"Penyair/La Ley del Todo/A.mp3": despues,
