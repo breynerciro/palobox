@@ -337,6 +337,9 @@ body:not(.music) #player-tuck { display: inline-flex; }
 }
 body.player-tucked:not(.music) #player { display: none; }
 body.has-player.player-tucked:not(.music) .player-tab { display: grid; }
+/* En pausa el reproductor solo se ve en Música: en Fotos y Archivos no estorba (player.js pone body.paused). */
+body.has-player.paused:not(.music) #player, body.has-player.paused:not(.music) .player-tab { display: none; }
+body.has-player.paused:not(.music) #view { padding-bottom: calc(var(--tabs-h) + var(--safe-b) + 24px + var(--up-h, 0px)); }
 .player-tab { justify-self: end; place-items: center; width: 48px; height: 48px; padding: 0; border-radius: 50%; color: var(--t-audio); cursor: pointer; }
 .player-tab svg { width: 20px; height: 20px; }
 .player-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }

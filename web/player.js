@@ -179,7 +179,13 @@ export function markPlaying() {
   syncToggles();
 }
 
+// En pausa el reproductor solo se ve en Música (style.css, body.paused). La espera evita que se esconda
+// y reaparezca en el cambio de canción, cuando el audio pasa un instante por pausa.
+let pausedTimer;
 function syncPlayButton() {
+  clearTimeout(pausedTimer);
+  if (!audio.paused) document.body.classList.remove('paused');
+  else pausedTimer = setTimeout(() => audio.paused && document.body.classList.add('paused'), 600);
   for (const b of [$('#playpause'), $('#np-play')]) {
     setIcon(b, audio.paused ? 'play' : 'pause');
     b.setAttribute('aria-label', audio.paused ? 'Reproducir' : 'Pausar');
@@ -398,6 +404,7 @@ export function restore(name) {
   try { s = JSON.parse(localStorage.getItem('palobox.player')); } catch {}
   if (!s || s.user !== name || !Array.isArray(s.queue) || !s.queue[s.pos]?.path) return;
   setVolume(s.volume ?? 1);
+  document.body.classList.add('paused'); // la cola restaurada empieza en pausa: que no asome fuera de Música
   queue = s.queue;
   order = queue.slice();
   shuffle = !!s.shuffle;
