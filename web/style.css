@@ -44,6 +44,8 @@ a { color: inherit; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+/* Los paneles se enfocan a sí mismos al abrir (autofocus): sin esto Safari pinta un anillo en la X de cerrar */
+dialog:focus-visible { outline: none; }
 
 /* ---- Botones ---- */
 .btn, .icon-btn {
@@ -254,7 +256,8 @@ li[draggable=true] { cursor: grab; }
 .panel-head { display: flex; align-items: center; justify-content: space-between; padding: calc(env(safe-area-inset-top) + 8px) 8px 0 var(--gutter); }
 .panel-head h2 { font-size: 1.15rem; }
 #queue-body, #jam-body { flex: 1; overflow-y: auto; padding-bottom: calc(var(--safe-b) + 16px); }
-#queue-body .list, #jam-body .list { background: var(--surface-2); }
+/* translateZ: en Safari de iOS, una lista con esquinas redondeadas y overflow oculto dentro de un panel con scroll deja filas en blanco al desplazarse */
+#queue-body .list, #jam-body .list { background: var(--surface-2); transform: translateZ(0); }
 
 /* ---- Buscador y descargas ---- */
 .searchbox { display: flex; align-items: center; gap: 8px; margin-top: 12px; padding: 0 6px 0 12px; min-height: 44px; background: var(--surface-2); border-radius: 12px; color: var(--muted); }
