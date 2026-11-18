@@ -290,9 +290,13 @@ for i in range(1, 4):
         self.service.stop()
 
     def script(self, cuerpo):
-        with open(self.bin, "w", encoding="utf-8") as f:
+        # Se escribe aparte y se renombra: el archivo anterior puede seguir en ejecución (un trabajo recién
+        # cancelado que aún no muere) y Linux no deja abrirlo para escribir («Text file busy»).
+        tmp = self.bin + ".nuevo"
+        with open(tmp, "w", encoding="utf-8") as f:
             f.write(self.CABECERA + cuerpo)
-        os.chmod(self.bin, 0o755)
+        os.chmod(tmp, 0o755)
+        os.replace(tmp, self.bin)
 
     def request(self, method, path, body=None, timeout=10, user="ana", admin=False, token=None):
         data = json.dumps(body).encode() if body is not None else None
