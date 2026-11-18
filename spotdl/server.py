@@ -171,7 +171,10 @@ class Settings:
         tmp = path + ".tmp"
         fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
         with os.fdopen(fd, "w", encoding="utf-8") as f:
-            json.dump({"load_config": True, "client_id": self.client_id, "client_secret": self.client_secret}, f)
+            # Con credenciales propias se usa la API oficial: sin use_official_api spotDL 4.6 las ignora y sigue
+            # leyendo los metadatos por el camino lento (SpotipyFree).
+            json.dump({"load_config": True, "client_id": self.client_id, "client_secret": self.client_secret,
+                       "use_official_api": True}, f)
         os.replace(tmp, path)
 
 
@@ -760,6 +763,9 @@ class Runner:
                 "--output", os.path.join(self.s.music_dir, "{artist}/{album}/{title}.{output-ext}"),
                 "--format", "mp3",
                 "--bitrate", "128k",
+                # Sin proveedores de letras: la app no las muestra y buscarlas costaba unos 7 s por canción en tres
+                # sitios que casi siempre responden con un rechazo.
+                "--lyrics",
                 "--threads", str(self.s.threads),
                 "--overwrite", "skip",
                 "--simple-tui",

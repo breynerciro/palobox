@@ -718,15 +718,17 @@ if lines:
         cfg = os.path.join(settings.home, ".config", "spotdl", "config.json")
         self.assertEqual(os.stat(cfg).st_mode & 0o777, 0o600)
         with open(cfg, encoding="utf-8") as f:
-            self.assertEqual(json.load(f), {"load_config": True, "client_id": "id-publico", "client_secret": "secreto-123"})
+            self.assertEqual(json.load(f), {"load_config": True, "client_id": "id-publico", "client_secret": "secreto-123",
+                                            "use_official_api": True})
 
         _, job = self.request("POST", "/jobs", {"url": "https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX"})
         self.esperar(job["id"])
         for args in (c["args"] for c in self.llamadas()):
             self.assertNotIn("secreto-123", " ".join(args))
             self.assertNotIn("--client-secret", args)
-        save = [c for c in self.llamadas() if c["args"][0] == "save"][0]["args"]
-        self.assertTrue(save[save.index("--lyrics") + 1].startswith("--"))  # sin proveedores: no busca letras
+        for cmd in ("save", "download"):
+            args = [c for c in self.llamadas() if c["args"][0] == cmd][0]["args"]
+            self.assertTrue(args[args.index("--lyrics") + 1].startswith("--"), cmd)  # sin proveedores: no busca letras
         with open(self.log + ".env") as f:
             self.assertEqual(f.read(), "False")  # tampoco en el entorno de spotDL
 
@@ -757,6 +759,33 @@ class MigracionTest(unittest.TestCase):
             store = server.Store(path)
             self.assertEqual(store.get("0123456789abcdef")["owner"], "")
             self.assertEqual(store.create("https://open.spotify.com/track/x", "ana")["owner"], "ana")
+
+
+class CacheTest(unittest.TestCase):
+    """spotdl_fast: el álbum y el artista se piden una sola vez por proceso."""
+
+    def test_recuerda_por_clave(self):
+        import spotdl_fast
+        calls = []
+
+        def album(_self, key, *args, **kwargs):
+            calls.append((key, args, kwargs))
+            time.sleep(0.05)
+            return {"id": key, "tracks": []}
+
+        fast = spotdl_fast.cached(album)
+        got = []
+        hilos = [threading.Thread(target=lambda: got.append(fast(None, "a"))) for _ in range(4)]
+        for h in hilos:
+            h.start()
+        for h in hilos:
+            h.join()
+        self.assertEqual(len(calls), 1)  # cuatro hilos, una sola consulta
+        got[0]["tracks"].append("x")  # cada quien recibe su copia
+        self.assertEqual(fast(None, "a"), {"id": "a", "tracks": []})
+        fast(None, "b")
+        fast(None, "a", limit=50)  # con más argumentos no se guarda
+        self.assertEqual([c[0] for c in calls], ["a", "b", "a"])
 
 
 if __name__ == "__main__":

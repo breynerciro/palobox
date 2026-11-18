@@ -11,9 +11,10 @@ RUN apk add --no-cache ffmpeg ca-certificates tzdata tini deno
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY server.py .
+COPY server.py spotdl_fast.py ./
 
-ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 TZ=America/Bogota DATA_DIR=/data PORT=8801 \
+# spotdl_fast.py es spotDL con caché de álbumes y artistas (ver el archivo).
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 TZ=America/Bogota DATA_DIR=/data PORT=8801 SPOTDL_BIN=/app/spotdl_fast.py \
     HOME=/data/.palobox/spotdl/home
 EXPOSE 8801
 # Mismo usuario que la app y el servidor: los MP3 quedan visibles por Samba.

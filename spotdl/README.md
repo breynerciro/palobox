@@ -153,8 +153,32 @@ en `error` reintentables (las URLs salen de `errors-{id}.txt` si existe). `queue
 | `MAX_PER_USER` | `2` | trabajos en cola a la vez por usuario |
 | `JOB_TIMEOUT` | `43200` | segundos por trabajo |
 | `SPOTDL_BIN` | `spotdl` | binario (los tests usan uno falso) |
-| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | — | credenciales propias de Spotify; se pasan a spotDL por su `config.json` (0600), nunca por la línea de comandos |
+| `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | — | credenciales propias de Spotify: con ellas spotDL usa la API oficial y el plan pasa de ~6 s a menos de 1 s por canción (ver «Velocidad»). Van en su `config.json` (0600), nunca en la línea de comandos |
 | `SPOTDL_COOKIE_FILE` | — | `cookies.txt` de YouTube si aparecen bloqueos |
+
+## Velocidad
+
+Medido en el servidor (spotDL 4.6, 2 hilos), una canción cuesta unos 30 s de trabajo:
+
+| Paso | Tiempo | Qué es |
+| --- | --- | --- |
+| Plan (metadatos de Spotify) | ~12 s | tres consultas de ~4 s (pista, álbum, artista) por el camino sin credenciales |
+| Búsqueda en YouTube Music | ~2 s | |
+| Datos del audio (yt-dlp) | ~8 s | incluye resolver el reto de YouTube con deno |
+| Descarga y conversión a MP3 | ~9 s | |
+
+Lo que ya se hace para acortarlo sin pedirle más a YouTube:
+
+- `spotdl_fast.py` recuerda el álbum y el artista durante el trabajo: un álbum de 10 canciones se planea
+  en 41 s en vez de 66 s, con los mismos datos y menos peticiones a Spotify.
+- No se buscan letras (`--lyrics` sin proveedores): eran ~7 s por canción en sitios que casi siempre rechazan.
+
+Lo que queda a decisión de quien instala:
+
+- **Credenciales propias de Spotify** (`SPOTIFY_CLIENT_ID` y `SPOTIFY_CLIENT_SECRET`, gratis en
+  developer.spotify.com): el plan deja de ser el paso más lento. No se ha probado en este servidor.
+- **`THREADS`**: canciones a la vez. spotDL trae 4 por defecto; aquí va en 2 para pedirle menos a YouTube.
+  Subirlo acelera casi en proporción y aumenta la probabilidad de que YouTube pida verificación.
 
 ## Desarrollo
 
