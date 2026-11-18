@@ -203,6 +203,14 @@ class FiltroTest(unittest.TestCase):
     def test_mas_de_3_segundos_de_diferencia(self):
         self.assertEqual(self.filtrar([("Penyair", "La Ley del Todo", "Nada", 184, 12)], self.cancion()), "baja")
 
+    def test_llega_sencillo_con_otra_duracion_y_esta_el_album(self):
+        c = self.cancion(dur=244)
+        c["album_name"] = "Nada"
+        self.assertEqual(self.filtrar([("Penyair", "La Ley del Todo", "Nada", 232, 12)], c), "salta")
+
+    def test_llega_album_con_otra_duracion_y_esta_otro_album(self):
+        self.assertEqual(self.filtrar([("Penyair", "Otro Disco", "Nada", 232, 12)], self.cancion(dur=244, pistas=12)), "baja")
+
     def test_otro_artista(self):
         self.assertEqual(self.filtrar([("Otro", "La Ley del Todo", "Nada", 180, 12)], self.cancion()), "baja")
 

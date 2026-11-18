@@ -556,8 +556,9 @@ def index_library(music_dir):
 
 def filter_plan(songs, index):
     """(a bajar, saltadas): se salta la canción que ya está en disco con el mismo artista y
-    título, ±3 s de duración y un álbum igual o más grande. Si solo está el sencillo, la versión
-    del álbum sí se baja (la app Go borra luego el sencillo)."""
+    título, ±3 s de duración y un álbum igual o más grande. Si llega un sencillo y en disco está
+    la versión de un álbum, se salta aunque duren distinto (radio edit, otra intro). Si solo está
+    el sencillo, la versión del álbum sí se baja (la app Go borra luego el sencillo)."""
     tags = {}
 
     def read(path):
@@ -574,11 +575,16 @@ def filter_plan(songs, index):
         artists = {norm(a) for a in [song.get("artist"), *(song.get("artists") or [])] if norm(a)}
         title = norm(song.get("name"))
         paths = {p for a in artists for p in index.get((a, title), ())}
+        # spotDL nombra la carpeta del sencillo como la canción.
+        single = norm(song.get("album_name")) == title
         found = any(
             t and norm(t["title"]) == title and artists & {norm(a) for a in t["artists"]}
-            and abs(t["duration"] - (song.get("duration") or 0)) <= 3
-            and t["total"] >= (song.get("tracks_count") or 0)
-            for t in map(read, sorted(paths))
+            and (
+                abs(t["duration"] - (song.get("duration") or 0)) <= 3
+                and t["total"] >= (song.get("tracks_count") or 0)
+                or single and norm(os.path.basename(os.path.dirname(p))) != title
+            )
+            for p, t in ((p, read(p)) for p in sorted(paths))
         )
         (skipped if found else todo).append(song)
     return todo, skipped

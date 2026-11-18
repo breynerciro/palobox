@@ -88,6 +88,8 @@ func (l *Library) mergeAlbums(all []idxTrack) {
 
 // dropDuplicates borra la misma canción repetida en otro álbum del mismo artista y se queda
 // con la que no está en carpeta de sencillo; en empate, la del álbum con más pistas y luego la más antigua.
+// Son la misma si duran ±3 s, o a cualquier duración si una es sencillo y la otra no (radio edit,
+// otra intro); entre dos álbumes se exige la duración para no mezclar dos "Intro" distintas.
 func (l *Library) dropDuplicates(all []idxTrack) {
 	size := map[string]int{}
 	groups := map[string][]idxTrack{}
@@ -115,7 +117,7 @@ func (l *Library) dropDuplicates(all []idxTrack) {
 	next:
 		for _, t := range g {
 			for _, k := range kept {
-				if k.album != t.album && math.Abs(k.dur-t.dur) <= 3 {
+				if k.album != t.album && (math.Abs(k.dur-t.dur) <= 3 || single(k) != single(t)) {
 					l.relocate(t.path, k.path, false)
 					continue next
 				}
