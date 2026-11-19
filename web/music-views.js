@@ -353,9 +353,11 @@ async function libraryView() {
   const filters = el('div', { className: 'toolbar' }, chips);
   filters.setAttribute('role', 'group');
   filters.setAttribute('aria-label', 'Filtrar la biblioteca');
+  const saved = offlineBox();
+  // Con algo encima (descargas de Spotify o lo guardado en el celular), el título separa la biblioteca de eso.
   return frag(filters,
     el('div', { className: 'toolbar' }, order, el('span', { className: 'spacer' }), layout, !offline.active && add),
-    dl?.node, offlineBox(), dl && heading('Biblioteca'), box);
+    dl?.node, saved, (dl || saved) && heading('Biblioteca'), box);
 }
 
 // Páginas de álbum, artista y playlist: encabezado grande, botones de reproducir y lista de pistas
