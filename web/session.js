@@ -1,5 +1,5 @@
 // Sesión: peticiones autenticadas, entrada y salida.
-import { $, json, ask, toast } from './lib.js';
+import { $, json, ask } from './lib.js';
 import { render } from './nav.js';
 import { restore, reset, goOffline, audio } from './player.js';
 import { forget, resumeDownloads } from './music.js';
@@ -81,7 +81,6 @@ function enterOffline() {
   if (offline.active) return;
   offline.enter();
   goOffline();
-  toast('Modo offline: solo está tu música descargada.', { kind: 'warn' });
   const back = async () => {
     if (document.visibilityState !== 'visible') return;
     // Volvió el servidor: la app arranca de nuevo, ya con todo. Si está sonando se espera a la pausa para no cortar.

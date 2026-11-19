@@ -68,7 +68,7 @@ function scroller(row) {
 async function homeView() {
   const d = await library();
   if (!d.albums.length && offline.active) {
-    return empty('download', 'No hay música descargada', 'Estás en modo offline y en este celular aún no hay canciones. Cuando tengas conexión, toca el botón de descarga en un álbum o una playlist.');
+    return empty('download', 'No hay música descargada', 'Cuando tengas conexión, toca el botón de descarga en un álbum o una playlist.');
   }
   if (!d.albums.length) {
     return empty('music', 'Tu música empieza aquí', 'La biblioteca está vacía. En Buscar puedes pegar un enlace de Spotify; aparece aquí cuando termine de descargar.',
