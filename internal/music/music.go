@@ -7,7 +7,9 @@ package music
 import (
 	"cmp"
 	"context"
+	"database/sql"
 	"encoding/json"
+	"errors"
 	"io/fs"
 	"log"
 	"net/http"
@@ -259,10 +261,18 @@ func (l *Library) Sync() {
 		l.Sem <- struct{}{}
 		// Un archivo corrupto no puede detener el índice.
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-		out, _ := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "a",
+		out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "a",
 			"-show_entries", "format=duration:format_tags:stream_tags", "-of", "json", p).Output()
+		late := ctx.Err() != nil
 		cancel()
 		<-l.Sem
+		// Se acabó el tiempo o no arrancó el proceso: sin fila, para que el siguiente recorrido lo intente de nuevo.
+		// Si ffprobe terminó con error por su cuenta (o no está instalado), la pista entra con lo de la ruta.
+		var exit *exec.ExitError
+		if late || err != nil && !errors.As(err, &exit) && !errors.Is(err, exec.ErrNotFound) {
+			log.Print("índice de música: ", rel, ": ", err)
+			return nil
+		}
 		applyTags(&t, out)
 		l.changed = true
 		if _, err := l.DB.Exec(`INSERT OR REPLACE INTO tracks(path, size, mtime, title, artist, album, album_dir, artist_dir, year, disc, num, dur, fold, genre)
@@ -676,32 +686,57 @@ func (l *Library) ImportPlaylist(owner, job, name string, paths []string) {
 	if name == "" || len(paths) == 0 {
 		return
 	}
-	res, err := l.DB.Exec(`INSERT OR IGNORE INTO spotdl_done(job) VALUES(?)`, job)
-	if err != nil {
-		log.Print("playlist de Spotify: ", err)
+	// Se consulta antes: el mismo trabajo se vuelve a anunciar en cada consulta y no vale una escritura cada vez.
+	var one int
+	if l.DB.QueryRow(`SELECT 1 FROM spotdl_done WHERE job = ?`, job).Scan(&one) == nil {
 		return
+	}
+	if err := l.importPlaylist(owner, job, name, paths); err != nil {
+		log.Print("playlist de Spotify: ", err)
+	}
+}
+
+// importPlaylist hace la marca del trabajo y la playlist en una sola transacción: si algo falla a la mitad no
+// queda nada, y el trabajo se vuelve a intentar.
+func (l *Library) importPlaylist(owner, job, name string, paths []string) error {
+	tx, err := l.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`INSERT OR IGNORE INTO spotdl_done(job) VALUES(?)`, job)
+	if err != nil {
+		return err
 	}
 	if n, _ := res.RowsAffected(); n == 0 {
-		return
+		return nil
 	}
 	var uid, id int64
-	if err := l.DB.QueryRow(`SELECT id FROM users WHERE name = ?`, owner).Scan(&uid); err != nil {
-		return // la cuenta ya no existe
+	if err := tx.QueryRow(`SELECT id FROM users WHERE name = ?`, owner).Scan(&uid); err == sql.ErrNoRows {
+		return tx.Commit() // la cuenta ya no existe: queda solo la marca
+	} else if err != nil {
+		return err
 	}
 	now := time.Now().UnixMilli()
-	if l.DB.QueryRow(`SELECT id FROM playlists WHERE user_id = ? AND name = ?`, uid, name).Scan(&id) != nil {
-		res, err := l.DB.Exec(`INSERT INTO playlists(user_id, name, updated) VALUES(?, ?, ?)`, uid, name, now)
+	if err := tx.QueryRow(`SELECT id FROM playlists WHERE user_id = ? AND name = ?`, uid, name).Scan(&id); err == sql.ErrNoRows {
+		res, err := tx.Exec(`INSERT INTO playlists(user_id, name, updated) VALUES(?, ?, ?)`, uid, name, now)
 		if err != nil {
-			log.Print("playlist de Spotify: ", err)
-			return
+			return err
 		}
 		id, _ = res.LastInsertId()
+	} else if err != nil {
+		return err
 	}
 	for _, p := range paths {
-		l.DB.Exec(`INSERT OR IGNORE INTO playlist_tracks(playlist_id, path, pos)
-			VALUES(?, ?, (SELECT COALESCE(MAX(pos), -1) + 1 FROM playlist_tracks WHERE playlist_id = ?))`, id, p, id)
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO playlist_tracks(playlist_id, path, pos)
+			VALUES(?, ?, (SELECT COALESCE(MAX(pos), -1) + 1 FROM playlist_tracks WHERE playlist_id = ?))`, id, p, id); err != nil {
+			return err
+		}
 	}
-	l.touchPlaylist(id)
+	if _, err := tx.Exec(`UPDATE playlists SET updated = ? WHERE id = ?`, now, id); err != nil {
+		return err
+	}
+	return tx.Commit()
 }
 
 func (l *Library) PlaylistCreate(w http.ResponseWriter, r *http.Request, u httpx.User) error {

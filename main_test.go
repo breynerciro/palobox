@@ -200,30 +200,8 @@ func TestFlujo(t *testing.T) {
 			t.Fatalf("la lista de música debe traer solo audio: %s", s)
 		}
 	}
-	req, _ := http.NewRequest("GET", srv.URL+"/api/media/raw?lib=musica&path=Artista/cancion.mp3", nil)
-	req.Header.Set("Range", "bytes=2-5")
-	res, err := luis.c.Do(req)
-	if err != nil {
-		t.Fatal(err)
-	}
-	part, _ := io.ReadAll(res.Body)
-	res.Body.Close()
-	if res.StatusCode != 206 || string(part) != "2345" {
-		t.Fatalf("debe atender rangos para poder adelantar: %d %q", res.StatusCode, part)
-	}
-	for _, q := range []string{
-		"lib=musica&path=Artista/notas.txt",                         // no es audio
-		"lib=musica&path=Artista",                                   // carpeta
-		"lib=musica&path=../../ana/archivos/luis/archivos/nota.txt", // fuera de la biblioteca
-		"lib=otra&path=x.mp3",                                       // biblioteca inexistente
-	} {
-		if code, _, _ := ana.do("GET", "/api/media/raw?"+q, nil); code != 404 {
-			t.Fatalf("%s debe dar 404, dio %d", q, code)
-		}
-	}
-
 	// Portadas: sin carátula ni cover.jpg responde 404 (y la interfaz deja el ícono); nunca sale de la biblioteca.
-	for _, q := range []string{"lib=musica&path=Artista/cancion.mp3", "lib=musica&path=Artista/notas.txt", "lib=musica&path=../../ana"} {
+	for _, q := range []string{"lib=musica&path=Artista/cancion.mp3", "lib=musica&path=Artista/notas.txt", "lib=musica&path=../../ana", "lib=otra&path=x.mp3"} {
 		if code, _, _ := ana.do("GET", "/api/media/thumb?"+q, nil); code != 404 {
 			t.Fatalf("portada %s debe dar 404, dio %d", q, code)
 		}

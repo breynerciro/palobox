@@ -109,7 +109,6 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/files/raw", cloud(a.files.Raw))
 	mux.HandleFunc("POST /api/files/mkdir", cloud(a.files.Mkdir))
 	mux.HandleFunc("DELETE /api/files", cloud(a.files.Delete))
-	mux.HandleFunc("GET /api/media/raw", auth(a.music.Raw))
 	mux.HandleFunc("GET /api/media/thumb", auth(a.music.Thumb))
 	mux.HandleFunc("GET /api/music", zip(auth(a.music.Lib)))
 	mux.HandleFunc("GET /api/music/catalog", auth(a.music.Catalog)) // ya viene comprimido: sin zip

@@ -82,20 +82,6 @@ func (l *Library) libPath(r *http.Request) (string, func(string) bool, error) {
 	return httpx.Safe(root, r.URL.Query().Get("path")), keep, nil
 }
 
-// Raw sirve un archivo de la biblioteca.
-func (l *Library) Raw(w http.ResponseWriter, r *http.Request, u httpx.User) error {
-	p, keep, err := l.libPath(r)
-	if err != nil {
-		return err
-	}
-	// Se sirve en línea, así que solo sale audio o video: nada más de la carpeta queda expuesto.
-	if st, err := os.Stat(p); err != nil || st.IsDir() || !keep(p) {
-		return fs.ErrNotExist
-	}
-	http.ServeFile(w, r, p) // atiende peticiones por rangos: permite adelantar sin descargar todo
-	return nil
-}
-
 // Thumb devuelve la portada de una canción o carpeta; 404 si no hay.
 func (l *Library) Thumb(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	p, keep, err := l.libPath(r)

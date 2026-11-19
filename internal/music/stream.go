@@ -177,7 +177,19 @@ func (l *Library) Offline(w http.ResponseWriter, r *http.Request, u httpx.User) 
 	if err := l.DB.QueryRow(`SELECT dur FROM tracks WHERE path = ?`, rel).Scan(&dur); err != nil {
 		return err
 	}
+	// Convertir con ffmpeg es trabajo pesado: toma el cupo de Sem como el índice y las miniaturas. Un MP3 común
+	// sale tal cual y lo suelta enseguida.
+	select {
+	case l.Sem <- struct{}{}:
+	case <-r.Context().Done():
+		return r.Context().Err()
+	}
 	src, _, err := l.OpenStream(rel, dur, 0)
+	if _, conv := src.(procCloser); conv {
+		defer func() { <-l.Sem }() // corre después de src.Close, que espera a que ffmpeg termine
+	} else {
+		<-l.Sem
+	}
 	if err != nil {
 		return err
 	}

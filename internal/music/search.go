@@ -46,8 +46,6 @@ type norm struct{ plain, key string }
 
 func normOf(s string) norm { return norm{fold(s), sound(s)} }
 
-func (q query) match(s string) (int, bool) { return q.matchNorm(normOf(s)) }
-
 // matchNorm dice si cada palabra aparece en el texto y cuánto hubo que adivinar: 0 si está tal cual o suena
 // igual, más por cada letra de diferencia. Las palabras cortas no toleran errores: "amor" no debe traer "amar".
 func (q query) matchNorm(s norm) (int, bool) {

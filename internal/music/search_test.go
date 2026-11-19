@@ -16,7 +16,7 @@ func TestQueryMatch(t *testing.T) {
 		{"queen rock", "Bohemian Rhapsody Queen", false}, // todas las palabras deben estar
 		{"chico", "Hico", false},                         // la "ch" no se vuelve "c"
 	} {
-		if _, ok := newQuery(c.q).match(c.s); ok != c.ok {
+		if _, ok := newQuery(c.q).matchNorm(normOf(c.s)); ok != c.ok {
 			t.Errorf("%q en %q: %v, quería %v", c.q, c.s, ok, c.ok)
 		}
 	}

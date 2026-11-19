@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestEtiquetas(t *testing.T) {
@@ -53,5 +54,43 @@ func TestFlujoSinCupo(t *testing.T) {
 	}
 	if len(convSlots) != cap(convSlots) {
 		t.Fatal("el paso directo no debe tocar el cupo")
+	}
+}
+
+// Si ffprobe no alcanza a correr, la pista no entra al índice y se reintenta; si corre y falla (archivo corrupto),
+// entra con lo de la ruta.
+func TestSyncSinFfprobe(t *testing.T) {
+	l := biblioteca(t, map[string]time.Time{"Artista/Disco/01 - Uno.mp3": time.Now()})
+	bin := t.TempDir()
+	t.Setenv("PATH", bin)
+	ffprobe := filepath.Join(bin, "ffprobe")
+	os.WriteFile(ffprobe, []byte("no es un programa"), 0o755) // no arranca: exec format error
+	l.Sync()
+	if n := l.lista(t, `SELECT path FROM tracks`); n != "" {
+		t.Fatalf("sin poder leerla no debe quedar indexada: %q", n)
+	}
+	os.WriteFile(ffprobe, []byte("#!/bin/sh\nexit 1\n"), 0o755)
+	l.Reindex()
+	if n := l.lista(t, `SELECT title FROM tracks`); n != "Uno" {
+		t.Fatalf("un archivo corrupto entra con lo de la ruta: %q", n)
+	}
+}
+
+// Si la importación de una playlist de Spotify falla a la mitad no queda nada, y el siguiente intento la crea completa.
+func TestImportPlaylistAMedias(t *testing.T) {
+	l := biblioteca(t, nil)
+	l.exec(t, `INSERT INTO users(name, pass) VALUES('ana', x'00')`)
+	l.exec(t, `CREATE TRIGGER falla BEFORE INSERT ON playlist_tracks WHEN NEW.path = 'b.mp3' BEGIN SELECT RAISE(ABORT, 'falla'); END`)
+	l.ImportPlaylist("ana", "trabajo", "Lista", []string{"a.mp3", "b.mp3", "c.mp3"})
+	if n := l.lista(t, `SELECT job FROM spotdl_done`) + l.lista(t, `SELECT name FROM playlists`) + l.lista(t, `SELECT path FROM playlist_tracks`); n != "" {
+		t.Fatalf("una importación fallida no debe dejar rastro: %q", n)
+	}
+	l.exec(t, `DROP TRIGGER falla`)
+	l.ImportPlaylist("ana", "trabajo", "Lista", []string{"a.mp3", "b.mp3", "c.mp3"})
+	if n := l.lista(t, `SELECT path FROM playlist_tracks ORDER BY pos`); n != "a.mp3|b.mp3|c.mp3" {
+		t.Fatalf("el reintento debe crear la playlist completa: %q", n)
+	}
+	if n := l.lista(t, `SELECT job FROM spotdl_done`); n != "trabajo" {
+		t.Fatalf("el trabajo debe quedar marcado: %q", n)
 	}
 }
