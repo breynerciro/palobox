@@ -30,7 +30,34 @@ export async function api(path, opts) {
   return r;
 }
 
+// Instalar la app: en las pantallas de entrada, a quien abre PaloBox en el navegador del celular sin tenerla
+// instalada. Android (Chrome, Edge, Samsung) avisa con beforeinstallprompt solo si no está instalada; el iPhone no
+// avisa nada, así que ahí se explican los pasos mientras no se abra desde la pantalla de inicio.
+const installed = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone;
+const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+let installPrompt = null;
+function showInstall() {
+  const show = !installed() && matchMedia('(pointer: coarse)').matches && (!!installPrompt || ios);
+  for (const box of document.querySelectorAll('.install')) {
+    box.hidden = !show;
+    box.querySelector('p').textContent = installPrompt
+      ? 'Instala PaloBox en tu celular: abre más rápido, ocupa toda la pantalla y te deja escuchar tu música sin conexión.'
+      : 'Instala PaloBox en tu celular: toca Compartir (el cuadro con la flecha hacia arriba) y luego «Agregar a inicio».';
+    box.querySelector('button').hidden = !installPrompt;
+  }
+}
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; showInstall(); });
+window.addEventListener('appinstalled', () => { installPrompt = null; showInstall(); });
+for (const b of document.querySelectorAll('.install button')) b.onclick = async () => {
+  const p = installPrompt;
+  if (!p) return;
+  installPrompt = null; // cada aviso del navegador sirve una sola vez; si lo rechaza, Chrome manda otro más adelante
+  await p.prompt();
+  showInstall();
+};
+
 function showLogin() {
+  showInstall();
   reset();
   forget();
   $('#view').replaceChildren(); // lo del usuario anterior no debe verse mientras carga el siguiente
@@ -138,6 +165,7 @@ function leaveInvite() {
   start();
 }
 async function showInvite(token) {
+  showInstall();
   reset();
   forget();
   $('#view').replaceChildren();

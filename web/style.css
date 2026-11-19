@@ -92,6 +92,8 @@ input:not([type=range]) {
 }
 input:not([type=range]):focus { border-color: var(--accent); outline: none; box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 30%, transparent); }
 .login label:not(:first-of-type) { margin-top: 8px; }
+.install { margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--line); }
+.login .install .muted { margin: 0 0 12px; }
 .field-error { color: var(--danger); font-size: .9rem; min-height: 1.4em; margin: 4px 0; }
 
 /* ---- Encabezado estilo iOS (título grande) ---- */
