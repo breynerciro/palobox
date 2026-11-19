@@ -9,6 +9,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -116,4 +117,32 @@ func (l *Library) OpenStream(path string, dur, at float64) (io.ReadCloser, float
 		return nil, 0, err
 	}
 	return procCloser{out, cancel, cmd}, StreamRate, nil
+}
+
+// Offline entrega una pista lista para guardarse en el celular y sonar sin conexión: solo cuadros MP3 en estéreo a
+// 44,1 kHz, sin etiquetas, igual que en el flujo continuo. Así varias pistas guardadas se pueden unir una tras
+// otra en un solo audio dentro del teléfono, que es lo que deja sonar la siguiente con la pantalla bloqueada.
+// PRUEBA (etapa 1 del modo sin conexión): ?secs= corta la pista, para oír varios cambios sin esperar canciones enteras.
+func (l *Library) Offline(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	rel, err := l.musicRel(r.URL.Query().Get("path"))
+	if err != nil {
+		return err
+	}
+	var dur float64
+	if err := l.DB.QueryRow(`SELECT dur FROM tracks WHERE path = ?`, rel).Scan(&dur); err != nil {
+		return err
+	}
+	src, rate, err := l.OpenStream(rel, dur, 0)
+	if err != nil {
+		return err
+	}
+	defer src.Close()
+	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Cache-Control", "private, no-store")
+	var body io.Reader = src
+	if secs, _ := strconv.ParseFloat(r.URL.Query().Get("secs"), 64); secs > 0 {
+		body = io.LimitReader(src, int64(secs*rate))
+	}
+	_, err = io.Copy(w, body)
+	return err
 }

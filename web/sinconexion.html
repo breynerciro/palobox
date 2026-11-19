@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Prueba sin conexión · PaloBox</title>
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 24px 16px calc(env(safe-area-inset-bottom) + 24px); background: #0a0a12; color: #f4f5fa;
+    font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, system-ui, sans-serif; max-width: 560px; margin-inline: auto; }
+  h1 { font-size: 1.4rem; margin: 0 0 8px; }
+  h2 { font-size: 1rem; margin: 20px 0 6px; }
+  p, li { color: #b9bcc9; }
+  button { font: inherit; font-weight: 600; min-height: 48px; padding: 0 20px; border: 0; border-radius: 999px; background: #4fb6c6; color: #06181c; width: 100%; margin-top: 8px; }
+  button.sec { background: #1d1d2b; color: #f4f5fa; }
+  button:disabled { opacity: .4; }
+  li.on { color: #4fb6c6; font-weight: 600; }
+  #estado { font-weight: 600; color: #f4f5fa; }
+  pre { white-space: pre-wrap; font-size: .8rem; color: #b9bcc9; background: #14141f; padding: 12px; border-radius: 10px; }
+</style>
+</head>
+<body>
+<h1>Prueba sin conexión</h1>
+<p>Comprueba tres cosas en tu celular: que la página abra sin servidor, que la música descargada siga guardada y que suene y cambie de canción con la pantalla bloqueada.</p>
+
+<h2>Paso 1 · con Tailscale encendido</h2>
+<p>Descarga 4 canciones de tu biblioteca (45 segundos de cada una) y guárdalas en el celular.</p>
+<button id="bajar">Descargar canciones de prueba</button>
+
+<h2>Paso 2 · sin conexión</h2>
+<ol>
+  <li>Apaga Tailscale (o pon modo avión).</li>
+  <li><b>Cierra esta página por completo y vuelve a abrirla</b> con la misma dirección. Debe cargar igual.</li>
+  <li>Toca <b>Reproducir lo descargado</b> y bloquea el teléfono unos 2 minutos.</li>
+  <li>Fíjate si cambia de canción cada 45 segundos sin detenerse.</li>
+  <li>Vuelve y toma una captura del registro.</li>
+</ol>
+<button id="sonar" disabled>Reproducir lo descargado</button>
+<button id="saltar" class="sec" disabled>Saltar a la siguiente (dentro del mismo audio)</button>
+<button id="borrar" class="sec">Borrar lo descargado</button>
+
+<p id="estado">Revisando…</p>
+<ol id="lista"></ol>
+<pre id="log"></pre>
+<audio id="a" playsinline></audio>
+<script>
+const $ = (s) => document.querySelector(s);
+const a = $('#a');
+const CACHE = 'palobox-prueba-audio';
+const CORTE = 45;
+const hora = () => new Date().toLocaleTimeString('es-CO', { hour12: false });
+const log = (t) => { $('#log').textContent += `${hora()}  ${t}\n`; };
+const mb = (n) => `${(n / 1048576).toFixed(1)} MB`;
+const guardadas = () => { try { return JSON.parse(localStorage.getItem('palobox.prueba.pistas')) || []; } catch { return []; } };
+try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
+let pistas = [];
+let actual = -1;
+
+async function revisar() {
+  pistas = guardadas();
+  const c = await caches.open(CACHE);
+  const hay = (await Promise.all(pistas.map((p) => c.match(p.url)))).filter(Boolean).length;
+  $('#lista').replaceChildren(...pistas.map((p) => Object.assign(document.createElement('li'), { textContent: `${p.title} · ${p.artist}` })));
+  $('#sonar').disabled = $('#saltar').disabled = !hay;
+  let espacio = '';
+  try { const e = await navigator.storage.estimate(); espacio = ` · ocupado ${mb(e.usage)} de ${mb(e.quota)} disponibles`; } catch {}
+  $('#estado').textContent = hay ? `${hay} canciones guardadas en este celular${espacio}.` : 'Aún no hay canciones guardadas en este celular.';
+  return hay;
+}
+
+$('#bajar').onclick = async () => {
+  $('#log').textContent = '';
+  const r = await fetch('/api/music/radio?path=x').catch(() => null);
+  if (!r || !r.ok) return void ($('#estado').textContent = r && r.status === 401 ? 'Primero inicia sesión en PaloBox en este mismo navegador y vuelve a esta página.' : 'No hay conexión con el servidor: enciende Tailscale para descargar.');
+  const elegidas = (await r.json()).slice(0, 4);
+  const c = await caches.open(CACHE);
+  const lista = [];
+  for (const t of elegidas) {
+    const url = `/api/music/offline?secs=${CORTE}&path=${encodeURIComponent(t.path)}`;
+    const res = await fetch(url).catch(() => null);
+    if (!res || !res.ok) { log(`no se pudo bajar «${t.title}»`); continue; }
+    const blob = await res.blob();
+    await c.put(url, new Response(blob, { headers: { 'Content-Type': 'audio/mpeg' } }));
+    lista.push({ url, title: t.title, artist: t.artist, bytes: blob.size });
+    log(`guardada «${t.title}» (${mb(blob.size)})`);
+  }
+  localStorage.setItem('palobox.prueba.pistas', JSON.stringify(lista));
+  let fijo = 'no disponible';
+  try { fijo = (await navigator.storage.persist()) ? 'sí' : 'no (el sistema puede borrarlo si falta espacio)'; } catch {}
+  log(`almacenamiento protegido contra borrado automático: ${fijo}`);
+  await revisar();
+};
+
+$('#sonar').onclick = async () => {
+  const c = await caches.open(CACHE);
+  const partes = [];
+  let desde = 0;
+  for (const p of pistas) {
+    const res = await c.match(p.url);
+    if (!res) { log(`falta «${p.title}»: el sistema la borró`); continue; }
+    const blob = await res.blob();
+    p.desde = desde; // byte donde empieza dentro del audio unido
+    desde += blob.size;
+    partes.push(blob);
+  }
+  if (!partes.length) return;
+  // Todas las canciones en un solo audio: el teléfono nunca carga uno nuevo al pasar de una a otra.
+  const unido = new Blob(partes, { type: 'audio/mpeg' });
+  a.src = URL.createObjectURL(unido);
+  actual = -1;
+  log(`audio unido de ${partes.length} canciones (${mb(unido.size)}) · conexión: ${navigator.onLine ? 'el sistema dice que hay red' : 'sin red'}`);
+  a.play().then(() => log('empezó a sonar')).catch((e) => log('no pudo empezar: ' + e.message));
+};
+
+// Cada canción dura lo mismo (45 s): el cambio se deduce de la posición del audio unido.
+a.ontimeupdate = () => {
+  const i = Math.min(pistas.length - 1, Math.floor(a.currentTime / CORTE));
+  if (i === actual || i < 0) return;
+  actual = i;
+  [...$('#lista').children].forEach((li, k) => li.classList.toggle('on', k === i));
+  log(`canción ${i + 1}: «${pistas[i].title}» · pantalla ${document.visibilityState === 'visible' ? 'encendida en esta página' : 'bloqueada o en otra app'}`);
+  if ('mediaSession' in navigator) navigator.mediaSession.metadata = new MediaMetadata({ title: pistas[i].title, artist: pistas[i].artist, album: 'Prueba sin conexión' });
+};
+$('#saltar').onclick = () => {
+  if (!a.src) return;
+  const destino = (Math.floor(a.currentTime / CORTE) + 1) * CORTE;
+  a.currentTime = destino;
+  log(`salto pedido al segundo ${destino} (inicio de la siguiente)`);
+};
+$('#borrar').onclick = async () => {
+  a.pause();
+  a.removeAttribute('src');
+  await caches.delete(CACHE);
+  localStorage.removeItem('palobox.prueba.pistas');
+  log('descargas borradas');
+  revisar();
+};
+for (const ev of ['pause', 'waiting', 'stalled', 'seeked', 'ended', 'error']) {
+  a.addEventListener(ev, () => log(`· ${ev} en el segundo ${Math.round(a.currentTime)}${ev === 'error' && a.error ? ' (' + a.error.message + ')' : ''}`));
+}
+document.addEventListener('visibilitychange', () => log(document.visibilityState === 'visible' ? '· volviste a la página' : '· saliste de la página o bloqueaste'));
+
+(async () => {
+  let abre = 'este navegador no permite abrir páginas sin conexión';
+  if ('serviceWorker' in navigator) {
+    try { await navigator.serviceWorker.register('/sw.js'); await navigator.serviceWorker.ready; abre = 'lista para abrir sin conexión'; } catch (e) { abre = 'no se pudo preparar para abrir sin conexión: ' + e.message; }
+  }
+  const hay = await revisar();
+  log(`página ${abre} · ${navigator.onLine ? 'con red' : 'SIN RED'} · ${hay} canciones guardadas`);
+})();
+</script>
+</body>
+</html>
