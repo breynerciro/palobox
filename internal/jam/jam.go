@@ -60,6 +60,8 @@ type user struct {
 	// Flujos continuos abiertos, por dispositivo: «cut» le pide al suyo que vuelva a empezar donde va la sala.
 	cuts map[string]int
 	wake map[string]chan struct{}
+	// Dónde empieza lo nuevo tras un «cut», en segundos del flujo: el flujo lo anota y Cmd lo devuelve.
+	marks map[string]chan float64
 }
 
 type jamRoom struct {
@@ -161,6 +163,7 @@ type view struct {
 	Me      string       `json:"me"`
 	Devices []deviceView `json:"devices"`
 	Room    *roomView    `json:"room"`
+	Cut     *float64     `json:"cut,omitempty"` // respuesta a «cut»: segundo del flujo en que empieza lo nuevo
 }
 
 func (h *Hub) get(name string) *user {
@@ -468,6 +471,7 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			return err
 		}
 	}
+	var mark chan float64 // «cut»: el flujo dirá dónde empieza lo nuevo
 	// La foto se escribe al teléfono sin el candado: uno con mala señal no debe frenar a los demás.
 	v, err := func() (view, error) {
 		h.mu.Lock()
@@ -518,6 +522,11 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 				u.cuts = map[string]int{}
 			}
 			u.cuts[in.Device]++
+			if u.marks == nil {
+				u.marks = map[string]chan float64{}
+			}
+			mark = make(chan float64, 1)
+			u.marks[in.Device] = mark
 			if ch := u.wake[in.Device]; ch != nil {
 				select {
 				case ch <- struct{}{}:
@@ -621,6 +630,14 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 	}()
 	if err != nil {
 		return err
+	}
+	if mark != nil {
+		select {
+		case at := <-mark:
+			v.Cut = &at
+		case <-time.After(2 * time.Second): // el flujo está trabado o ya no existe: el teléfono salta como antes
+		case <-r.Context().Done():
+		}
 	}
 	return httpx.WriteJSON(w, 200, v)
 }

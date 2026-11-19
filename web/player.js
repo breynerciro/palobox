@@ -777,8 +777,12 @@ let skipping = false;
 async function skipBuffer() {
   if (skipping) return;
   skipping = true;
-  const ok = await jam.send('cut', {}, true);
-  const from = edge(); // lo recibido hasta la respuesta es lo viejo; lo que llegue después ya es lo nuevo
+  const r = await jam.send('cut', {}, true);
+  // Dónde empieza lo nuevo: el servidor lo dice (r.cut), porque lo viejo puede seguir en camino por la red. Si
+  // no lo dice, o no cuadra con lo que suena, se toma lo recibido hasta la respuesta, como antes.
+  const got = edge();
+  const exact = r?.cut >= audio.currentTime && r.cut < got + 15;
+  const from = exact ? r.cut : got;
   const started = Date.now();
   const stop = () => {
     skipping = false;
@@ -788,10 +792,10 @@ async function skipBuffer() {
   function check() {
     if (edge() >= from + 0.5) { // ya llegó medio segundo de lo nuevo: alcanza para caer en él sin quedarse sin audio
       stop();
-      try { audio.currentTime = from + 0.3; } catch (e) { console.warn('No se pudo saltar el colchón:', e); }
-    } else if (Date.now() - started > 5000) stop();
+      try { audio.currentTime = from + (exact ? 0.05 : 0.3); } catch (e) { console.warn('No se pudo saltar el colchón:', e); }
+    } else if (Date.now() - started > 12000) stop(); // lo viejo en camino puede tardar en llegar: es el colchón entero
   }
-  if (!ok || !(from >= 0) || !streaming()) return stop();
+  if (!r || !(from >= 0) || !streaming()) return stop();
   audio.addEventListener('progress', check); // estos eventos sí llegan con la pantalla bloqueada; los temporizadores no siempre
   audio.addEventListener('timeupdate', check);
 }

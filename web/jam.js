@@ -46,7 +46,7 @@ export function close() {
   cache = { rev: 0, queue: [] };
 }
 
-// send manda una acción y aplica la foto que vuelve; devuelve si salió bien.
+// send manda una acción y aplica la foto que vuelve; devuelve esa foto, o false si falló.
 // quiet: para lo que el reproductor hace solo (preguntar el estado en segundo plano), sin avisos si la red falla.
 export async function send(op, data = {}, quiet = false) {
   const r = await api('/api/jam', json('POST', { device: deviceId, op, qrev: cache.rev, ...data })).catch(() => null);
@@ -54,6 +54,7 @@ export async function send(op, data = {}, quiet = false) {
     if (!quiet) toast(r ? await r.text() : 'Sin conexión con el servidor.', { kind: 'warn' });
     return false;
   }
-  take(await r.json());
-  return true;
+  const s = await r.json();
+  take(s);
+  return s;
 }

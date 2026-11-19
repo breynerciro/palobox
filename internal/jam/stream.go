@@ -133,7 +133,8 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		rate  float64 // sus bytes por segundo
 		dur   float64
 		first = true
-		gone  bool // el teléfono cerró la conexión
+		sent  float64 // segundos de audio mandados por esta conexión: el reloj del reproductor del teléfono
+		gone  bool    // el teléfono cerró la conexión
 		buf   = make([]byte, 32<<10)
 	)
 	closeSrc := func() {
@@ -165,6 +166,7 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 				}
 				n -= int64(k)
 				at += float64(k) / rate
+				sent += float64(k) / rate
 			}
 			if err != nil {
 				at = max(at, dur) // la pista se mandó entera, dure lo que diga el índice
@@ -249,6 +251,12 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		}
 		if c := u.cuts[device]; c != cuts {
 			cuts, first = c, true // el teléfono se va a saltar su colchón: se vuelve a empezar como al abrir
+			// Lo ya mandado puede seguir en camino (en la red o en el túnel de Cloudflare): el teléfono no
+			// puede saber dónde empieza lo nuevo mirando lo que le llegó, así que se le dice.
+			if ch := u.marks[device]; ch != nil {
+				ch <- sent
+				delete(u.marks, device)
+			}
 		}
 		lead, fresh := full, first
 		if first {
