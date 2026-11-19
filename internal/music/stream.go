@@ -21,11 +21,12 @@ import (
 // StreamRate son los bytes por segundo de lo que sale de ffmpeg (MP3 a 128 kbps).
 const StreamRate = 16000.0
 
-// frameLen es el tamaño del cuadro MP3 cuya cabecera está en b (MPEG-1 capa III a 44,1 kHz, lo único que entra
-// al flujo sin convertir), o 0 si b no empieza con una cabecera así.
+// frameLen es el tamaño del cuadro MP3 cuya cabecera está en b (MPEG-1 capa III a 44,1 kHz y en estéreo, lo
+// único que entra al flujo sin convertir), o 0 si b no empieza con una cabecera así. Todo lo que va por un mismo
+// flujo tiene que ser del mismo tipo: un cambio de frecuencia o de mono a estéreo a mitad de camino rompe el audio.
 func frameLen(b []byte) int64 {
 	kbps := [16]int64{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320}
-	if len(b) < 4 || b[0] != 0xFF || b[1]&0xFE != 0xFA || b[2]>>4 == 0 || b[2]>>4 == 15 || (b[2]>>2)&3 != 0 {
+	if len(b) < 4 || b[0] != 0xFF || b[1]&0xFE != 0xFA || b[2]>>4 == 0 || b[2]>>4 == 15 || (b[2]>>2)&3 != 0 || b[3]>>6 == 3 {
 		return 0
 	}
 	return 144000*kbps[b[2]>>4]/44100 + int64((b[2]>>1)&1)
