@@ -75,21 +75,45 @@ type sectionCloser struct {
 
 type procCloser struct {
 	io.ReadCloser
-	cancel context.CancelFunc
-	cmd    *exec.Cmd
+	cancel  context.CancelFunc
+	cmd     *exec.Cmd
+	release func() // devuelve el cupo de conversión, si lo tomó
 }
 
 func (p procCloser) Close() error {
 	p.cancel()
 	p.ReadCloser.Close()
-	return p.cmd.Wait()
+	err := p.cmd.Wait()
+	p.release()
+	return err
+}
+
+// maxConv son las conversiones de ffmpeg que el flujo continuo deja correr a la vez. Medido en el servidor
+// (i5-5200U, 4 hilos): 40 ocupan media CPU y dejan sitio a una descarga; con 60 se llena y pasadas las 60 el
+// audio se corta para todos los que oyen, no solo para el que llegó de último.
+const maxConv = 40
+
+var convSlots = make(chan struct{}, maxConv)
+
+// frameAt busca desde off el primer cuadro MP3 seguido de otro (una cabecera suelta puede ser casualidad dentro
+// del audio) y dice dónde empieza, o -1 si no hay ninguno cerca.
+func frameAt(f *os.File, off, end int64) int64 {
+	b := make([]byte, 8<<10) // caben varios cuadros: el más largo (320 kbps) mide 961 bytes
+	n, _ := f.ReadAt(b[:min(int64(len(b)), max(end-off, 0))], off)
+	for i := 0; i+4 < n; i++ {
+		if k := int(frameLen(b[i:n])); k > 0 && i+k+4 <= n && frameLen(b[i+k:n]) > 0 {
+			return off + int64(i)
+		}
+	}
+	return -1
 }
 
 // OpenStream abre el audio de una pista desde el segundo at para el flujo continuo y dice a cuántos bytes por
 // segundo va. Desde el principio, un MP3 del tipo común sale tal cual. Lo demás lo convierte ffmpeg sobre la
 // marcha: otros formatos (FLAC, M4A, MP3 a 44,1 kHz), porque en un mismo flujo no se puede cambiar de formato, y
 // cualquier pista que se abre a mitad de camino (adelantar, reabrir el flujo), porque cada cuadro MP3 usa datos
-// del anterior y empezar en uno suelto suena como un ruido; ffmpeg entrega un comienzo limpio.
+// del anterior y empezar en uno suelto suena como un ruido; ffmpeg entrega un comienzo limpio. Con maxConv
+// conversiones ya en curso, el MP3 común sale tal cual desde ese cuadro suelto.
 func (l *Library) OpenStream(path string, dur, at float64) (io.ReadCloser, float64, error) {
 	full := httpx.Safe(l.musicRoot(), path)
 	f, err := os.Open(full)
@@ -101,11 +125,27 @@ func (l *Library) OpenStream(path string, dur, at float64) (io.ReadCloser, float
 		f.Close()
 		return nil, 0, os.ErrNotExist
 	}
+	start, end, plain := mp3Body(f, st.Size())
+	plain = plain && dur > 0 && strings.EqualFold(filepath.Ext(path), ".mp3")
 	// Menos de una décima de segundo es «desde el principio»: el flujo se abre un instante después del salto.
 	if at < 0.1 {
 		at = 0
-		if start, end, ok := mp3Body(f, st.Size()); ok && dur > 0 && strings.EqualFold(filepath.Ext(path), ".mp3") {
+		if plain {
 			return sectionCloser{io.NewSectionReader(f, start, end-start), f}, float64(end-start) / dur, nil
+		}
+	}
+	release := func() {}
+	select {
+	case convSlots <- struct{}{}:
+		release = func() { <-convSlots }
+	default:
+		// Sin cupo: el archivo sale tal cual desde el cuadro más cercano. El primer instante puede sonar sucio,
+		// pero el servidor no se satura. Lo que ffmpeg tiene que convertir sí o sí (otro formato) pasa sin cupo.
+		if plain {
+			rate := float64(end-start) / dur
+			if off := frameAt(f, start+int64(at*rate), end); off >= 0 {
+				return sectionCloser{io.NewSectionReader(f, off, end-off), f}, rate, nil
+			}
 		}
 	}
 	f.Close()
@@ -118,9 +158,10 @@ func (l *Library) OpenStream(path string, dur, at float64) (io.ReadCloser, float
 	}
 	if err != nil {
 		cancel()
+		release()
 		return nil, 0, err
 	}
-	return procCloser{out, cancel, cmd}, StreamRate, nil
+	return procCloser{out, cancel, cmd, release}, StreamRate, nil
 }
 
 // Offline entrega una pista lista para guardarse en el celular y sonar sin conexión (web/offline.js): solo

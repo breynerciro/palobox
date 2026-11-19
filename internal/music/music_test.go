@@ -1,6 +1,12 @@
 package music
 
-import "testing"
+import (
+	"bytes"
+	"io"
+	"os"
+	"path/filepath"
+	"testing"
+)
 
 func TestEtiquetas(t *testing.T) {
 	tr := fromPath("Artista/Álbum/07 - nombre de archivo.mp3")
@@ -17,5 +23,35 @@ func TestEtiquetas(t *testing.T) {
 	applyTags(&tr, nil)
 	if tr.Title != "suelta" || tr.Album != "Sin álbum" || tr.AlbumPath != "" || tr.ArtistPath != "" {
 		t.Fatalf("pista suelta: %+v", tr)
+	}
+}
+
+// Con el cupo de conversiones lleno, una pista a mitad de camino sale tal cual desde un cuadro entero, sin ffmpeg.
+func TestFlujoSinCupo(t *testing.T) {
+	frame := make([]byte, 384) // MPEG-1 capa III, 128 kbps, 48 kHz, estéreo
+	copy(frame, []byte{0xFF, 0xFB, 0x94, 0x00})
+	l := &Library{Data: t.TempDir()}
+	os.MkdirAll(l.musicRoot(), 0o755)
+	os.WriteFile(filepath.Join(l.musicRoot(), "a.mp3"), bytes.Repeat(frame, 10), 0o644)
+	for len(convSlots) < cap(convSlots) {
+		convSlots <- struct{}{}
+	}
+	defer func() {
+		for len(convSlots) > 0 {
+			<-convSlots
+		}
+	}()
+	// 10 cuadros en 0,24 s son 16000 bytes por segundo; el segundo 0,13 cae dentro del sexto cuadro.
+	src, rate, err := l.OpenStream("a.mp3", 0.24, 0.13)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer src.Close()
+	b, _ := io.ReadAll(src)
+	if rate != 16000 || len(b) != 4*384 || b[0] != 0xFF {
+		t.Fatalf("rate=%v bytes=%d", rate, len(b))
+	}
+	if len(convSlots) != cap(convSlots) {
+		t.Fatal("el paso directo no debe tocar el cupo")
 	}
 }

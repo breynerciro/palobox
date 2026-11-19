@@ -43,7 +43,7 @@ services:
       # SPOTIFY_CLIENT_ID: ""
       # SPOTIFY_CLIENT_SECRET: ""
       # SPOTDL_COOKIE_FILE: /data/.palobox/spotdl/cookies.txt
-      # MAX_ACTIVE: "5"
+      MAX_ACTIVE: "30" # trabajos en cola a la vez; con 5 (el valor del servicio) el sexto pedido de 55 cuentas se rechaza
       # MAX_PER_USER: "2"
       SPOTDL_OFFICIAL: ${SPOTDL_OFFICIAL:-1} # 1: solo audio de canales verificados o «Topic»; 0: cualquier video que coincida
       THREADS: ${SPOTDL_THREADS:-4} # canciones a la vez (4 es el valor de spotDL); bájalo en .env si YouTube pide verificación

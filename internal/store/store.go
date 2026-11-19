@@ -41,7 +41,7 @@ func Open(data string) (*sql.DB, error) {
 			return nil, err
 		}
 	}
-	db, err := sql.Open("sqlite", "file:"+filepath.Join(data, ".palobox", "db.sqlite")+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)")
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(data, ".palobox", "db.sqlite")+"?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)")
 	if err != nil {
 		return nil, err
 	}
