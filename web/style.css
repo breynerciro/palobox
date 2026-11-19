@@ -514,3 +514,4 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .offline #view { margin-bottom: 22px; } /* lo último de la vista no queda bajo la franja */
 .cover.downloads { color: #fff; background: linear-gradient(145deg, #4fb6c6, #1f6f7d); }
 .offline-box { margin-top: 12px; }
+.offline-box .bar { margin: 6px 0 4px; }
