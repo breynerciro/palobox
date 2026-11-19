@@ -46,6 +46,10 @@ export function enter() {
   active = true;
   document.body.classList.add('offline');
 }
+export function leave() {
+  active = false;
+  document.body.classList.remove('offline');
+}
 // login: quién inició sesión con conexión. Las descargas de otro usuario no se le dejan al siguiente.
 export async function login(me) {
   if (state.user && state.user !== me.name) await wipe();

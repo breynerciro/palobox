@@ -1,7 +1,7 @@
 // Sesión: peticiones autenticadas, entrada y salida.
 import { $, json, ask } from './lib.js';
 import { render } from './nav.js';
-import { restore, reset, goOffline, audio } from './player.js';
+import { restore, reset, goOffline, goOnline } from './player.js';
 import { forget, resumeDownloads } from './music.js';
 import * as offline from './offline.js';
 
@@ -82,13 +82,21 @@ function enterOffline() {
   if (offline.active) return;
   offline.enter();
   goOffline();
+  // Volvió el servidor: la app vuelve al modo normal en el acto, sin recargar; lo que suena no se corta (goOnline).
+  let busy = false;
   const back = async () => {
-    if (document.visibilityState !== 'visible') return;
-    // Volvió el servidor: la app arranca de nuevo, ya con todo. Si está sonando se espera a la pausa para no cortar.
-    if (audio.paused && await reachable()) location.reload();
+    if (busy || document.visibilityState !== 'visible') return;
+    busy = true;
+    if (!(await reachable())) return void (busy = false);
+    clearInterval(timer);
+    document.removeEventListener('visibilitychange', back);
+    window.removeEventListener('online', back);
+    offline.leave();
+    forget(); // la biblioteca en memoria era solo lo descargado
+    $('#toast').hidden = true;
+    await start(); // comprueba la sesión: si la cuenta ya no existe, sale y borra lo descargado
   };
-  setInterval(back, 20000);
-  audio.addEventListener('pause', back); // se esperaba a que dejara de sonar
+  const timer = setInterval(back, 10000);
   document.addEventListener('visibilitychange', back);
   window.addEventListener('online', back);
 }
@@ -191,6 +199,7 @@ export async function start() {
   document.body.classList.toggle('music-only', musicOnly);
   userName = me.name;
   restore(me.name);
+  goOnline(); // si venía de estar sin conexión
   watch();
   $('#login').hidden = true;
   $('#app').hidden = false;

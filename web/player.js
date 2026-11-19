@@ -58,7 +58,13 @@ let STREAM = (() => {
 })();
 // Sin conexión no hay servidor que mande el flujo: el reproductor vuelve a ser local, sobre un solo audio armado
 // en el celular con lo descargado (deck, más abajo).
+const STREAM_ON = STREAM; // el modo con conexión de este dispositivo, para volver a él
+// local: el reproductor suena desde lo descargado. Sigue así un rato después de volver la conexión (goOnline)
+// para no cortar la canción; por eso es distinto de offline.active, que es el modo de la app.
+let local = false;
 export function goOffline() {
+  if (local) return void keepDownloaded(deckTime(), !audio.paused); // ya sonaba desde lo descargado
+  local = true;
   // Si la red se cae con la app abierta, lo que sonaba sigue donde iba, ya desde lo descargado.
   const at = room ? roomTime() : audio.currentTime || resume;
   const play = here && (room ? room.playing : !audio.paused);
@@ -72,9 +78,36 @@ export function goOffline() {
   $('#jam').close();
   keepDownloaded(at, play);
 }
+// goOnline: volvió la conexión. La app ya es la de siempre; lo que suena sigue sin corte desde la copia del
+// celular y el reproductor pasa al modo normal cuando deje de sonar o se pida algo que necesita al servidor.
+export function goOnline() {
+  if (!local || offline.active) return;
+  if (!audio.paused) return void audio.addEventListener('pause', goOnline, { once: true });
+  toNormal();
+}
+// toNormal suelta el audio unido y deja el reproductor con conexión en la misma pista y segundo, sonando si
+// sonaba. edit: cambio de cola que provocó el paso (una canción que no está descargada). keep = false: lo que
+// sonaba no se retoma, viene música nueva.
+function toNormal(edit, keep = true) {
+  if (!local || offline.active) return;
+  const at = deck ? deckTime() : resume;
+  const on = !!deck && !audio.paused;
+  local = false;
+  STREAM = STREAM_ON;
+  audio.pause();
+  audio.removeAttribute('src');
+  if (deck) URL.revokeObjectURL(deck.url);
+  deck = null;
+  curPath = '';
+  jam.connect(applyJam);
+  edit?.();
+  if (!keep || !queue[pos]) return;
+  load(pos, { play: on, at });
+  if (on && STREAM) startRoom({ playing: true });
+}
 // purge: se quitaron descargas estando sin conexión; lo que ya no está en el celular sale de la cola.
 export function purge() {
-  if (offline.active && queue.some((t) => !offline.has(t.path))) keepDownloaded(deckTime(), !audio.paused);
+  if (local && queue.some((t) => !offline.has(t.path))) keepDownloaded(deckTime(), !audio.paused);
 }
 // keepDownloaded deja en la cola solo lo descargado y sigue en la pista que sonaba, si quedó.
 function keepDownloaded(at, play) {
@@ -165,7 +198,7 @@ function srcFor(t) {
 }
 async function prefetch() {
   const t = queue[pos + 1] ?? (repeat === 1 ? queue[0] : null);
-  if (STREAM || offline.active || !t || !here || t.path === tried || t.path === ready?.path || t.path === cur?.path) return;
+  if (STREAM || local || !t || !here || t.path === tried || t.path === ready?.path || t.path === cur?.path) return;
   tried = t.path;
   try {
     const r = await fetch(rawUrl('musica', t.path));
@@ -209,7 +242,7 @@ function load(i, { play = true, at = 0 } = {}) {
   counted = false;
   resume = at;
   const t = queue[i];
-  if (offline.active) { // sin conexión: el audio unido de la cola, movido hasta esta pista
+  if (local) { // sin conexión: el audio unido de la cola, movido hasta esta pista
     curPath = t.path;
     deckOpen(at, play);
   } else if (STREAM) curPath = t.path; // aquí solo se pinta: el audio es el flujo de la sala (syncStream), no el archivo
@@ -218,7 +251,7 @@ function load(i, { play = true, at = 0 } = {}) {
     audio.src = srcFor(t);
     if (at) audio.addEventListener('loadedmetadata', () => (audio.currentTime = room ? roomTime() : at), { once: true });
   }
-  if (play && !STREAM && !offline.active) audio.play().catch((e) => { stuck = e.name === 'NotAllowedError'; warnPlay(e); }); // si el formato no sirve, lo informa onerror
+  if (play && !STREAM && !local) audio.play().catch((e) => { stuck = e.name === 'NotAllowedError'; warnPlay(e); }); // si el formato no sirve, lo informa onerror
   present(t, at);
 }
 // present pinta la pista en la barra, la pantalla completa y la pantalla de bloqueo.
@@ -252,7 +285,7 @@ function present(t, at) {
 async function refill() {
   // En una sala las sugerencias las pone el servidor; sin conexión se agregan al armar la cola (playAt), porque
   // cambiarla después obliga a rearmar el audio unido.
-  if (offline.active || room || filling || repeat || pos < 0 || queue.length - pos > 6) return;
+  if (local || room || filling || repeat || pos < 0 || queue.length - pos > 6) return;
   filling = true;
   const e = epoch;
   let more = null;
@@ -275,7 +308,8 @@ async function refill() {
 // playAt reemplaza la cola por tracks y empieza en la pista i.
 export function playAt(tracks, i) {
   if (i < 0 || i >= tracks.length) return;
-  if (offline.active && !repeat && tracks.length - i < 6) tracks = [...tracks, ...offline.more(tracks)]; // que la música siga
+  toNormal(null, false); // volvió la conexión y se elige música nueva: ya suena por el camino normal
+  if (local && !repeat && tracks.length - i < 6) tracks = [...tracks, ...offline.more(tracks)]; // que la música siga
   if (room) {
     const from = Math.max(0, i - 50); // la sala guarda hasta 500 pistas alrededor de la elegida
     if (here) begin(tracks[i]);
@@ -303,6 +337,7 @@ export function playAt(tracks, i) {
 
 function addAt(t, nextUp) {
   const done = () => toast(`«${t.title}» ${nextUp ? 'suena a continuación' : 'se agregó a la cola'}.`, { kind: 'ok' });
+  if (local && !offline.active && !offline.has(t.path)) return toNormal(() => addAt(t, nextUp)); // no cabe en el audio unido
   if (room) return void jam.send('add', { paths: [t.path], next: nextUp }).then((ok) => ok && done());
   if (pos < 0) return playAt([t], 0);
   queue.splice(nextUp ? pos + 1 : pos + 1 + manual, 0, { ...t });
@@ -391,7 +426,7 @@ export function syncToggles() {
 document.addEventListener('click', (e) => {
   const act = e.target.closest?.('[data-act]')?.dataset.act;
   if (act === 'jam' && offline.active) toast(offline.NEEDS_NET);
-  else if (act === 'jam') { $('#jam').showModal(); paintJam(); }
+  else if (act === 'jam') { toNormal(); $('#jam').showModal(); paintJam(); }
   else if (act === 'shuffle' && STREAM && room && !room.open && here) streamShuffle();
   else if (act === 'repeat' && STREAM && room && !room.open) toast('Repetir no está disponible con la reproducción en segundo plano del iPhone: al acabarse la cola siguen sugerencias.');
   else if (room && (act === 'shuffle' || act === 'repeat')) toast('Aleatorio y repetir no están disponibles mientras la reproducción es compartida.');
@@ -758,7 +793,7 @@ window.addEventListener('pagehide', save);
 // navegador no dejó arrancar la siguiente pista sin un toque, se intenta de nuevo.
 function wake() {
   if (document.visibilityState !== 'visible' || !user) return;
-  if (offline.active) return; // sin servidor no hay sala que poner al día
+  if (local) return; // sin servidor no hay sala que poner al día
   if (!jam.alive()) jam.connect(applyJam); // la foto que llega llama a syncRoom
   else if (room) syncRoom();
   else if (stuck && audio.paused) audio.play().catch(warnPlay);
@@ -770,7 +805,7 @@ window.addEventListener('pageshow', wake);
 export function restore(name) {
   if (user === name) return;
   user = name;
-  if (!offline.active) jam.connect(applyJam);
+  if (!local) jam.connect(applyJam);
   let s;
   try { s = JSON.parse(localStorage.getItem('palobox.player')); } catch {}
   if (!s || s.user !== name || !Array.isArray(s.queue) || !s.queue[s.pos]?.path) return;
@@ -778,7 +813,7 @@ export function restore(name) {
   document.body.classList.add('paused'); // la cola restaurada empieza en pausa: que no asome fuera de Música
   queue = s.queue;
   let at = s.pos;
-  if (offline.active) { // sin conexión solo queda en la cola lo que está descargado
+  if (local) { // sin conexión solo queda en la cola lo que está descargado
     const cur = queue[at];
     queue = queue.filter((t) => offline.has(t.path));
     at = Math.max(0, queue.indexOf(cur));
