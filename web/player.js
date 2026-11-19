@@ -1,8 +1,8 @@
 // Reproductor de música: cola, aleatorio, repetir y la barra que sigue sonando al cambiar de sección.
-import { $, el, icon, setIcon, json, joinText, lazyImg, toast, clock, plural, sleep, ask } from './lib.js';
-import { thumbUrl } from './nav.js';
+import { $, el, icon, setIcon, json, joinText, lazyImg, toast, clock, plural, sleep, ask, menu } from './lib.js';
+import { thumbUrl, go } from './nav.js';
 import { api } from './session.js';
-import { ensureLib, markLikes, toggleLike } from './music.js';
+import { ensureLib, markLikes, toggleLike, liked, pickPlaylist } from './music.js';
 import * as jam from './jam.js';
 import * as offline from './offline.js';
 
@@ -348,8 +348,9 @@ export function syncToggles() {
   for (const b of document.querySelectorAll('[data-act=repeat]')) {
     b.setAttribute('aria-pressed', repeat > 0);
     b.setAttribute('aria-label', REPEAT[repeat]);
-    setIcon(b, repeat === 2 ? 'repeat-1' : 'repeat');
+    if (!b.classList.contains('queue-btn')) setIcon(b, repeat === 2 ? 'repeat-1' : 'repeat');
   }
+  paintQueue(); // sus botones de abajo y el de pausa de la pista que suena
 }
 // Los botones de aleatorio, repetir y cola existen en la barra, en pantalla completa y en las vistas.
 document.addEventListener('click', (e) => {
@@ -368,7 +369,31 @@ document.addEventListener('click', (e) => {
   }
   else if (act === 'queue') { $('#queue').showModal(); paintQueue(); }
 });
-for (const b of document.querySelectorAll('#player .like, #np .like')) b.onclick = () => b.dataset.like && toggleLike(b.dataset.like);
+// El me gusta de los reproductores: un toque la guarda; si ya está guardada, ofrece quitarla o sumarla a una playlist.
+for (const b of document.querySelectorAll('#player .like, #np .like')) {
+  b.onclick = () => {
+    const t = queue[pos];
+    if (!t || !liked.has(t.path)) return void (b.dataset.like && toggleLike(b.dataset.like));
+    menu(b, `Guardar ${t.title}`, [
+      { icon: 'list-plus', label: 'Agregar a playlist…', run: () => pickPlaylist(b, t) },
+      { icon: 'heart', label: 'Quitar de Canciones que te gustan', run: () => toggleLike(t.path) },
+    ]);
+  };
+}
+// Los tres puntos de la pantalla completa: lo que se puede hacer con la canción que suena.
+$('#np-more').onclick = () => {
+  const t = queue[pos];
+  if (!t) return;
+  const leave = (path) => { $('#np').close(); go('musica', path); };
+  menu($('#np-more'), `Acciones de ${t.title}`, [
+    !offline.active && { icon: 'heart', label: liked.has(t.path) ? 'Quitar de Canciones que te gustan' : 'Agregar a Canciones que te gustan', run: () => toggleLike(t.path) },
+    !offline.active && { icon: 'list-plus', label: 'Agregar a playlist…', run: () => pickPlaylist($('#np-more'), t) },
+    { icon: 'queue', label: 'Abrir la cola', run: () => { $('#queue').showModal(); paintQueue(); } },
+    !offline.active && { icon: 'cast', label: 'Dispositivos y jam', run: () => { toNormal(); $('#jam').showModal(); paintJam(); } },
+    { icon: 'disc', label: 'Ir al álbum', run: () => leave(`album/${t.albumPath}`) },
+    t.artistPath && { icon: 'user', label: 'Ir al artista', run: () => leave(`artista/${t.artistPath}`) },
+  ]);
+};
 
 // markPlaying resalta en la vista la pista que suena y pone al día los botones compartidos.
 export function markPlaying() {
@@ -626,18 +651,54 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowLeft') e.shiftKey ? prev() : seekTo((room ? roomTime() : deck ? deckTime() : resume) - 5);
 });
 
-// Cola «A continuación»
+// Cola: la pista que suena, lo que el usuario puso en cola («En la cola») y lo que sigue de la lista o las
+// sugerencias. Cada fila se arrastra por su agarre; Editar deja elegir varias para subirlas o quitarlas.
 
 const QUEUE_MAX = 100; // filas pintadas; una cola de miles de pistas no cabe en una lista cómoda
+let editing = false;
+const picked = new Set(); // en edición: las pistas elegidas (los objetos de la cola)
+// setTail deja lo que sigue después de la pista actual como list; m: cuántas del principio son «En la cola».
+function setTail(list, m) {
+  m = Math.max(0, Math.min(m, list.length));
+  if (room) return void jam.send('tail', { paths: list.map((t) => t.path), manual: m });
+  queue = [...queue.slice(0, pos + 1), ...list];
+  order = queue.slice();
+  manual = m;
+  paintQueue();
+  save();
+}
+// moveInQueue pasa la pista i de lo que sigue al lugar j (ya sin ella). Soltarla dentro de «En la cola» o justo
+// al final la deja ahí; sacarla de ahí la devuelve a lo que sigue.
+function moveInQueue(i, j) {
+  const rest = queue.slice(pos + 1);
+  if (i === j || !rest[i]) return;
+  let m = manual - (i < manual ? 1 : 0);
+  const [t] = rest.splice(i, 1);
+  rest.splice(j, 0, t);
+  if (j <= m) m++;
+  setTail(rest, m);
+}
 function queueRow(t, i) {
-  const b = el('button', { className: 'row' }, el('span', { className: 'cover small', style: '--tc: var(--t-audio)' }, cover(t)),
-    el('div', { className: 'row-text' }, el('p', { className: 'ellipsis', textContent: t.title }), el('p', { className: 'muted ellipsis', textContent: joinText(t.artist, t.auto && 'Sugerida') })));
-  if (i === pos) {
-    b.classList.add('playing');
+  const text = el('div', { className: 'row-text' }, el('p', { className: 'ellipsis', textContent: t.title }), el('p', { className: 'muted ellipsis', textContent: joinText(t.artist, t.auto && 'Sugerida') }));
+  const art = el('span', { className: 'cover small', style: '--tc: var(--t-audio)' }, cover(t));
+  if (i === pos) { // la que suena: se pausa y se reanuda desde aquí
+    const b = el('button', { className: 'row playing' }, art, text);
     b.setAttribute('aria-current', 'true');
     b.onclick = toggle;
-    return el('li', {}, b);
+    const pp = el('button', { className: 'icon-btn queue-play' }, icon(playing() ? 'pause' : 'play'));
+    pp.setAttribute('aria-label', playing() ? 'Pausar' : 'Reproducir');
+    pp.onclick = toggle;
+    return el('li', { className: 'row-wrap' }, b, pp);
   }
+  const k = i - pos - 1; // lugar dentro de lo que sigue
+  if (editing) {
+    const b = el('button', { className: 'row' }, el('span', { className: 'check' }, icon('check')), art, text);
+    b.setAttribute('role', 'checkbox');
+    b.setAttribute('aria-checked', picked.has(t));
+    b.onclick = () => { picked.has(t) ? picked.delete(t) : picked.add(t); paintQueue(); };
+    return el('li', { className: 'row-wrap' }, b);
+  }
+  const b = el('button', { className: 'row' }, art, text);
   b.setAttribute('aria-label', `Saltar a ${t.title}`);
   b.onclick = () => {
     if (!room) {
@@ -648,34 +709,118 @@ function queueRow(t, i) {
     if (streaming()) return streamDo('jump', { index: i });
     jam.send('jump', { index: i });
   };
-  const rm = el('button', { className: 'icon-btn' }, icon('x'));
-  rm.setAttribute('aria-label', `Quitar ${t.title} de la cola`);
-  rm.onclick = () => {
-    if (room) { jam.send('remove', { index: i, path: t.path }); return $('#queue-close').focus(); }
-    if (i <= pos + manual) manual--;
-    order = order.filter((x) => x !== t);
-    queue.splice(i, 1);
-    paintQueue();
-    save();
-    $('#queue-close').focus(); // el botón quitado se llevaba el foco
+  const grip = el('button', { className: 'icon-btn grip' }, icon('list'));
+  grip.setAttribute('aria-label', `Mover ${t.title}. Con el teclado: flechas arriba y abajo`);
+  grip.onkeydown = (e) => {
+    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
+    e.preventDefault();
+    moveInQueue(k, Math.max(0, Math.min(queue.length - pos - 2, k + (e.key === 'ArrowUp' ? -1 : 1))));
   };
-  return el('li', { className: 'row-wrap' }, b, rm);
+  const li = el('li', { className: 'row-wrap' }, b, grip);
+  li.dataset.k = k;
+  grip.onpointerdown = (e) => dragRow(e, li, k);
+  return li;
+}
+// dragRow arrastra una fila por su agarre: la fila sigue al dedo y una línea marca dónde quedaría.
+function dragRow(e, li, k) {
+  if (!e.isPrimary || e.button > 0) return;
+  e.preventDefault();
+  const grip = e.currentTarget;
+  const rows = [...li.parentElement.querySelectorAll('li[data-k]')];
+  const y0 = e.clientY;
+  let to = k;
+  grip.setPointerCapture(e.pointerId);
+  li.classList.add('dragging');
+  const move = (ev) => {
+    li.style.transform = `translateY(${ev.clientY - y0}px)`;
+    // El lugar: cuántas de las otras filas quedan por encima del dedo.
+    to = rows.filter((x) => x !== li && x.getBoundingClientRect().top + x.offsetHeight / 2 < ev.clientY).length;
+    for (const x of rows) x.classList.remove('drop-above', 'drop-below');
+    const others = rows.filter((x) => x !== li);
+    if (others[to]) others[to].classList.add('drop-above'); else others.at(-1)?.classList.add('drop-below');
+  };
+  const end = (ev) => {
+    grip.removeEventListener('pointermove', move);
+    grip.removeEventListener('pointerup', end);
+    grip.removeEventListener('pointercancel', end);
+    for (const x of rows) x.classList.remove('drop-above', 'drop-below');
+    li.classList.remove('dragging');
+    li.style.transform = '';
+    if (ev.type === 'pointerup') moveInQueue(k, to);
+  };
+  grip.addEventListener('pointermove', move);
+  grip.addEventListener('pointerup', end);
+  grip.addEventListener('pointercancel', end);
 }
 function paintQueue() {
   if (!$('#queue').open) return;
   const body = $('#queue-body');
+  const rest = queue.slice(pos + 1);
+  for (const t of [...picked]) if (!rest.includes(t)) picked.delete(t); // la cola cambió
+  if (!rest.length) editing = false;
+  $('#queue-clear').hidden = editing || !rest.length;
+  $('#queue-edit').hidden = !rest.length;
+  $('#queue-edit').textContent = editing ? 'Listo' : 'Editar';
+  $('#queue-edit').setAttribute('aria-pressed', editing);
+  paintQueueFoot(rest);
   if (pos < 0) return body.replaceChildren(el('p', { className: 'muted note', textContent: 'No hay nada en la cola.' }));
-  const rest = queue.slice(pos + 1, pos + 1 + QUEUE_MAX);
-  const more = queue.length - pos - 1 - rest.length;
+  const shown = rest.slice(0, QUEUE_MAX);
+  const more = rest.length - shown.length;
+  const m = Math.min(manual, shown.length);
+  const sep = (text) => el('li', { className: 'queue-sep', textContent: text });
+  const rows = shown.map((t, k) => queueRow(t, pos + 1 + k));
+  if (m > 0) rows.splice(m, 0, ...(m < shown.length ? [sep('A continuación')] : []));
   body.replaceChildren(...[
     el('h3', { className: 'section-title', textContent: 'Sonando' }),
     el('ul', { className: 'list' }, queueRow(queue[pos], pos)),
-    el('h3', { className: 'section-title', textContent: 'A continuación' }),
-    rest.length
-      ? el('ul', { className: 'list' }, rest.map((t, k) => queueRow(t, pos + 1 + k)))
+    el('h3', { className: 'section-title', textContent: m > 0 ? 'En la cola' : 'A continuación' }),
+    shown.length
+      ? el('ul', { className: 'list' }, rows)
       : el('p', { className: 'muted note', textContent: repeat === 1 ? 'La cola vuelve a empezar al terminar esta canción.' : 'Esta es la última canción de la cola.' }),
     more > 0 && el('p', { className: 'muted note', textContent: `Y ${plural(more, 'canción más', 'canciones más')}.` }),
   ].filter(Boolean));
+}
+// Abajo: aleatorio y repetir; en edición, qué hacer con las elegidas.
+function paintQueueFoot(rest) {
+  const btn = (glyph, text, attrs = {}) => {
+    const b = el('button', { className: 'queue-btn' }, icon(glyph), el('span', { textContent: text }));
+    for (const [k, v] of Object.entries(attrs)) b.setAttribute(k, v);
+    return b;
+  };
+  if (!editing) {
+    $('#queue-foot').replaceChildren(btn('shuffle', 'Aleatorio', { 'data-act': 'shuffle', 'aria-pressed': shuffle }),
+      btn(repeat === 2 ? 'repeat-1' : 'repeat', REPEAT[repeat], { 'data-act': 'repeat', 'aria-pressed': repeat > 0 }));
+    return;
+  }
+  const sel = rest.filter((t) => picked.has(t));
+  const others = rest.filter((t) => !picked.has(t));
+  const inQueue = (list) => list.filter((t) => rest.indexOf(t) < manual).length;
+  const top = btn('up', 'Mover al inicio');
+  const rm = btn('trash', sel.length ? `Quitar (${sel.length})` : 'Quitar');
+  top.disabled = rm.disabled = !sel.length;
+  const done = () => { picked.clear(); editing = false; };
+  top.onclick = () => { done(); setTail([...sel, ...others], sel.length + inQueue(others)); };
+  rm.onclick = () => { done(); setTail(others, inQueue(others)); };
+  $('#queue-foot').replaceChildren(top, rm);
+}
+$('#queue-edit').onclick = () => { editing = !editing; picked.clear(); paintQueue(); };
+$('#queue-clear').onclick = () => { setTail([], 0); toast('Se quitó lo que seguía en la cola.', { kind: 'ok' }); };
+$('#queue').addEventListener('close', () => { editing = false; picked.clear(); $('#queue').classList.remove('full'); });
+// En celular la cola es una hoja a media pantalla: desde el encabezado, deslizar hacia arriba la abre completa y
+// hacia abajo la encoge o la cierra.
+{
+  let y = null;
+  const head = $('#queue-head');
+  head.addEventListener('pointerdown', (e) => { if (e.isPrimary && !e.target.closest('button')) y = e.clientY; });
+  head.addEventListener('pointerup', (e) => {
+    if (y == null) return;
+    const dy = e.clientY - y;
+    y = null;
+    const q = $('#queue');
+    if (dy < -30) q.classList.add('full');
+    else if (dy > 30) q.classList.contains('full') ? q.classList.remove('full') : q.close();
+  });
+  head.addEventListener('pointercancel', () => (y = null));
 }
 
 // Cola, pista y posición se recuerdan en este navegador para retomar al volver a abrir la app.
@@ -783,13 +928,14 @@ function startRoom(extra = {}) {
   const from = Math.max(0, pos - 50);
   return jam.send('start', {
     paths: queue.slice(from, from + 500).map((t) => t.path), pos: Math.max(0, pos - from),
-    at: resume, playing: false, repeat, ...extra,
+    at: resume, playing: false, repeat, manual, ...extra,
   });
 }
 
 // syncRoom deja este reproductor igual a la sala: misma cola, misma pista y, si suena aquí, misma posición.
 function syncRoom() {
   queue = order = room.queue;
+  manual = room.manual || 0;
   const t = queue[room.pos];
   if (!t) { // sala recién creada sin música
     audio.pause();

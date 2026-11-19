@@ -133,6 +133,7 @@ type roomView struct {
 	At      float64        `json:"at"`
 	Stamp   int64          `json:"stamp"`
 	Qrev    int            `json:"qrev"`
+	Manual  int            `json:"manual"`          // cuántas de las que siguen las agregó alguien a mano; el resto es la lista o sugerencias
 	Queue   *[]music.Track `json:"queue,omitempty"` // solo cuando el dispositivo no tiene esta versión
 	Members []memberView   `json:"members"`
 }
@@ -168,7 +169,7 @@ func (h *Hub) snapshot(u *user, device string, have int) view {
 		return v.Devices[i].Name+v.Devices[i].ID < v.Devices[j].Name+v.Devices[j].ID
 	})
 	if r := u.room; r != nil {
-		rv := &roomView{Code: r.code, Open: r.open, Pos: r.pos, Playing: r.playing, At: r.cur(now), Stamp: now.UnixMilli(), Qrev: r.qrev}
+		rv := &roomView{Code: r.code, Open: r.open, Pos: r.pos, Playing: r.playing, At: r.cur(now), Stamp: now.UnixMilli(), Qrev: r.qrev, Manual: r.manual}
 		if have != r.qrev {
 			q := r.queue
 			if q == nil {
@@ -427,6 +428,7 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 		Device, Op, Code, Target, Path string
 		Paths                          []string
 		Pos, Index, Qrev, Repeat       int
+		Manual                         int
 		At                             float64
 		Playing, Open, Next, Add       bool
 	}
@@ -456,6 +458,7 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			h.rooms[room.code] = room
 			room.set(clampPos(len(tracks)), max(in.At, 0), in.Playing && len(tracks) > 0)
 			room.repeat = max(0, min(in.Repeat, 2))
+			room.manual = max(0, min(in.Manual, len(room.queue)-room.pos-1)) // lo que ya se había puesto en cola antes de sonar
 			room.members, u.room = []*user{u}, room
 			u.listen(in.Device, false)
 		}
@@ -553,7 +556,8 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			if len(tracks) > maxQueue-keep {
 				tracks = tracks[:max(0, maxQueue-keep)]
 			}
-			room.queue, room.manual = append(room.queue[:keep:keep], tracks...), 0
+			// manual: cuántas del principio son de la cola del usuario (al reordenar o quitar desde la cola).
+			room.queue, room.manual = append(room.queue[:keep:keep], tracks...), max(0, min(in.Manual, len(tracks)))
 			room.qrev++
 		case "jump":
 			if in.Index < 0 || in.Index >= len(room.queue) {

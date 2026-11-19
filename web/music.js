@@ -78,19 +78,23 @@ async function addTo(p, t) {
 }
 $('#side-new').onclick = () => createPlaylist();
 
+// pickPlaylist abre el menú para agregar la pista a una playlist (o crear una con ella).
+export async function pickPlaylist(anchor, t) {
+  if (offline.active) return toast(offline.NEEDS_NET);
+  const { playlists } = await ensureLib().catch(() => ({ playlists: [] }));
+  menu(anchor, 'Agregar a playlist', [
+    { icon: 'plus', label: 'Nueva playlist', run: () => createPlaylist(t) },
+    ...playlists.map((p) => ({ icon: 'music', label: p.name, run: () => addTo(p, t) })),
+  ]);
+}
+
 // Menú de una pista; extra son las acciones propias de la vista (p. ej. quitar de la playlist).
 function trackMenu(anchor, t, extra = []) {
   const here = route().path;
   menu(anchor, `Acciones de ${t.title}`, [
     { icon: 'skip', label: 'Reproducir a continuación', run: () => playNext(t) },
     { icon: 'queue', label: 'Agregar a la cola', run: () => enqueue(t) },
-    !offline.active && { icon: 'list-plus', label: 'Agregar a playlist…', run: async () => {
-      const { playlists } = await ensureLib().catch(() => ({ playlists: [] }));
-      menu(anchor, 'Agregar a playlist', [
-        { icon: 'plus', label: 'Nueva playlist', run: () => createPlaylist(t) },
-        ...playlists.map((p) => ({ icon: 'music', label: p.name, run: () => addTo(p, t) })),
-      ]);
-    } },
+    !offline.active && { icon: 'list-plus', label: 'Agregar a playlist…', run: () => pickPlaylist(anchor, t) },
     t.artistPath && here !== `artista/${t.artistPath}` && { icon: 'user', label: 'Ir al artista', run: () => go('musica', `artista/${t.artistPath}`) },
     here !== `album/${t.albumPath}` && { icon: 'disc', label: 'Ir al álbum', run: () => go('musica', `album/${t.albumPath}`) },
     ...(extra || []),
@@ -306,7 +310,7 @@ export function trackList(tracks, { covers = false, sub = (t) => t.artist, extra
   })));
 }
 
-// Deslizar una fila a la izquierda con el dedo la agrega a la cola, como las acciones de iOS. El mouse tiene el menú.
+// Con el dedo: deslizar una fila a la derecha la agrega a la cola; a la izquierda, a una playlist. El mouse tiene el menú.
 function swipeQueue(tracks, ul) {
   let d = null; // { id, x, y, li, on }
   let swallowUntil = 0; // el click que sigue al gesto no reproduce la pista
@@ -319,13 +323,13 @@ function swipeQueue(tracks, ul) {
     const dx = e.clientX - d.x;
     if (!d.on) {
       if (Math.hypot(dx, e.clientY - d.y) < 12) return; // todavía puede ser un toque
-      if (-dx < Math.abs(e.clientY - d.y) * 1.5) return (d = null); // desplazamiento vertical o hacia la derecha
+      if (Math.abs(dx) < Math.abs(e.clientY - d.y) * 1.5) return (d = null); // desplazamiento vertical
       d.on = true;
       d.li.classList.add('swipe');
       ul.setPointerCapture(e.pointerId);
     }
     d.li.style.transition = 'none';
-    d.li.style.transform = `translateX(${Math.max(Math.min(0, dx), -96)}px)`;
+    d.li.style.transform = `translateX(${Math.max(Math.min(96, dx), offline.active ? 0 : -96)}px)`; // sin conexión no hay playlists que editar
   });
   const end = (e) => {
     if (d?.id !== e.pointerId) return;
@@ -336,7 +340,10 @@ function swipeQueue(tracks, ul) {
     li.style.transition = 'transform .2s';
     li.style.transform = '';
     li.addEventListener('transitionend', () => li.classList.remove('swipe'), { once: true });
-    if (e.type === 'pointerup' && x - e.clientX > 72) enqueue(tracks[[...ul.children].indexOf(li)]);
+    const t = tracks[[...ul.children].indexOf(li)];
+    if (e.type !== 'pointerup' || !t) return;
+    if (e.clientX - x > 72) enqueue(t);
+    else if (x - e.clientX > 72 && !offline.active) pickPlaylist(li.querySelector('.more') ?? li, t);
   };
   ul.addEventListener('pointerup', end);
   ul.addEventListener('pointercancel', end);

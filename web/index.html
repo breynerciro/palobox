@@ -168,6 +168,7 @@
             <span id="now-sub" class="muted ellipsis"></span>
           </span>
         </button>
+        <button class="icon-btn narrow" data-act="jam" aria-label="Dispositivos y jam"><svg><use href="#i-cast"/></svg></button>
         <button class="icon-btn like" data-like="" aria-label="Me gusta" aria-pressed="false"><svg><use href="#i-heart"/></svg></button>
         <!-- Solo en Fotos y Archivos; en el celular se ve al enfocarlo (con el dedo se desliza hacia abajo). -->
         <button id="player-tuck" class="icon-btn" aria-label="Ocultar reproductor (la música sigue sonando)"><svg><use href="#i-down"/></svg></button>
@@ -175,9 +176,9 @@
       <div class="player-mid">
         <div class="player-btns">
           <button class="icon-btn toggle wide" data-act="shuffle" aria-label="Aleatorio" aria-pressed="false"><svg><use href="#i-shuffle"/></svg></button>
-          <button id="prev" class="icon-btn" aria-label="Canción anterior"><svg><use href="#i-prev"/></svg></button>
+          <button id="prev" class="icon-btn wide" aria-label="Canción anterior"><svg><use href="#i-prev"/></svg></button>
           <button id="playpause" class="icon-btn play" aria-label="Reproducir"><svg><use href="#i-play"/></svg></button>
-          <button id="next" class="icon-btn" aria-label="Siguiente canción"><svg><use href="#i-skip"/></svg></button>
+          <button id="next" class="icon-btn wide" aria-label="Siguiente canción"><svg><use href="#i-skip"/></svg></button>
           <button class="icon-btn toggle wide" data-act="repeat" aria-label="Repetir" aria-pressed="false"><svg><use href="#i-repeat"/></svg></button>
         </div>
         <div class="player-seek">
@@ -227,10 +228,7 @@
   <div class="np-bar">
     <button id="np-close" class="icon-btn" aria-label="Cerrar reproductor"><svg><use href="#i-down"/></svg></button>
     <p id="np-where" class="muted ellipsis">Reproduciendo</p>
-    <span class="np-bar-btns">
-      <button class="icon-btn" data-act="jam" aria-label="Dispositivos y jam"><svg><use href="#i-cast"/></svg></button>
-      <button class="icon-btn" data-act="queue" aria-label="Cola de reproducción"><svg><use href="#i-queue"/></svg></button>
-    </span>
+    <button id="np-more" class="icon-btn" aria-label="Más acciones para esta canción" aria-haspopup="menu"><svg><use href="#i-more"/></svg></button>
   </div>
   <div class="cover np-cover" id="np-cover" style="--tc: var(--t-audio)"><svg><use href="#i-music"/></svg></div>
   <div class="np-head">
@@ -251,14 +249,24 @@
     <button id="np-next" class="icon-btn" aria-label="Siguiente canción"><svg><use href="#i-skip"/></svg></button>
     <button class="icon-btn toggle" data-act="repeat" aria-label="Repetir" aria-pressed="false"><svg><use href="#i-repeat"/></svg></button>
   </div>
+  <div class="np-foot">
+    <button class="icon-btn" data-act="jam" aria-label="Dispositivos y jam"><svg><use href="#i-cast"/></svg></button>
+    <button class="icon-btn" data-act="queue" aria-label="Cola de reproducción"><svg><use href="#i-queue"/></svg></button>
+  </div>
 </dialog>
 
 <dialog autofocus id="queue" class="panel" aria-labelledby="queue-title">
-  <div class="panel-head">
+  <div class="panel-head" id="queue-head">
+    <span class="sheet-grip" aria-hidden="true"></span>
     <h2 id="queue-title">Cola</h2>
-    <button id="queue-close" class="icon-btn" aria-label="Cerrar cola"><svg><use href="#i-x"/></svg></button>
+    <span class="queue-tools">
+      <button id="queue-clear" class="btn secondary small">Limpiar</button>
+      <button id="queue-edit" class="btn secondary small" aria-pressed="false">Editar</button>
+      <button id="queue-close" class="icon-btn" aria-label="Cerrar cola"><svg><use href="#i-x"/></svg></button>
+    </span>
   </div>
   <div id="queue-body"></div>
+  <div id="queue-foot"></div>
 </dialog>
 
 <dialog autofocus id="jam" class="panel" aria-labelledby="jam-title">

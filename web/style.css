@@ -178,11 +178,13 @@ body:has(#upbar:not([hidden])) { --up-h: 52px; } /* lo último de la vista no qu
 
 /* ---- Música: pistas, estanterías, accesos rápidos, filtros ---- */
 .tracks .row { padding-right: 4px; }
-/* Deslizar a la izquierda agrega a la cola: la fila se corre y deja ver el aviso */
+/* Deslizar a la derecha agrega a la cola y a la izquierda a una playlist: la fila se corre y deja ver el aviso */
 .tracks > li { touch-action: pan-y; }
 .tracks > li.swipe { position: relative; }
-.tracks > li.swipe::before { content: 'A la cola'; position: absolute; inset: 0 auto 0 100%; width: 96px; display: grid; place-items: center;
+.tracks > li.swipe::before, .tracks > li.swipe::after { position: absolute; top: 0; bottom: 0; width: 96px; display: grid; place-items: center;
   background: var(--accent); color: var(--on-accent); font-size: .85rem; font-weight: 600; }
+.tracks > li.swipe::before { content: 'A la cola'; right: 100%; }
+.tracks > li.swipe::after { content: 'A playlist'; left: 100%; }
 .dur { flex: none; min-width: 38px; text-align: right; font-size: .82rem; font-variant-numeric: tabular-nums; }
 .like { color: var(--muted); }
 .row-wrap .like[aria-pressed=true], .like[aria-pressed=true] { color: var(--accent); }
@@ -195,7 +197,7 @@ li[draggable=true] { cursor: grab; }
 .shelf { display: flex; gap: 12px; overflow-x: auto; padding: 4px var(--gutter) 8px; scroll-snap-type: x proximity; scroll-padding-left: var(--gutter); }
 .shelf > .card { flex: 0 0 var(--card-w); scroll-snap-align: start; }
 /* Flechas al estilo Spotify: aparecen al pasar el mouse por la fila, centradas en las carátulas. */
-.shelf-wrap { position: relative; --card-w: 132px; } /* lo comparten las tarjetas y la altura de las flechas */
+.shelf-wrap { position: relative; --card-w: 116px; } /* lo comparten las tarjetas y la altura de las flechas */
 @media (min-width: 900px) { .shelf-wrap { --card-w: 168px; } }
 .shelf-arrow { position: absolute; top: calc(4px + var(--card-w) / 2); translate: 0 -50%; z-index: 2; width: 36px; min-height: 36px;
   border-radius: 50%; background: rgb(0 0 0 / .7); color: #fff; opacity: 0; transition: opacity var(--fast), background var(--fast); }
@@ -491,7 +493,6 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .in-room.own-stream [data-act=shuffle], .in-room.own-stream [data-act=repeat] { opacity: 1; } /* en la sala propia del flujo continuo sí funcionan */
 .jam-code { margin: 4px var(--gutter) 8px; font-size: 2rem; font-weight: 700; letter-spacing: .2em; text-align: center; font-variant-numeric: tabular-nums; -webkit-user-select: all; user-select: all; }
 .jam-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px var(--gutter) 8px; }
-.np-bar-btns { display: flex; }
 
 /* Cuenta de solo Música: sin salidas a Fotos ni Archivos (el servidor tampoco los entrega). */
 .music-only #mtabs-exit, .music-only .side-foot { display: none; }
@@ -517,3 +518,38 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .cover.downloads { color: #fff; background: linear-gradient(145deg, #4fb6c6, #1f6f7d); }
 .offline-box { margin-top: 12px; }
 .offline-box .bar { margin: 6px 0 4px; }
+
+/* ---- Reproductor y cola al estilo de una app de música ---- */
+@media (min-width: 900px) { .narrow { display: none !important; } } /* en escritorio ya está a la derecha de la barra */
+.np-bar #np-where { flex: 1; min-width: 0; text-align: center; }
+.np-foot { display: flex; justify-content: space-between; margin: 0 -12px; }
+/* Cola */
+.queue-tools { display: flex; align-items: center; gap: 6px; }
+#queue-body { padding-bottom: 8px; }
+#queue-foot { display: flex; gap: 8px; padding: 8px var(--gutter) calc(var(--safe-b) + 10px); }
+.queue-btn { flex: 1; display: grid; justify-items: center; gap: 4px; min-height: 56px; padding: 10px 6px; border: 0; border-radius: var(--radius);
+  background: var(--surface-2); color: var(--text); font: inherit; font-size: .78rem; font-weight: 600; cursor: pointer; }
+.queue-btn svg { width: 20px; height: 20px; }
+.queue-btn[aria-pressed=true] { color: var(--accent); }
+.queue-btn:disabled { opacity: .4; cursor: default; }
+#queue-foot .queue-btn { opacity: 1; } /* aquí aleatorio y repetir no se atenúan: la sala propia los admite */
+.queue-sep { list-style: none; padding: 16px 12px 8px; font-size: .95rem; font-weight: 700; background: var(--surface); }
+.grip { color: var(--muted); touch-action: none; cursor: grab; }
+#queue-body li.dragging { position: relative; z-index: 2; background: var(--surface-2); box-shadow: 0 8px 24px rgb(0 0 0 / .5); }
+#queue-body li.drop-above { box-shadow: inset 0 2px 0 var(--accent); }
+#queue-body li.drop-below { box-shadow: inset 0 -2px 0 var(--accent); }
+.check { flex: none; display: grid; place-items: center; width: 22px; height: 22px; border: 2px solid var(--muted); border-radius: 50%; }
+.check svg { width: 14px; height: 14px; opacity: 0; }
+[aria-checked=true] .check { border-color: var(--accent); background: var(--accent); color: var(--on-accent); }
+[aria-checked=true] .check svg { opacity: 1; }
+.sheet-grip { display: none; }
+@media (max-width: 899px) {
+  /* En celular la cola es una hoja inferior a media pantalla; deslizar el encabezado hacia arriba la abre completa. */
+  #queue { inset: auto 0 0 0; width: 100vw; height: 60dvh; border-radius: 16px 16px 0 0; transition: height .2s var(--ease); }
+  #queue.full { height: 100dvh; border-radius: 0; }
+  #queue .panel-head { position: relative; padding-top: 20px; touch-action: none; }
+  #queue.full .panel-head { padding-top: calc(env(safe-area-inset-top) + 20px); }
+  .sheet-grip { display: block; position: absolute; top: 8px; left: 50%; translate: -50% 0; width: 36px; height: 4px; border-radius: 999px; background: var(--line); }
+  #queue.full .sheet-grip { top: calc(env(safe-area-inset-top) + 8px); }
+}
+@media (prefers-reduced-motion: reduce) { #queue { transition: none; } }

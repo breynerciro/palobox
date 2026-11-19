@@ -127,6 +127,16 @@ func TestJam(t *testing.T) {
 	if len(q) != 3 || q[1].(map[string]any)["path"] != suelta {
 		t.Fatalf("add: %v", m)
 	}
+	// «Agregar a la cola» va detrás de lo ya agregado a mano, no de primero; y la cola se puede reordenar (tail).
+	last := q[2].(map[string]any)["path"].(string)
+	_, m = cmd(luis, "luistelefono", map[string]any{"op": "add", "paths": []string{last}})
+	if q = room(m)["queue"].([]any); len(q) != 4 || q[1].(map[string]any)["path"] != suelta || q[2].(map[string]any)["path"] != last || room(m)["manual"].(float64) != 2 {
+		t.Fatalf("add al final de lo agregado: %v", m)
+	}
+	_, m = cmd(luis, "luistelefono", map[string]any{"op": "tail", "paths": []string{suelta, last}, "manual": 1})
+	if q = room(m)["queue"].([]any); len(q) != 3 || q[1].(map[string]any)["path"] != suelta || room(m)["manual"].(float64) != 1 {
+		t.Fatalf("tail con manual: %v", m)
+	}
 	if _, m = cmd(luis, "luistelefono", map[string]any{"op": "next"}); room(m)["pos"].(float64) != 1 {
 		t.Fatalf("next: %v", m)
 	}
