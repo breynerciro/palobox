@@ -13,8 +13,21 @@ SSH="ssh -o ControlMaster=auto -o ControlPath=/tmp/palobox-deploy-%C -o ControlP
 
 docker build -t palobox .
 docker build -t palobox-spotdl spotdl
-docker save palobox palobox-spotdl | gzip | $SSH "$HOST" "mkdir -p $DIR && docker load"
-$SSH "$HOST" "cat > $DIR/compose.yml" < compose.yml
+# Solo se envían las imágenes que cambiaron. El ID cambia en cada build aunque el contenido sea igual
+# (lleva la fecha de creación), así que se comparan configuración y capas. Sin gzip: las capas ya van
+# comprimidas (medido: 1:1) y por el Wi-Fi del servidor cada byte cuenta.
+SIG='{{json .Config}}{{.RootFS.Layers}}'
+send=()
+for img in palobox palobox-spotdl; do
+  [ "$(docker image inspect -f "$SIG" $img)" = "$($SSH "$HOST" "docker image inspect -f '$SIG' $img 2>/dev/null" || true)" ] || send+=("$img")
+done
+if [ ${#send[@]} -gt 0 ]; then
+  echo "deploy: enviando ${send[*]}"
+  docker save "${send[@]}" | $SSH "$HOST" "docker load"
+else
+  echo "deploy: las imágenes del servidor ya están al día"
+fi
+$SSH "$HOST" "mkdir -p $DIR && cat > $DIR/compose.yml" < compose.yml
 # compose lee ADMIN, DATA_PATH y TZ del .env que tenga al lado.
 if [ -f .env ]; then $SSH "$HOST" "cat > $DIR/.env" < .env; fi
 # Token app↔spotDL: se genera una sola vez en el servidor y nunca sale de ahí.
