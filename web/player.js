@@ -507,10 +507,15 @@ export function toggle() {
   if (streaming()) {
     // Pausar y reanudar no sueltan el flujo: el teléfono guarda su colchón y sigue con el mismo audio, dentro del
     // propio toque (o del botón de la pantalla bloqueada), que es lo único que iOS deja hacer sin la app abierta.
-    const on = !audio.paused;
-    if (on) audio.pause();
-    else if (stream && audio.src) audio.play().catch(warnPlay);
-    return void jam.send(on ? 'pause' : 'play');
+    if (!audio.paused) {
+      audio.pause();
+      return void jam.send('pause');
+    }
+    // El flujo en pausa pudo cerrarse (Cloudflare corta una conexión que pasa un rato sin datos): se abre otro
+    // aquí mismo, dentro del toque. Si se abriera al llegar la respuesta del servidor, Safari no lo dejaría sonar.
+    if (!stream || !audio.src || audio.ended || audio.error) return streamDo('seek', { at: roomTime() });
+    audio.play().catch(warnPlay);
+    return void jam.send('play');
   }
   jam.send(room.playing ? 'pause' : 'play'); // suena en otro dispositivo: este es el control remoto
 }
@@ -734,14 +739,21 @@ function syncStream(t) {
     if (audio.paused) audio.play().catch(streamBlocked);
     return;
   }
-  if (stream && audio.src && !audio.paused && document.visibilityState !== 'visible') {
+  // En segundo plano el iPhone no deja abrir otro audio: se salta el colchón dentro del mismo. Chrome en Android
+  // no deja moverse dentro de un audio en vivo, pero sí abrir otro: ahí se reabre como con la app a la vista.
+  if (stream && audio.src && !audio.paused && document.visibilityState !== 'visible' && (apple || seekable())) {
     stream = mark;
-    return void skipBuffer(); // en segundo plano no se abre otro audio: se salta el colchón dentro del mismo
+    return void skipBuffer();
   }
   stream = mark;
+  openStream();
+}
+function openStream() {
   audio.src = `/api/jam/stream?device=${jam.deviceId}&t=${Date.now()}`;
   audio.play().then(() => (warned = false)).catch(streamBlocked);
 }
+const apple = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
+const seekable = () => audio.seekable.length > 0 && audio.seekable.end(audio.seekable.length - 1) > audio.currentTime + 1;
 // streamDo salta, devuelve o adelanta en el flujo continuo. La acción viaja en la misma petición que abre el audio
 // nuevo, y esa petición se hace aquí mismo, dentro del toque: la canción anterior se corta al instante y, como
 // el cambio lo pidió el usuario (también desde la pantalla bloqueada), iOS lo deja cargar. La sala se adelanta
@@ -792,7 +804,9 @@ async function skipBuffer() {
   function check() {
     if (edge() >= from + 0.5) { // ya llegó medio segundo de lo nuevo: alcanza para caer en él sin quedarse sin audio
       stop();
-      try { audio.currentTime = from + (exact ? 0.05 : 0.3); } catch (e) { console.warn('No se pudo saltar el colchón:', e); }
+      const to = from + (exact ? 0.05 : 0.3);
+      try { audio.currentTime = to; } catch (e) { console.warn('No se pudo saltar el colchón:', e); }
+      if (!apple && Math.abs(audio.currentTime - to) > 1) openStream(); // el navegador ignoró el salto: se reabre
     } else if (Date.now() - started > 12000) stop(); // lo viejo en camino puede tardar en llegar: es el colchón entero
   }
   if (!r || !(from >= 0) || !streaming()) return stop();
