@@ -746,6 +746,7 @@ function dragRow(e, li, k) {
   let to = k;
   grip.setPointerCapture(e.pointerId);
   li.classList.add('dragging');
+  rowDrag = true;
   const move = (ev) => {
     li.style.transform = `translateY(${ev.clientY - y0}px)`;
     // El lugar: cuántas de las otras filas quedan por encima del dedo.
@@ -761,12 +762,16 @@ function dragRow(e, li, k) {
     for (const x of rows) x.classList.remove('drop-above', 'drop-below');
     li.classList.remove('dragging');
     li.style.transform = '';
-    if (ev.type === 'pointerup') moveInQueue(k, to);
+    rowDrag = false;
+    if (ev.type === 'pointerup' && to !== k) moveInQueue(k, to);
+    else paintQueue(); // lo que llegó durante el arrastre
   };
   grip.addEventListener('pointermove', move);
   grip.addEventListener('pointerup', end);
   grip.addEventListener('pointercancel', end);
 }
+let painted = ''; // lo que muestran las filas de la cola (paintQueue)
+let rowDrag = false; // una fila va en el dedo: la cola no se repinta
 function paintQueue() {
   if (!$('#queue').open) return;
   const body = $('#queue-body');
@@ -778,10 +783,15 @@ function paintQueue() {
   $('#queue-edit').textContent = editing ? 'Listo' : 'Editar';
   $('#queue-edit').setAttribute('aria-pressed', editing);
   paintQueueFoot(rest);
-  if (pos < 0) return body.replaceChildren(el('p', { className: 'muted note', textContent: 'No hay nada en la cola.' }));
+  if (pos < 0) return (painted = '', body.replaceChildren(el('p', { className: 'muted note', textContent: 'No hay nada en la cola.' })));
   const shown = rest.slice(0, QUEUE_MAX);
   const more = rest.length - shown.length;
   const m = Math.min(manual, shown.length);
+  // Los avisos de la sala llegan a menudo y casi siempre sin cambios en la cola: rehacer las filas haría
+  // parpadear las carátulas y soltaría la fila que se está arrastrando.
+  const key = JSON.stringify([pos, queue[pos].path, playing(), editing, m, more, repeat, shown.map((t) => [t.path, t.auto, picked.has(t)])]);
+  if (rowDrag || (key === painted && body.isConnected && body.childElementCount)) return;
+  painted = key;
   const sep = (text) => el('li', { className: 'queue-sep', textContent: text });
   const rows = shown.map((t, k) => queueRow(t, pos + 1 + k));
   if (m > 0) rows.splice(m, 0, ...(m < shown.length ? [sep('A continuación')] : []));
