@@ -18,6 +18,18 @@ audio.hidden = true;
 // Dentro de la página y no suelto: así lo tenía la versión que sí mostraba la reproducción en la
 // Dynamic Island y la pantalla bloqueada del iPhone.
 document.body.append(audio);
+// iOS solo deja sonar sin un toque a un audio que ya sonó con uno. Casi todo lo de la sala suena cuando responde el
+// servidor, ya fuera del toque (por Cloudflare tarda más de lo que Safari espera): el primer toque en la app lo
+// desbloquea con un play y pause seguidos, sin que alcance a sonar nada. Basta una vez por carga de la página.
+function unlock() {
+  document.removeEventListener('touchend', unlock, true);
+  document.removeEventListener('click', unlock, true);
+  if (!audio.paused) return;
+  audio.play().catch(() => {});
+  audio.pause();
+}
+document.addEventListener('touchend', unlock, true);
+document.addEventListener('click', unlock, true);
 // Sesión de audio de reproducción (Audio Session API, Safari 17+): sin esto iOS puede tratar la app como
 // sonido secundario y silenciarla en segundo plano o con el interruptor de silencio.
 try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
