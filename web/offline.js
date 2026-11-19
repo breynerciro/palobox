@@ -33,8 +33,11 @@ export const enabled = () => state.musicOnly || forced; // quién puede descarga
 export const has = (path) => !!state.tracks[path];
 export const count = () => Object.keys(state.tracks).length;
 export const bytes = () => Object.values(state.tracks).reduce((n, x) => n + x.bytes, 0);
-// saved: el usuario que puede entrar sin conexión en este celular (el último que inició sesión y descargó algo).
-export const saved = () => (state.user && count() ? { name: state.user, admin: false, musicOnly: true } : null);
+// saved: el usuario que puede entrar sin conexión en este celular: el último que inició sesión, si su cuenta
+// puede descargar. Entra aunque todavía no haya bajado nada; verá la biblioteca vacía.
+export const saved = () => (state.user && enabled() ? { name: state.user, admin: false, musicOnly: true } : null);
+// tracks: todo lo descargado, ordenado por artista, álbum y número de pista (la playlist «Canciones descargadas»).
+export const tracks = () => all().sort((a, b) => (a.artistPath || '').localeCompare(b.artistPath || '', 'es') || (a.albumPath || '').localeCompare(b.albumPath || '', 'es') || a.num - b.num);
 export function enter() {
   active = true;
   document.body.classList.add('offline');

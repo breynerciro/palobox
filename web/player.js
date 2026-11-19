@@ -59,7 +59,29 @@ let STREAM = (() => {
 // Sin conexión no hay servidor que mande el flujo: el reproductor vuelve a ser local, sobre un solo audio armado
 // en el celular con lo descargado (deck, más abajo).
 export function goOffline() {
+  // Si la red se cae con la app abierta, lo que sonaba sigue donde iba, ya desde lo descargado.
+  const now = queue[pos];
+  const at = room ? roomTime() : audio.currentTime || resume;
+  const play = here && (room ? room.playing : !audio.paused);
   STREAM = false;
+  jam.close();
+  stream = null;
+  room = null;
+  devices = [];
+  here = true;
+  document.body.classList.remove('in-room', 'own-stream');
+  $('#jam').close();
+  if (!now) return;
+  queue = queue.filter((t) => offline.has(t.path));
+  order = order.filter((t) => offline.has(t.path));
+  epoch++;
+  const i = queue.indexOf(now);
+  if (queue.length) return load(Math.max(0, i), { play: play && i >= 0, at: i < 0 ? 0 : at });
+  audio.pause(); // nada de la cola está descargado: el reproductor se guarda
+  audio.removeAttribute('src');
+  pos = -1;
+  $('#player').hidden = true;
+  document.body.classList.remove('has-player');
 }
 let stream = null; // { pos, origin, end, held }: qué traía la sala cuando se abrió (o se dio por bueno) el flujo que suena
 const streaming = () => STREAM && !!room && here;

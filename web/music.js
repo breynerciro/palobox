@@ -94,9 +94,10 @@ function trackMenu(anchor, t, extra = []) {
     t.artistPath && here !== `artista/${t.artistPath}` && { icon: 'user', label: 'Ir al artista', run: () => go('musica', `artista/${t.artistPath}`) },
     here !== `album/${t.albumPath}` && { icon: 'disc', label: 'Ir al álbum', run: () => go('musica', `album/${t.albumPath}`) },
     ...(extra || []),
-    canDownload() && (offline.has(t.path)
-      ? { icon: 'trash', label: 'Quitar de las descargas', run: async () => { await offline.remove([t.path]); toast(`«${t.title}» ya no está en este celular.`, { kind: 'ok' }); render(); } }
-      : { icon: 'download', label: 'Descargar', run: () => fetchOffline([t]) }),
+    // Quitar una descarga se puede con o sin conexión; descargar, solo con conexión.
+    offline.has(t.path) && (offline.enabled() || offline.active)
+      && { icon: 'trash', label: 'Quitar de las descargas', danger: true, run: async () => { await offline.remove([t.path]); toast(`«${t.title}» ya no está en este celular.`, { kind: 'ok' }); render(); } },
+    canDownload() && !offline.has(t.path) && { icon: 'download', label: 'Descargar', run: () => fetchOffline([t]) },
   ]);
 }
 
@@ -154,9 +155,10 @@ async function fetchOffline(tracks, playlist) {
 }
 // downloadButton descarga (o quita) todas las pistas de un álbum o una playlist.
 export function downloadButton(tracks, playlist) {
-  if (!canDownload() || !tracks.length) return null;
+  if (!tracks.length || !(offline.enabled() || offline.active)) return null;
   // Una playlist está descargada si además se eligió tenerla: sus canciones pueden estar por un álbum y ella no.
   const all = tracks.every((t) => offline.has(t.path)) && (!playlist || offline.keeps(playlist.id));
+  if (offline.active && !all) return null; // sin conexión solo se puede quitar lo descargado
   const b = el('button', { className: 'icon-btn toggle' }, icon('download'));
   b.setAttribute('aria-pressed', all);
   b.setAttribute('aria-label', all ? 'Quitar de las descargas' : 'Descargar para escuchar sin conexión');
@@ -170,23 +172,25 @@ export function downloadButton(tracks, playlist) {
   return b;
 }
 // offlineBox resume lo descargado en Tu biblioteca y deja borrarlo todo.
+// wipeDownloads borra toda la música descargada de este celular (la cuenta sigue pudiendo entrar sin conexión).
+export async function wipeDownloads() {
+  const mb = Math.round(offline.bytes() / 1048576);
+  if (!(await ask({ heading: '¿Borrar todas las descargas?', text: `Se liberan ${mb} MB de este celular. La música sigue en la biblioteca.`, ok: 'Borrar', danger: true }))) return;
+  const user = offline.saved();
+  await offline.wipe();
+  if (user) await offline.login(user); // sigue siendo su celular: solo se van las canciones
+  render();
+}
 export function offlineBox() {
   const n = offline.count();
-  if (!offline.enabled() || !n) return null;
+  if (!(offline.enabled() || offline.active) || !n) return null;
   const mb = Math.round(offline.bytes() / 1048576);
   const row = el('div', { className: 'row static' }, el('span', { className: 'type', style: '--tc: var(--t-audio)' }, icon('download')),
     el('div', { className: 'row-text' }, el('p', { textContent: `${plural(n, 'canción descargada', 'canciones descargadas')} · ${mb} MB` }),
       el('p', { className: 'muted', textContent: offline.active ? 'Estás sin conexión: esto es lo que hay en este celular.' : 'Disponibles en este celular aunque no haya conexión.' })));
-  if (offline.active) return el('ul', { className: 'list offline-box' }, el('li', {}, row));
   const del = el('button', { className: 'icon-btn' }, icon('trash'));
   del.setAttribute('aria-label', 'Borrar todas las descargas');
-  del.onclick = async () => {
-    if (!(await ask({ heading: '¿Borrar todas las descargas?', text: `Se liberan ${mb} MB de este celular. La música sigue en la biblioteca.`, ok: 'Borrar', danger: true }))) return;
-    const user = offline.saved();
-    await offline.wipe();
-    if (user) await offline.login(user); // sigue siendo su celular: solo se van las canciones
-    render();
-  };
+  del.onclick = wipeDownloads;
   return el('ul', { className: 'list offline-box' }, el('li', { className: 'row-wrap' }, row, del));
 }
 
@@ -198,9 +202,11 @@ export function cover(path, { round = false, small = false, glyph = 'music' } = 
     icon(glyph), path != null && lazyImg(thumbUrl('musica', path)));
 }
 const likedCover = (small) => el('div', { className: `cover liked${small ? ' small' : ''}` }, icon('heart'));
+export const downloadsCover = (small) => el('div', { className: `cover downloads${small ? ' small' : ''}` }, icon('download'));
 
 // Lo que puede haber en la biblioteca, reducido a lo que necesita una tarjeta o una fila.
 export const item = {
+  downloads: () => ({ href: href('musica', 'descargas'), name: 'Canciones descargadas', sub: joinText('Playlist', plural(offline.count(), 'canción', 'canciones')), when: Infinity, art: downloadsCover }),
   liked: () => ({ href: href('musica', 'gustan'), name: 'Canciones que te gustan', sub: joinText('Playlist', plural(liked.size, 'canción', 'canciones')), when: Infinity, art: likedCover }),
   playlist: (p) => ({ href: href('musica', `playlist/${p.id}`), name: p.name, sub: joinText('Playlist', plural(p.tracks, 'canción', 'canciones')), when: p.updated,
     art: (small) => cover(p.tracks ? p.cover : null, { small }) }),
@@ -226,6 +232,8 @@ export function libItems(d, { show = '', recent = true } = {}) {
     ...(pick('albums') ? d.albums.filter((a) => a.saved).map(item.album) : [])];
   items.sort(recent ? (a, b) => b.when - a.when : (a, b) => a.name.localeCompare(b.name, 'es'));
   if (pick('playlists')) items.unshift(item.liked()); // siempre fija arriba
+  // Lo que hay en este celular, antes que todo: sin conexión es lo único que se puede oír.
+  if (pick('playlists') && (offline.active || (offline.enabled() && offline.count()))) items.unshift(item.downloads());
   return items;
 }
 

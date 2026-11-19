@@ -1,7 +1,7 @@
 // Sesión: peticiones autenticadas, entrada y salida.
 import { $, json, ask, toast } from './lib.js';
 import { render } from './nav.js';
-import { restore, reset, goOffline } from './player.js';
+import { restore, reset, goOffline, audio } from './player.js';
 import { forget, resumeDownloads } from './music.js';
 import * as offline from './offline.js';
 
@@ -75,15 +75,32 @@ function enterOffline() {
   if (offline.active) return;
   offline.enter();
   goOffline();
-  toast('Sin conexión: se muestra tu música descargada.', { kind: 'warn' });
+  toast('Modo offline: solo está tu música descargada.', { kind: 'warn' });
   const back = async () => {
     if (document.visibilityState !== 'visible') return;
     const r = await fetch('/api/version', { cache: 'no-store' }).catch(() => null);
-    if (r?.ok) location.reload(); // volvió el servidor: la app arranca de nuevo, ya con todo
+    // Volvió el servidor: la app arranca de nuevo, ya con todo. Si está sonando se espera a la pausa para no cortar.
+    if (r?.ok && audio.paused) location.reload();
   };
   setInterval(back, 20000);
   document.addEventListener('visibilitychange', back);
   window.addEventListener('online', back);
+}
+
+// watch detecta sola la caída de la conexión en las cuentas que pueden descargar, sin esperar a que falle un toque.
+let watching = false;
+function watch() {
+  if (watching || !offline.enabled()) return;
+  watching = true;
+  let misses = 0;
+  const drop = () => { if (!offline.active && offline.saved()) { enterOffline(); render(); } };
+  window.addEventListener('offline', drop);
+  setInterval(async () => {
+    if (offline.active || document.visibilityState !== 'visible') return;
+    const r = await fetch('/api/version', { cache: 'no-store', signal: AbortSignal.timeout(5000) }).catch(() => null);
+    misses = r ? 0 : misses + 1;
+    if (misses >= 2) drop(); // dos seguidas: un tropiezo de la red móvil no cambia de modo
+  }, 10000);
 }
 
 export let isAdmin = false;
@@ -146,7 +163,7 @@ window.addEventListener('hashchange', () => inviteToken() && start()); // el enl
 export async function start() {
   const token = inviteToken();
   if (token) return showInvite(token);
-  const r = await fetch('/api/me').catch(() => null);
+  const r = await fetch('/api/me', { signal: AbortSignal.timeout(6000) }).catch(() => null); // sin servidor no se queda esperando
   let me = offline.saved();
   if (r?.ok) {
     me = await r.json();
@@ -154,12 +171,13 @@ export async function start() {
     // Quien puede descargar necesita que la app abra sin servidor; a los demás no se les instala nada.
     if (offline.enabled() && 'serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
   } else if (r || !me) return showLogin(); // el servidor respondió que no hay sesión, o no hay red ni nada descargado
-  else enterOffline(); // sin red, pero con música descargada: entra quien la descargó
+  else enterOffline(); // sin red: entra quien usó este celular, con lo que tenga descargado
   isAdmin = me.admin;
   musicOnly = !!me.musicOnly;
   document.body.classList.toggle('music-only', musicOnly);
   userName = me.name;
   restore(me.name);
+  watch();
   $('#login').hidden = true;
   $('#app').hidden = false;
   render();

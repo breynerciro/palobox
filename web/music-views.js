@@ -4,7 +4,7 @@ import { href, go, render, route } from './nav.js';
 import { api, userName } from './session.js';
 import * as offline from './offline.js';
 import { playAt, isShuffle } from './player.js';
-import { library, ensureLib, liked, createPlaylist, cover, item, card, libRow, trackList, libItems, saveButton, downloadButton, offlineBox } from './music.js';
+import { library, ensureLib, liked, createPlaylist, cover, item, card, libRow, trackList, libItems, saveButton, downloadButton, offlineBox, downloadsCover, wipeDownloads } from './music.js';
 
 const OFFLINE = 'Sin conexión con el servidor.';
 const frag = (...kids) => { const f = document.createDocumentFragment(); f.append(...kids.flat().filter(Boolean)); return f; };
@@ -36,6 +36,7 @@ export function musicView(path) {
     case 'artista': return artistView(arg);
     case 'playlist': return playlistView(arg);
     case 'gustan': return likedView();
+    case 'descargas': return downloadsView();
   }
   return Promise.resolve(gone('Esta página no existe'));
 }
@@ -66,6 +67,9 @@ function scroller(row) {
 
 async function homeView() {
   const d = await library();
+  if (!d.albums.length && offline.active) {
+    return empty('download', 'No hay música descargada', 'Estás en modo offline y en este celular aún no hay canciones. Cuando tengas conexión, toca el botón de descarga en un álbum o una playlist.');
+  }
   if (!d.albums.length) {
     return empty('music', 'Tu música empieza aquí', 'La biblioteca está vacía. En Buscar puedes pegar un enlace de Spotify; aparece aquí cuando termine de descargar.',
       linkBtn('Buscar música', href('musica', 'buscar'), 'search'));
@@ -421,6 +425,21 @@ async function likedView() {
     meta: [songs(tracks.length), total(tracks)],
     body: tracks.length ? trackList(tracks, { covers: true, sub: (t) => joinText(t.artist, t.album) })
       : empty('heart', 'Aún no te gusta ninguna', 'Toca el corazón de una canción y queda guardada aquí.', linkBtn('Buscar música', href('musica', 'buscar'), 'search')),
+  });
+}
+
+// Canciones descargadas: todo lo que hay en este celular, con o sin conexión. Desde aquí se quitan.
+async function downloadsView() {
+  await ensureLib().catch(() => {});
+  const tracks = offline.tracks();
+  const del = el('button', { className: 'icon-btn' }, icon('trash'));
+  del.setAttribute('aria-label', 'Borrar todas las descargas');
+  del.onclick = wipeDownloads;
+  return page({
+    label: 'Playlist', title: 'Canciones descargadas', art: downloadsCover(), tracks, actions: [tracks.length > 0 && del],
+    meta: [songs(tracks.length), total(tracks), tracks.length > 0 && `${Math.round(offline.bytes() / 1048576)} MB en este celular`],
+    body: tracks.length ? trackList(tracks, { covers: true, sub: (t) => joinText(t.artist, t.album) })
+      : empty('download', 'Aún no hay descargas', offline.active ? 'Cuando tengas conexión, toca el botón de descarga en un álbum o una playlist.' : 'Toca el botón de descarga en un álbum o una playlist para escucharlos sin conexión.'),
   });
 }
 
