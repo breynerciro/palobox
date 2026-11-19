@@ -69,6 +69,7 @@ type jamRoom struct {
 	queue   []music.Track
 	qrev    int
 	manual  int // pistas agregadas justo después de la actual: «agregar a la cola» va detrás de ellas
+	repeat  int // 0 apagado, 1 toda la cola, 2 solo la pista actual; solo en la sala propia del flujo continuo
 	pos     int
 	playing bool
 	at      float64   // posición en segundos en el momento stamp
@@ -94,6 +95,19 @@ func (r *jamRoom) cur(now time.Time) float64 {
 		p = d
 	}
 	return max(p, 0)
+}
+
+// after es la pista que suena cuando termina la i con el modo de repetir rep; -1 si la cola se acaba ahí.
+func (r *jamRoom) after(i, rep int) int {
+	switch {
+	case rep == 2:
+		return i
+	case i+1 < len(r.queue):
+		return i + 1
+	case rep == 1 && len(r.queue) > 0:
+		return 0
+	}
+	return -1
 }
 
 func (r *jamRoom) set(pos int, at float64, playing bool) {
@@ -370,7 +384,7 @@ var errNoRoom = httpx.Error(409, "Esa sesión ya terminó.")
 
 // extend agrega sugerencias cuando a la cola le quedan menos de tres pistas por delante.
 func (h *Hub) extend(r *jamRoom) {
-	if len(r.queue)-(r.pos+1) < 3 && h.More != nil && len(r.queue) > 0 && len(r.queue) < maxQueue {
+	if r.repeat == 0 && len(r.queue)-(r.pos+1) < 3 && h.More != nil && len(r.queue) > 0 && len(r.queue) < maxQueue {
 		have := map[string]bool{}
 		for _, t := range r.queue {
 			have[t.Path] = true
@@ -386,15 +400,25 @@ func (h *Hub) extend(r *jamRoom) {
 	}
 }
 
-// advance pasa a la siguiente pista; si la cola se acaba, pide sugerencias y si no hay, se detiene.
-func (h *Hub) advance(r *jamRoom) {
+// advance pasa a la siguiente pista (ended: porque terminó la actual, no a mano); sin repetir, si la cola se
+// acaba pide sugerencias y si no hay, se detiene.
+func (h *Hub) advance(r *jamRoom, ended bool) {
 	h.extend(r)
-	r.manual = max(0, r.manual-1)
-	if r.pos+1 < len(r.queue) {
-		r.set(r.pos+1, 0, true)
-	} else {
-		r.set(r.pos, 0, false)
+	rep := r.repeat
+	if !ended && rep == 2 {
+		rep = 1 // «siguiente» a mano sí cambia de canción, como en el reproductor local
 	}
+	n := r.after(r.pos, rep)
+	if n < 0 {
+		r.set(r.pos, 0, false)
+		return
+	}
+	if n > r.pos {
+		r.manual = max(0, r.manual-1)
+	} else if n < r.pos {
+		r.manual = 0 // volvió al principio: lo agregado a mano quedó atrás
+	}
+	r.set(n, 0, true)
 }
 
 // Cmd aplica una acción de un dispositivo y le devuelve la foto resultante.
@@ -402,7 +426,7 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 	var in struct {
 		Device, Op, Code, Target, Path string
 		Paths                          []string
-		Pos, Index, Qrev               int
+		Pos, Index, Qrev, Repeat       int
 		At                             float64
 		Playing, Open, Next, Add       bool
 	}
@@ -431,6 +455,7 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			room = &jamRoom{code: h.newCode(), queue: tracks, qrev: 1}
 			h.rooms[room.code] = room
 			room.set(clampPos(len(tracks)), max(in.At, 0), in.Playing && len(tracks) > 0)
+			room.repeat = max(0, min(in.Repeat, 2))
 			room.members, u.room = []*user{u}, room
 			u.listen(in.Device, false)
 		}
@@ -438,6 +463,9 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			u.listen(in.Target, in.Add)
 		}
 		room.open = room.open || in.Open
+		if room.open {
+			room.repeat = 0 // en un jam no se repite: al acabarse la cola siguen sugerencias
+		}
 	case "join":
 		target := h.rooms[strings.ToUpper(strings.TrimSpace(in.Code))]
 		if target == nil || !target.open {
@@ -473,7 +501,11 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 		now := time.Now()
 		switch in.Op {
 		case "open":
-			room.open = true
+			room.open, room.repeat = true, 0
+		case "repeat":
+			if !room.open {
+				room.repeat = max(0, min(in.Repeat, 2))
+			}
 		case "here":
 			if u.conns[in.Target] == nil {
 				return httpx.Error(409, "Ese dispositivo ya no está conectado.")
@@ -531,10 +563,10 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			room.set(in.Index, 0, true)
 		case "ended": // un dispositivo terminó la pista pos; si otro ya avisó, no se avanza dos veces
 			if in.Pos == room.pos {
-				h.advance(room)
+				h.advance(room, true)
 			}
 		case "next":
-			h.advance(room)
+			h.advance(room, false)
 		case "prev":
 			room.manual = 0
 			room.set(max(room.pos-1, 0), 0, room.playing || room.pos > 0)

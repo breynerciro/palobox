@@ -41,14 +41,14 @@ func (h *Hub) target(r *jamRoom, now time.Time, lead time.Duration) (int, float6
 		if d <= 0 || at < d {
 			break
 		}
-		if idx+1 >= len(r.queue) {
+		if r.after(idx, r.repeat) < 0 {
 			h.extend(r) // la cola se acaba dentro del colchón: las sugerencias se piden ya
-			if idx+1 >= len(r.queue) {
+			if r.after(idx, r.repeat) < 0 {
 				return idx, d
 			}
 		}
 		at -= d
-		idx++
+		idx = r.after(idx, r.repeat)
 	}
 	return idx, at
 }
@@ -85,7 +85,7 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		at, _ := strconv.ParseFloat(q.Get("at"), 64)
 		switch {
 		case op == "next" && from == room.pos:
-			h.advance(room)
+			h.advance(room, false)
 		case op == "prev" && from == room.pos:
 			room.manual = 0
 			room.set(max(room.pos-1, 0), 0, true)
@@ -202,7 +202,7 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		// la hora exacta del final para que la sala no se atrase respecto a lo que ya se mandó.
 		if d := room.queue[room.pos].Dur; d > 0 && room.at+now.Sub(room.stamp).Seconds() >= d {
 			end := room.stamp.Add(time.Duration((d - room.at) * float64(time.Second)))
-			h.advance(room)
+			h.advance(room, true)
 			if room.playing {
 				room.stamp = end
 			}
@@ -222,18 +222,19 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 			lead, first = 0, false // al abrir se empieza justo en lo que suena ahora; el colchón se llena enseguida
 		}
 		ti, tat := h.target(room, now, lead)
-		want := room.queue[ti]
+		want, after := room.queue[ti], room.after(idx, room.repeat)
 		h.mu.Unlock()
 
 		switch {
-		case !fresh && src != nil && ti == idx && want.Path == path && tat-at > -streamSlip && tat-at < leadS+streamSlip:
-			pump(tat - at) // la misma pista, un poco más adelante
-		case !fresh && src != nil && ti == idx+1 && dur-at+tat < leadS+streamSlip:
+		// La que sigue (con repetir puede ser la misma o la primera de la cola): se reconoce porque volvió a empezar.
+		case !fresh && src != nil && ti == after && (ti != idx || tat < at) && dur-at+tat < leadS+streamSlip:
 			pump(dur - at + leadS) // lo que falte de la anterior, hasta que se acabe el archivo…
 			if !gone && !open(want, ti, 0) {
 				return nil
 			}
 			pump(tat) // …y el comienzo de la que sigue, por la misma conexión
+		case !fresh && src != nil && ti == idx && want.Path == path && tat-at > -streamSlip && tat-at < leadS+streamSlip:
+			pump(tat - at) // la misma pista, un poco más adelante
 		default: // primera vez, o alguien saltó o adelantó: se empieza donde toca
 			if !open(want, ti, tat) {
 				return nil // la pista ya no está: el reproductor reabre el flujo cuando la sala siga

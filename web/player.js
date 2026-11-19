@@ -429,10 +429,15 @@ document.addEventListener('click', (e) => {
   if (act === 'jam' && offline.active) toast(offline.NEEDS_NET);
   else if (act === 'jam') { toNormal(); $('#jam').showModal(); paintJam(); }
   else if (act === 'shuffle' && STREAM && room && !room.open && here) streamShuffle();
-  else if (act === 'repeat' && STREAM && room && !room.open) toast('Repetir no está disponible con la reproducción en segundo plano del iPhone: al acabarse la cola siguen sugerencias.');
-  else if (room && (act === 'shuffle' || act === 'repeat')) toast('Aleatorio y repetir no están disponibles mientras la reproducción es compartida.');
+  else if (room && (act === 'shuffle' || (act === 'repeat' && (!STREAM || room.open)))) toast('Aleatorio y repetir no están disponibles mientras la reproducción es compartida.');
   else if (act === 'shuffle') setShuffle(!shuffle);
-  else if (act === 'repeat') { repeat = (repeat + 1) % 3; syncToggles(); save(); refill(); }
+  else if (act === 'repeat') {
+    repeat = (repeat + 1) % 3;
+    syncToggles();
+    save();
+    if (room) jam.send('repeat', { repeat }); // sala propia del flujo: el servidor decide qué suena al terminar
+    else refill();
+  }
   else if (act === 'queue') { $('#queue').showModal(); paintQueue(); }
 });
 for (const b of document.querySelectorAll('#player .like, #np .like')) b.onclick = () => b.dataset.like && toggleLike(b.dataset.like);
@@ -887,7 +892,7 @@ function startRoom(extra = {}) {
   const from = Math.max(0, pos - 50);
   return jam.send('start', {
     paths: queue.slice(from, from + 500).map((t) => t.path), pos: Math.max(0, pos - from),
-    at: STREAM ? resume : audio.currentTime || resume, playing: !STREAM && !audio.paused, ...extra,
+    at: STREAM ? resume : audio.currentTime || resume, playing: !STREAM && !audio.paused, repeat: STREAM ? repeat : 0, ...extra,
   });
 }
 
@@ -966,7 +971,7 @@ function syncStream(t) {
 // aquí para pintar ya la pista nueva; la foto del servidor dirá lo mismo.
 function streamDo(op, arg = {}) {
   const from = room.pos;
-  const p = op === 'next' ? from + 1 : op === 'prev' ? Math.max(0, from - 1) : op === 'jump' ? arg.index : from;
+  const p = op === 'next' ? (repeat && from + 1 >= queue.length ? 0 : from + 1) : op === 'prev' ? Math.max(0, from - 1) : op === 'jump' ? arg.index : from;
   const at = op === 'seek' ? Math.max(0, arg.at || 0) : 0;
   const known = !!queue[p]; // «siguiente» al final de la cola: las sugerencias las pone el servidor y llegan con la foto
   const now = Date.now() + offset;

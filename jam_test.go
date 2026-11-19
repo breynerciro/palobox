@@ -254,6 +254,38 @@ func TestJamStream(t *testing.T) {
 	if m := cmd(map[string]any{"op": "pause"}); m["room"].(map[string]any)["pos"].(float64) != 1 {
 		t.Fatalf("«siguiente» en la petición del flujo debe aplicarse una sola vez: %v", m["room"])
 	}
+
+	// Repetir esta canción: el flujo vuelve a mandar la misma pista en vez de pasar a la siguiente.
+	res.Body.Close()
+	cmd(map[string]any{"op": "repeat", "repeat": 2})
+	cmd(map[string]any{"op": "jump", "index": 0})
+	req, _ = http.NewRequestWithContext(ctx, "GET", ana.base+"/api/jam/stream?device=anatelefono", nil)
+	if res, err = ana.c.Do(req); err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if _, err := io.ReadFull(res.Body, got); err != nil || bytes.IndexByte(got, 'b') >= 0 || bytes.Count(got, []byte{'a'}) < 78*380 {
+		t.Fatalf("con repetir esta canción debe sonar dos veces la primera: %v", err)
+	}
+	room := func(m map[string]any) map[string]any { return m["room"].(map[string]any) }
+	if r := room(cmd(map[string]any{"op": "ended", "pos": room(cmd(map[string]any{"op": "state"}))["pos"]})); r["pos"].(float64) != 0 {
+		t.Fatalf("repetir esta canción: al terminar sigue la misma: %v", r)
+	}
+	if r := room(cmd(map[string]any{"op": "next"})); r["pos"].(float64) != 1 {
+		t.Fatalf("«siguiente» a mano sí pasa de canción: %v", r)
+	}
+	// Repetir toda la cola: después de la última vuelve la primera, sin sugerencias.
+	cmd(map[string]any{"op": "queue", "paths": []string{"uno.mp3", "dos.mp3"}, "pos": 1}) // sin las sugerencias de antes
+	cmd(map[string]any{"op": "repeat", "repeat": 1})
+	if r := room(cmd(map[string]any{"op": "ended", "pos": 1})); r["pos"].(float64) != 0 || r["playing"] != true {
+		t.Fatalf("repetir la cola: %v", r)
+	}
+	// En un jam no se repite.
+	cmd(map[string]any{"op": "open"})
+	cmd(map[string]any{"op": "jump", "index": 1})
+	if r := room(cmd(map[string]any{"op": "ended", "pos": 1})); r["pos"].(float64) == 0 {
+		t.Fatalf("en un jam la cola no vuelve a empezar: %v", r)
+	}
 }
 
 // El modo sin conexión vive en el navegador: sus pruebas (webtest/) corren con node, si está instalado.
