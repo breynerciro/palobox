@@ -849,7 +849,7 @@ async function skipBuffer() {
     audio.removeEventListener('timeupdate', check);
   };
   function check() {
-    if (edge() >= from + 0.8) { // ya llegó casi un segundo de lo nuevo: alcanza para caer en él sin quedarse sin audio
+    if (edge() >= from + 0.5) { // ya llegó medio segundo de lo nuevo: alcanza para caer en él sin quedarse sin audio
       stop();
       try { audio.currentTime = from + 0.3; } catch (e) { console.warn('No se pudo saltar el colchón:', e); }
     } else if (Date.now() - started > 5000) stop();
@@ -896,8 +896,8 @@ function paintRemote() {
     if (resume >= 30) count();
     if (Date.now() - stateAt > 5000) { stateAt = Date.now(); positionState(); save(); }
     // En segundo plano el flujo de eventos puede morir y nadie avisaría de un cambio hecho desde otro dispositivo:
-    // se pregunta cada par de segundos (este código lo mueve timeupdate, que sí corre con la pantalla bloqueada).
-    if (document.visibilityState !== 'visible' && Date.now() - askedAt > 2500) { askedAt = Date.now(); jam.send('state', {}, true); }
+    // se pregunta cada segundo (este código lo mueve timeupdate, que sí corre con la pantalla bloqueada).
+    if (document.visibilityState !== 'visible' && Date.now() - askedAt > 1000) { askedAt = Date.now(); jam.send('state', {}, true); }
   }
   if (seeking) return;
   const d = queue[pos].dur || 0;
