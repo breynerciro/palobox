@@ -368,6 +368,7 @@ for i in range(1, 4):
         self.assertEqual(args[args.index("--overwrite") + 1], "skip")
         self.assertEqual(args[args.index("--format") + 1], "mp3")
         self.assertEqual(args[args.index("--bitrate") + 1], "128k")
+        self.assertEqual(args[args.index("--ffmpeg-args") + 1], "-ar 48000 -ac 2")
         self.assertEqual(args[args.index("--threads") + 1], "2")
         self.assertIn("{artist}/{album}/{title}.{output-ext}", args[args.index("--output") + 1])
         self.assertTrue(llamada["home"].startswith(self.settings.state_dir))

@@ -763,6 +763,8 @@ class Runner:
                 "--output", os.path.join(self.s.music_dir, "{artist}/{album}/{title}.{output-ext}"),
                 "--format", "mp3",
                 "--bitrate", "128k",
+                # El formato del flujo continuo de la app (StreamHz): así cada canción sale tal cual, sin convertir.
+                "--ffmpeg-args", "-ar 48000 -ac 2",
                 # Sin proveedores de letras: la app no las muestra y buscarlas costaba unos 7 s por canción en tres
                 # sitios que casi siempre responden con un rechazo.
                 "--lyrics",
