@@ -206,8 +206,12 @@ function present(t, at) {
   }
   // El color de la carátula tiñe el reproductor y el fondo de la app (--amb, style.css); sin carátula queda el de siempre.
   const art = $('#player-cover img'); // la de la barra: la de pantalla completa no carga mientras está cerrada
-  document.documentElement.style.removeProperty('--amb');
-  art?.addEventListener('load', () => { if (art.isConnected) document.documentElement.style.setProperty('--amb', coverColor(art) ?? ''); });
+  // El color anterior se queda hasta que cargue la nueva: quitarlo antes hace parpadear el fondo entre canciones.
+  const amb = document.documentElement.style;
+  if (!art) amb.removeProperty('--amb');
+  art?.addEventListener('load', () => { if (art.isConnected) amb.setProperty('--amb', coverColor(art) ?? ''); });
+  // Si falla, lazyImg ya la quitó; el color se quita solo si en la barra no quedó otra carátula (la de la pista siguiente).
+  art?.addEventListener('error', () => { if (!$('#player-cover img')) amb.removeProperty('--amb'); });
   for (const b of document.querySelectorAll('#player .like, #np .like')) b.dataset.like = t.path;
   for (const s of seeks) setSeek(s, 0);
   paintTimes(at, t.dur);
