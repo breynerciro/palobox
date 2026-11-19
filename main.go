@@ -151,7 +151,8 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, version) })
 	static := http.FileServerFS(web)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Cache-Control", "no-cache") // sin esto el celular puede quedarse con la interfaz vieja
+		// private: sin él Cloudflare reemplaza no-cache por su «Browser Cache TTL» (4 h) y el celular se queda con la interfaz vieja.
+		w.Header().Set("Cache-Control", "private, no-cache")
 		// Los archivos incrustados no tienen fecha: sin ETag el navegador no puede revalidar y baja todo en cada apertura.
 		w.Header().Set("ETag", `"`+version+`"`)
 		static.ServeHTTP(w, r)
