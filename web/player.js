@@ -874,7 +874,7 @@ function syncRoom() {
         audio.play().then(() => (warned = false)).catch((e) => {
           if (e.name !== 'NotAllowedError' || warned) return;
           warned = true; // el navegador exige un toque antes de sonar: el botón de reproducir lo destraba
-          toast('Toca reproducir para escuchar en este dispositivo.', { kind: 'warn', sticky: true });
+          needTap();
         });
       }
     }
@@ -967,12 +967,18 @@ async function skipBuffer() {
   audio.addEventListener('progress', check); // estos eventos sí llegan con la pantalla bloqueada; los temporizadores no siempre
   audio.addEventListener('timeupdate', check);
 }
+// needTap: el navegador no dejó sonar sin un toque (pasa al reabrir la app con la sala sonando). Si nadie más está
+// oyendo, la sala simplemente queda en pausa; el aviso solo sale cuando hay otros dispositivos o es un jam.
+function needTap() {
+  if (!room.open && devices.filter((d) => d.active).length <= 1) return void jam.send('pause', {}, true);
+  toast('Toca reproducir para escuchar en este dispositivo.', { kind: 'warn' });
+}
 function streamBlocked(e) {
   stuck = e.name === 'NotAllowedError'; // wake lo reintenta al volver a la app
   warnPlay(e);
   if (!stuck || warned || document.visibilityState !== 'visible') return;
   warned = true; // el navegador exige un toque antes de sonar: el botón de reproducir lo destraba
-  toast('Toca reproducir para escuchar en este dispositivo.', { kind: 'warn', sticky: true });
+  needTap();
 }
 // streamLost: el flujo se cortó (red, servidor reiniciado). Se reabre si la sala sigue sonando y la app está a la
 // vista; si no, al volver a la app. Dos cortes seguidos no se insisten: sería un bucle contra un servidor caído.
