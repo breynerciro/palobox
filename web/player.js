@@ -1,6 +1,6 @@
 // Reproductor de música: cola, aleatorio, repetir y la barra que sigue sonando al cambiar de sección.
 import { $, el, icon, setIcon, json, joinText, lazyImg, toast, clock, plural, sleep, ask } from './lib.js';
-import { rawUrl, thumbUrl } from './nav.js';
+import { thumbUrl } from './nav.js';
 import { api } from './session.js';
 import { ensureLib, markLikes, toggleLike } from './music.js';
 import * as jam from './jam.js';
@@ -14,8 +14,6 @@ audio.hidden = true;
 document.body.append(audio);
 // Sesión de audio de reproducción (Audio Session API, Safari 17+): sin esto iOS puede tratar la app como
 // sonido secundario y silenciarla en segundo plano o con el interruptor de silencio.
-// shortcut: iOS sigue sin dejar que una web cambie de pista en segundo plano (WebKit, desde iOS 17); si persiste,
-// la salida es un solo flujo continuo (ManagedMediaSource) o una app nativa.
 try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch {}
 let queue = []; // orden real de reproducción
 let order = []; // orden original de la lista, para volver a él al apagar el aleatorio
@@ -38,27 +36,17 @@ let devices = []; // mis dispositivos conectados
 let here = true; // en este dispositivo es donde suena para mi cuenta
 let offset = 0; // reloj del servidor menos el de este dispositivo
 let curPath = ''; // pista cargada en el audio
-let ahead = null; // { from, until }: pista de la sala que este dispositivo ya dejó atrás por su cuenta
 let warned = false; // ya se avisó que el navegador no dejó sonar sin un toque
-let syncedAt = 0;
 const roomTime = () => (room.playing ? room.at + (Date.now() + offset - room.stamp) / 1000 : room.at);
 const playing = () => (room && !here ? room.playing : !audio.paused);
 
-// Flujo continuo (iPhone). iOS deja que una página siga sonando en segundo plano mientras sea el mismo audio,
-// pero a veces bloquea cargar uno nuevo, que es lo que pasa al terminar cada canción. Aquí el iPhone siempre
-// reproduce a través de una sala: el audio es una sola respuesta del servidor (/api/jam/stream) que trae la
-// pista de la sala y luego la que sigue, sin cambiar de fuente. La cola, la pista y la posición son las de la
-// sala; esta página pinta el avance con el reloj de la sala y manda cada acción como comando, igual que en un jam.
-// Se fuerza o se apaga con localStorage «palobox.flujo» = 1 / 0.
-const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)); // el iPad se presenta como Mac
-let STREAM = (() => {
-  let flag = null;
-  try { flag = localStorage.getItem('palobox.flujo'); } catch {}
-  return flag === '1' || (flag !== '0' && IOS);
-})();
-// Sin conexión no hay servidor que mande el flujo: el reproductor vuelve a ser local, sobre un solo audio armado
-// en el celular con lo descargado (deck, más abajo).
-const STREAM_ON = STREAM; // el modo con conexión de este dispositivo, para volver a él
+// Dos motores, el mismo en todos los dispositivos:
+// - Con conexión, flujo continuo. Android e iOS dejan que una página siga sonando en segundo plano mientras sea
+//   el mismo audio, pero cortan al cargar uno nuevo, que es lo que pasa al terminar cada canción. Por eso todo
+//   suena a través de una sala: el audio es una sola respuesta del servidor (/api/jam/stream) que trae la pista
+//   de la sala y luego la que sigue, sin cambiar de fuente. La cola, la pista y la posición son las de la sala;
+//   esta página pinta el avance con el reloj de la sala y manda cada acción como comando, igual que en un jam.
+// - Sin conexión, el audio unido (deck): las canciones descargadas, una tras otra, en un solo audio del celular.
 // local: el reproductor suena desde lo descargado. Sigue así un rato después de volver la conexión (goOnline)
 // para no cortar la canción; por eso es distinto de offline.active, que es el modo de la app.
 let local = false;
@@ -66,9 +54,8 @@ export function goOffline() {
   if (local) return void keepDownloaded(deckTime(), !audio.paused); // ya sonaba desde lo descargado
   local = true;
   // Si la red se cae con la app abierta, lo que sonaba sigue donde iba, ya desde lo descargado.
-  const at = room ? roomTime() : audio.currentTime || resume;
+  const at = room ? roomTime() : resume;
   const play = here && (room ? room.playing : !audio.paused);
-  STREAM = false;
   jam.close();
   stream = null;
   room = null;
@@ -93,7 +80,6 @@ function toNormal(edit, keep = true) {
   const at = deck ? deckTime() : resume;
   const on = !!deck && !audio.paused;
   local = false;
-  STREAM = STREAM_ON;
   audio.pause();
   audio.removeAttribute('src');
   if (deck) URL.revokeObjectURL(deck.url);
@@ -103,7 +89,7 @@ function toNormal(edit, keep = true) {
   edit?.();
   if (!keep || !queue[pos]) return;
   load(pos, { play: on, at });
-  if (on && STREAM) startRoom({ playing: true });
+  if (on) startRoom({ playing: true });
 }
 // purge: se quitaron descargas estando sin conexión; lo que ya no está en el celular sale de la cola.
 export function purge() {
@@ -127,8 +113,8 @@ function keepDownloaded(at, play) {
   document.body.classList.remove('has-player');
 }
 let stream = null; // { pos, origin, end, held }: qué traía la sala cuando se abrió (o se dio por bueno) el flujo que suena
-const streaming = () => STREAM && !!room && here;
-const dur = () => (deck ? deck.lens[pos] : 0) || (streaming() ? 0 : audio.duration) || queue[pos]?.dur || 0;
+const streaming = () => !local && !!room && here;
+const dur = () => (deck ? deck.lens[pos] : 0) || queue[pos]?.dur || 0; // el flujo no tiene duración: vale la de la pista
 
 // Sin conexión toda la cola es un solo audio: las canciones descargadas, ya limpias, unidas una tras otra. El
 // teléfono nunca carga un audio nuevo al pasar de canción (lo que iOS no siempre deja con la pantalla bloqueada),
@@ -181,53 +167,14 @@ function deckTick() {
   paintTimes(at, deck.lens[pos]);
 }
 const warnPlay = (e) => console.warn('El navegador no dejó reproducir:', e?.name, e?.message);
-let stuck = false; // un play() sin toque fue rechazado: se reintenta al volver a la app
-
-// La siguiente pista se descarga entera mientras suena la actual y se pone en el mismo audio con un blob:
-// así el cambio al terminar no espera la red. En segundo plano, un hueco de silencio mientras carga basta para
-// que Android o iOS den la reproducción por terminada. Mismo elemento: conserva la sesión de medios de iOS.
-let cur = null; // { path, url } blob de la pista cargada
-let ready = null; // { path, url } blob de la que sigue
-let tried = ''; // pista que ya se intentó descargar
-function srcFor(t) {
-  if (cur?.path !== t.path) {
-    if (cur) URL.revokeObjectURL(cur.url);
-    cur = ready?.path === t.path ? ready : null;
-    if (cur) ready = null;
-  }
-  return cur?.url ?? rawUrl('musica', t.path);
-}
-async function prefetch() {
-  const t = queue[pos + 1] ?? (repeat === 1 ? queue[0] : null);
-  if (STREAM || local || !t || !here || t.path === tried || t.path === ready?.path || t.path === cur?.path) return;
-  tried = t.path;
-  try {
-    const r = await fetch(rawUrl('musica', t.path));
-    // shortcut: un archivo de más de 80 MB (FLAC largo) no se guarda en memoria y carga de la red como antes.
-    if (!r.ok || +r.headers.get('content-length') > 80e6) return void r.body?.cancel();
-    const url = URL.createObjectURL(await r.blob());
-    if (ready) URL.revokeObjectURL(ready.url);
-    ready = { path: t.path, url };
-  } catch (e) { console.warn('No se pudo adelantar la descarga de la siguiente pista:', e); }
-}
 // Posición en la pantalla de bloqueo y la notificación; sin esto Android puede dar la sesión por inactiva.
 function positionState() {
-  const total = deck ? deck.lens[pos] : streaming() ? queue[pos]?.dur : audio.duration; // el flujo no tiene duración: vale la de la pista
+  const total = dur();
   if (!navigator.mediaSession?.setPositionState || !(total > 0 && total < Infinity)) return;
-  const at = deck ? deckTime() : streaming() ? roomTime() : audio.currentTime;
+  const at = deck ? deckTime() : room ? roomTime() : resume;
   try { navigator.mediaSession.setPositionState({ duration: total, position: Math.max(0, Math.min(at, total)), playbackRate: audio.playbackRate || 1 }); } catch {}
 }
 for (const ev of ['loadedmetadata', 'playing', 'pause', 'seeked', 'ratechange']) audio.addEventListener(ev, positionState);
-audio.addEventListener('playing', () => (stuck = false));
-// begin pone a sonar t dentro del toque del usuario: el navegador solo deja empezar el audio tras un gesto,
-// y la foto de la sala llega después.
-function begin(t) {
-  if (STREAM) return; // el audio es el flujo de la sala: lo abre syncStream cuando llega la foto
-  curPath = t.path;
-  audio.src = srcFor(t);
-  audio.play().catch(warnPlay);
-}
-
 const mix = (a) => {
   for (let i = a.length - 1; i > 0; i--) {
     const j = Math.floor(Math.random() * (i + 1));
@@ -246,13 +193,7 @@ function load(i, { play = true, at = 0 } = {}) {
   if (local) { // sin conexión: el audio unido de la cola, movido hasta esta pista
     curPath = t.path;
     deckOpen(at, play);
-  } else if (STREAM) curPath = t.path; // aquí solo se pinta: el audio es el flujo de la sala (syncStream), no el archivo
-  else if (!room || curPath !== t.path) { // en una sala la pista que ya está cargada no se vuelve a pedir
-    curPath = t.path;
-    audio.src = srcFor(t);
-    if (at) audio.addEventListener('loadedmetadata', () => (audio.currentTime = room ? roomTime() : at), { once: true });
-  }
-  if (play && !STREAM && !local) audio.play().catch((e) => { stuck = e.name === 'NotAllowedError'; warnPlay(e); }); // si el formato no sirve, lo informa onerror
+  } else curPath = t.path; // aquí solo se pinta: el audio es el flujo de la sala (syncStream)
   present(t, at);
 }
 // present pinta la pista en la barra, la pantalla completa y la pantalla de bloqueo.
@@ -313,10 +254,9 @@ export function playAt(tracks, i) {
   if (local && !repeat && tracks.length - i < 6) tracks = [...tracks, ...offline.more(tracks)]; // que la música siga
   if (room) {
     const from = Math.max(0, i - 50); // la sala guarda hasta 500 pistas alrededor de la elegida
-    if (here) begin(tracks[i]);
     let list = tracks.slice(from, from + 500);
     let at = i - from;
-    if (STREAM && shuffle && !room.open) { // en la sala propia del flujo el aleatorio se aplica al armar la cola
+    if (shuffle && !room.open) { // en la sala propia del flujo el aleatorio se aplica al armar la cola
       list = [list[at], ...mix(list.filter((_, k) => k !== at))];
       at = 0;
     }
@@ -333,7 +273,7 @@ export function playAt(tracks, i) {
     queue = order.slice();
     load(i);
   }
-  if (STREAM) startRoom({ playing: true, at: 0 }); // en flujo continuo todo suena a través de una sala
+  if (!local) startRoom({ playing: true, at: 0 }); // con conexión todo suena a través de una sala
 }
 
 function addAt(t, nextUp) {
@@ -350,21 +290,9 @@ function addAt(t, nextUp) {
 export const playNext = (t) => addAt(t, true);
 export const enqueue = (t) => addAt(t, false);
 
-function next(ended = false) {
-  if (streaming() && !ended) return streamDo('next');
-  // «ended» lleva la pista que terminó: si otro dispositivo de la sala ya avisó, el servidor no avanza dos veces.
-  if (room) {
-    const from = pos;
-    // Al terminar una pista, la siguiente arranca aquí mismo y de inmediato, sin esperar la respuesta del servidor:
-    // en segundo plano el navegador solo deja seguir sonando si el cambio ocurre en el instante en que termina.
-    if (ended && here && !STREAM && queue[pos + 1]) {
-      ahead = { from, until: Date.now() + 8000 };
-      curPath = ''; // aunque sea la misma canción dos veces seguidas, se carga de nuevo
-      load(pos + 1);
-    }
-    return void jam.send(ended ? 'ended' : 'next', { pos: from });
-  }
-  if (ended && repeat === 2) return load(pos);
+function next() {
+  if (streaming()) return streamDo('next');
+  if (room) return void jam.send('next', { pos }); // suena en otro dispositivo: este es el control remoto
   let n = pos + 1;
   if (n >= queue.length) {
     if (!repeat) return; // se acabó la cola
@@ -372,12 +300,12 @@ function next(ended = false) {
   }
   manual = Math.max(0, manual - 1);
   load(n);
-  if (STREAM) startRoom({ playing: true, at: 0 });
+  if (!local) startRoom({ playing: true, at: 0 });
 }
 function prev() {
   if (streaming()) return streamDo(roomTime() > 3 || pos === 0 ? 'seek' : 'prev', { at: 0 });
   if (room) return void (roomTime() > 3 || pos === 0 ? jam.send('seek', { at: 0 }) : jam.send('prev'));
-  if (STREAM) { // cola restaurada, todavía sin sala: la anterior (o la misma desde el principio) arranca en una
+  if (!local) { // cola restaurada, todavía sin sala: la anterior (o la misma desde el principio) arranca en una
     if (pos > 0) load(pos - 1);
     return void startRoom({ playing: true, at: 0 });
   }
@@ -428,8 +356,8 @@ document.addEventListener('click', (e) => {
   const act = e.target.closest?.('[data-act]')?.dataset.act;
   if (act === 'jam' && offline.active) toast(offline.NEEDS_NET);
   else if (act === 'jam') { toNormal(); $('#jam').showModal(); paintJam(); }
-  else if (act === 'shuffle' && STREAM && room && !room.open && here) streamShuffle();
-  else if (room && (act === 'shuffle' || (act === 'repeat' && (!STREAM || room.open)))) toast('Aleatorio y repetir no están disponibles mientras la reproducción es compartida.');
+  else if (act === 'shuffle' && room && !room.open && here) streamShuffle();
+  else if (room && (act === 'shuffle' || (act === 'repeat' && room.open))) toast('Aleatorio y repetir no están disponibles mientras la reproducción es compartida.');
   else if (act === 'shuffle') setShuffle(!shuffle);
   else if (act === 'repeat') {
     repeat = (repeat + 1) % 3;
@@ -476,27 +404,11 @@ audio.onended = () => {
     count();
     return void (repeat === 1 && queue.length && load(0));
   }
-  if (STREAM) return streamLost(); // el flujo no termina con cada pista: si se acabó es que se cortó
-  count();
-  next(true);
+  streamLost(); // el flujo no termina con cada pista: si se acabó es que se cortó
 };
-let retried = ''; // pista que ya se volvió a pedir tras un error de carga
-audio.addEventListener('playing', () => (retried = ''));
 audio.onerror = () => {
   if (deck) return void toast('No se pudo reproducir la música descargada. Vuelve a descargarla cuando tengas conexión.', { kind: 'warn', sticky: true });
-  if (STREAM) return streamLost();
-  const t = queue[pos];
-  if (!t) return;
-  if (retried !== t.path) { // un corte de red o un blob roto: se pide una vez más a la red, en el mismo punto
-    retried = t.path;
-    const at = audio.currentTime;
-    if (cur) URL.revokeObjectURL(cur.url);
-    cur = null;
-    audio.src = rawUrl('musica', t.path);
-    if (at) audio.addEventListener('loadedmetadata', () => (audio.currentTime = at), { once: true });
-    return void audio.play().catch(warnPlay);
-  }
-  toast(`Este dispositivo no puede reproducir «${queue[pos].title}». Los formatos más compatibles son MP3 y M4A.`, { kind: 'warn', sticky: true });
+  if (audio.getAttribute('src')) streamLost(); // quitar el audio a propósito también dispara este evento
 };
 
 // Historial: una escucha cuenta a los 30 s o al terminar la pista.
@@ -519,19 +431,7 @@ function paintTimes(cur, dur) {
 }
 audio.ontimeupdate = () => {
   if (deck) return deckTick();
-  if (STREAM) return paintRemote(); // el avance del flujo se pinta con el reloj de la sala; este evento sí llega en segundo plano
-  if (!audio.duration) return;
-  if (!audio.paused && audio.currentTime >= 30) count();
-  if (Date.now() - savedAt > 5000) save();
-  if (audio.currentTime > 5) prefetch(); // pasado el arranque, para no quitarle red a la pista actual
-  // En una sala, este dispositivo se vuelve a alinear si se alejó de la posición común (como mucho cada 5 s).
-  if (room && here && room.playing && Date.now() - syncedAt > 5000 && Math.abs(audio.currentTime - roomTime()) > 1.5) {
-    syncedAt = Date.now();
-    audio.currentTime = roomTime();
-  }
-  if (seeking) return;
-  for (const s of seeks) setSeek(s, audio.currentTime / audio.duration);
-  paintTimes(audio.currentTime, audio.duration);
+  paintRemote(); // el avance del flujo se pinta con el reloj de la sala; este evento sí llega en segundo plano
 };
 for (const s of seeks) {
   s.oninput = () => {
@@ -555,13 +455,12 @@ function seekTo(at) {
   if (deck) return void (audio.currentTime = deck.starts[pos] + Math.max(0, at));
   if (streaming()) return streamDo('seek', { at });
   if (room) return void jam.send('seek', { at });
-  if (!STREAM) return void (audio.currentTime = at);
-  resume = at; // cola restaurada en flujo continuo, aún sin sala: arrancará desde aquí
+  resume = at; // cola restaurada, aún sin sala: arrancará desde aquí
   paintTimes(at, dur());
 }
 function toggle() {
-  if (STREAM && !room) return void (pos >= 0 && startRoom({ playing: true })); // cola restaurada: arranca en una sala
-  if (!room) return audio.paused ? audio.play().catch(warnPlay) : audio.pause();
+  if (local) return audio.paused ? audio.play().catch(warnPlay) : audio.pause();
+  if (!room) return void (pos >= 0 && startRoom({ playing: true })); // cola restaurada: arranca en una sala
   if (!here && !devices.some((d) => d.active)) { // el dispositivo donde sonaba se desconectó: reproducir aquí lo toma
     here = true;
     jam.send('here', { target: jam.deviceId });
@@ -574,9 +473,7 @@ function toggle() {
     else if (stream && audio.src) audio.play().catch(warnPlay);
     return void jam.send(on ? 'pause' : 'play');
   }
-  const on = playing();
-  if (here && !on) audio.play().catch(warnPlay); // dentro del toque; también destraba el audio si el navegador no lo dejó empezar solo
-  if (on || !room.playing) jam.send(on ? 'pause' : 'play');
+  jam.send(room.playing ? 'pause' : 'play'); // suena en otro dispositivo: este es el control remoto
 }
 $('#playpause').onclick = $('#np-play').onclick = toggle;
 $('#next').onclick = $('#np-next').onclick = () => next();
@@ -628,8 +525,13 @@ async function swipeTo(dir) {
   slideTo(strip, `translateX(${-dir * bar.offsetWidth}px)`, 0, ms);
   await sleep(ms);
   if (dir > 0) next();
+  else if (streaming()) streamDo('prev'); // a diferencia del botón, deslizar siempre cambia de canción
   else if (room) jam.send('prev');
-  else { manual = 0; load(pos - 1); } // a diferencia del botón, deslizar siempre cambia de canción
+  else {
+    manual = 0;
+    load(pos - 1);
+    if (!local) startRoom({ playing: true, at: 0 });
+  }
   slideTo(strip, `translateX(${dir * 48}px)`, 0);
   strip.offsetWidth; // aplica la posición de entrada antes de animar
   slideTo(strip, '', '', ms);
@@ -720,8 +622,8 @@ document.addEventListener('keydown', (e) => {
   if (pos < 0 || e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, textarea, select')) return;
   if (document.querySelector('dialog[open]:not(#np)')) return; // el visor de fotos y los menús usan las mismas teclas
   if (e.key === ' ' && !e.target.closest?.('button, a')) { e.preventDefault(); toggle(); }
-  else if (e.key === 'ArrowRight') e.shiftKey ? next() : seekTo((room ? roomTime() : deck ? deckTime() : audio.currentTime) + 5);
-  else if (e.key === 'ArrowLeft') e.shiftKey ? prev() : seekTo((room ? roomTime() : deck ? deckTime() : audio.currentTime) - 5);
+  else if (e.key === 'ArrowRight') e.shiftKey ? next() : seekTo((room ? roomTime() : deck ? deckTime() : resume) + 5);
+  else if (e.key === 'ArrowLeft') e.shiftKey ? prev() : seekTo((room ? roomTime() : deck ? deckTime() : resume) - 5);
 });
 
 // Cola «A continuación»
@@ -741,10 +643,9 @@ function queueRow(t, i) {
     if (!room) {
       manual = Math.max(0, manual - (i - pos));
       load(i);
-      return void (STREAM && startRoom({ playing: true, at: 0 }));
+      return void (!local && startRoom({ playing: true, at: 0 }));
     }
     if (streaming()) return streamDo('jump', { index: i });
-    if (here) begin(t);
     jam.send('jump', { index: i });
   };
   const rm = el('button', { className: 'icon-btn' }, icon('x'));
@@ -782,27 +683,25 @@ function paintQueue() {
 const KEEP = 500; // pistas guardadas alrededor de la actual: localStorage tiene cupo
 function save() {
   savedAt = Date.now();
-  // La cola de una sala es del servidor y aquí se conserva la propia; en flujo continuo siempre hay sala, así
-  // que se guarda la de la sala para retomarla al volver a abrir la app.
-  if ((room && !STREAM) || pos < 0 || !user) return;
+  // Con conexión siempre hay sala: se guarda su cola para retomarla al volver a abrir la app.
+  if (pos < 0 || !user) return;
   // Sin conexión, un cambio en la cola (agregar, quitar, barajar) obliga a rearmar el audio unido donde iba.
   if (deck && !deckBusy && deck.key !== deckKey()) deckOpen(deckTime(), !audio.paused);
   const from = Math.max(0, pos - 50);
   try {
     localStorage.setItem('palobox.player', JSON.stringify({
-      user, queue: queue.slice(from, from + KEEP), pos: pos - from, at: deck ? deckTime() : STREAM ? resume : audio.currentTime || resume, shuffle, repeat, volume: audio.volume,
+      user, queue: queue.slice(from, from + KEEP), pos: pos - from, at: deck ? deckTime() : resume, shuffle, repeat, volume: audio.volume,
     }));
   } catch {} // modo privado o cupo lleno: la app sigue sin recordar
 }
 window.addEventListener('pagehide', save);
-// Al volver a la app: la sala se pone al día (el flujo de eventos pudo morir en segundo plano) y, si el
-// navegador no dejó arrancar la siguiente pista sin un toque, se intenta de nuevo.
+// Al volver a la app la sala se pone al día: el flujo de eventos pudo morir en segundo plano, y si el flujo de
+// audio se cortó o el navegador no lo dejó arrancar sin un toque, syncRoom lo vuelve a abrir.
 function wake() {
   if (document.visibilityState !== 'visible' || !user) return;
   if (local) return; // sin servidor no hay sala que poner al día
   if (!jam.alive()) jam.connect(applyJam); // la foto que llega llama a syncRoom
   else if (room) syncRoom();
-  else if (stuck && audio.paused) audio.play().catch(warnPlay);
 }
 document.addEventListener('visibilitychange', wake);
 window.addEventListener('pageshow', wake);
@@ -837,9 +736,6 @@ export function restore(name) {
 export function reset() {
   audio.pause();
   audio.removeAttribute('src');
-  for (const b of [cur, ready]) if (b) URL.revokeObjectURL(b.url);
-  cur = ready = null;
-  tried = '';
   jam.close();
   if (deck) URL.revokeObjectURL(deck.url);
   deck = null;
@@ -862,26 +758,21 @@ export function reset() {
 
 // applyJam recibe cada foto del servidor: mis dispositivos y, si hay sala, su estado.
 function applyJam(s) {
-  const before = devices.length;
   offset = s.now - Date.now();
   devices = s.devices.map((d) => ({ ...d, me: d.id === s.me }));
   const was = room;
   room = s.room;
   here = !room || devices.some((d) => d.me && d.active);
   document.body.classList.toggle('in-room', !!room);
-  document.body.classList.toggle('own-stream', STREAM && !!room && !room.open); // sala propia del flujo: no es «compartida»
+  document.body.classList.toggle('own-stream', !!room && !room.open); // sala propia: no es «compartida»
   if (room) return syncRoom();
-  if (was) { // la sala terminó: lo que sonaba aquí sigue sonando, ya como reproductor local
+  if (was) { // la sala terminó (se salió del jam): lo que sonaba sigue, en una sala propia con la cola que quedó
     order = queue.slice();
     save();
-    if (STREAM) { // en flujo continuo «local» es otra sala, propia: se abre con la cola que quedó
-      stream = null;
-      const on = was.playing && !audio.paused;
-      audio.pause();
-      if (on) startRoom({ playing: true });
-    }
-  } else if (devices.length > before && devices.length > 1 && pos >= 0 && !audio.paused) {
-    startRoom(); // apareció otro dispositivo mío mientras suena aquí: comparto la reproducción para que la vea y la maneje
+    stream = null;
+    const on = was.playing && !audio.paused;
+    audio.pause();
+    if (on) startRoom({ playing: true });
   }
   syncPlayButton();
   paintJam();
@@ -892,20 +783,13 @@ function startRoom(extra = {}) {
   const from = Math.max(0, pos - 50);
   return jam.send('start', {
     paths: queue.slice(from, from + 500).map((t) => t.path), pos: Math.max(0, pos - from),
-    at: STREAM ? resume : audio.currentTime || resume, playing: !STREAM && !audio.paused, repeat: STREAM ? repeat : 0, ...extra,
+    at: resume, playing: false, repeat, ...extra,
   });
 }
 
 // syncRoom deja este reproductor igual a la sala: misma cola, misma pista y, si suena aquí, misma posición.
 function syncRoom() {
   queue = order = room.queue;
-  // Este dispositivo ya pasó a la siguiente pista (next) y la sala todavía no: se espera sin devolverse.
-  if (ahead && room.pos === ahead.from && Date.now() < ahead.until && queue[pos]?.path === curPath) {
-    paintQueue();
-    paintJam();
-    return;
-  }
-  ahead = null;
   const t = queue[room.pos];
   if (!t) { // sala recién creada sin música
     audio.pause();
@@ -917,18 +801,7 @@ function syncRoom() {
     if (!here) {
       audio.pause();
       stream = null;
-    } else if (STREAM) syncStream(t);
-    else {
-      if (audio.readyState > 0 && Math.abs(audio.currentTime - roomTime()) > 1.5) audio.currentTime = roomTime();
-      if (!room.playing) audio.pause();
-      else if (audio.paused) {
-        audio.play().then(() => (warned = false)).catch((e) => {
-          if (e.name !== 'NotAllowedError' || warned) return;
-          warned = true; // el navegador exige un toque antes de sonar: el botón de reproducir lo destraba
-          needTap();
-        });
-      }
-    }
+    } else syncStream(t);
   }
   syncPlayButton();
   paintQueue();
@@ -1025,9 +898,8 @@ function needTap() {
   toast('Toca reproducir para escuchar en este dispositivo.', { kind: 'warn' });
 }
 function streamBlocked(e) {
-  stuck = e.name === 'NotAllowedError'; // wake lo reintenta al volver a la app
   warnPlay(e);
-  if (!stuck || warned || document.visibilityState !== 'visible') return;
+  if (e.name !== 'NotAllowedError' || warned || document.visibilityState !== 'visible') return;
   warned = true; // el navegador exige un toque antes de sonar: el botón de reproducir lo destraba
   needTap();
 }
@@ -1039,7 +911,7 @@ function streamLost() {
   const again = Date.now() - lostAt < 8000;
   lostAt = Date.now();
   if (!streaming() || !room.playing) return;
-  if (again || document.visibilityState !== 'visible') return void (stuck = true);
+  if (again || document.visibilityState !== 'visible') return; // wake lo reabre al volver a la app
   syncRoom();
 }
 
@@ -1048,7 +920,7 @@ function streamLost() {
 let stateAt = 0;
 let askedAt = 0;
 function paintRemote() {
-  if (!room || (here && !STREAM) || pos < 0) return;
+  if (!room || pos < 0) return;
   if (streaming() && room.playing) {
     // En segundo plano el flujo de eventos puede haberse caído y nadie avisa que la sala pasó de pista: se
     // deduce aquí con su mismo reloj (el servidor avanza justo al final), para que la pantalla de bloqueo
@@ -1080,7 +952,6 @@ export async function joinJam(code) {
 
 // playOn elige en cuál de mis dispositivos suena; con add lo suma a los que ya suenan (o lo quita si ya sonaba).
 function playOn(d, add = false) {
-  if (d.me && room?.playing && !STREAM && !(add && d.active)) audio.play().catch(warnPlay); // dentro del toque, para que el navegador lo deje sonar
   if (room) return void jam.send('here', { target: d.id, add });
   if (d.me) return; // sin sala ya suena aquí
   if (pos < 0) return toast('Pon a sonar algo primero y luego elige el dispositivo.');
@@ -1149,8 +1020,8 @@ function paintJam() {
           if (code) joinJam(code);
         })));
   }
-  if (room && (room.open || !STREAM)) { // la sala propia del flujo continuo no se «deja»: es el reproductor
-    out.push(el('div', { className: 'jam-actions' }, btn('secondary small', 'logout', room.open ? 'Salir del jam' : 'Dejar de compartir entre dispositivos', () => jam.send('leave'))));
+  if (room?.open) { // la sala propia no se «deja»: es el reproductor
+    out.push(el('div', { className: 'jam-actions' }, btn('secondary small', 'logout', 'Salir del jam', () => jam.send('leave'))));
   }
   $('#jam-body').replaceChildren(...out);
 }
