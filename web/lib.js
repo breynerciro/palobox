@@ -178,3 +178,71 @@ export function deviceName(ua) {
   const br = [[/Edg\//, 'Edge'], [/OPR\//, 'Opera'], [/Firefox\/|FxiOS/, 'Firefox'], [/Chrome\/|CriOS/, 'Chrome'], [/Safari\//, 'Safari'], [/curl|Go-http|python/i, 'Script']].find(([re]) => re.test(ua))?.[1];
   return os ? `${br ?? 'Navegador'} en ${os}` : br ?? 'Dispositivo desconocido';
 }
+
+// coverColor: el tono medio de una carátula ya cargada, con luz fija (30 %) para que el texto blanco siempre
+// se lea encima; null si el canvas falla.
+export function coverColor(img) {
+  try {
+    const c = el('canvas', { width: 8, height: 8 }).getContext('2d');
+    c.drawImage(img, 0, 0, 8, 8);
+    const px = c.getImageData(0, 0, 8, 8).data;
+    let [r, g, b] = [0, 0, 0];
+    for (let i = 0; i < px.length; i += 4) { r += px[i]; g += px[i + 1]; b += px[i + 2]; }
+    [r, g, b] = [r, g, b].map((v) => v / 64 / 255);
+    const max = Math.max(r, g, b);
+    const d = max - Math.min(r, g, b);
+    const h = !d ? 0 : max === r ? ((g - b) / d) % 6 : max === g ? (b - r) / d + 2 : (r - g) / d + 4;
+    const s = d / (1 - Math.abs(2 * max - d - 1) || 1);
+    return `hsl(${Math.round(h * 60 + 360) % 360} ${Math.round(Math.min(70, s * 130))}% 30%)`;
+  } catch { return null; }
+}
+
+// sheetDrag: en celular, una hoja inferior se arrastra con el dedo desde cualquier parte, no solo desde el encabezado.
+// Hacia abajo se encoge o se cierra; con grow, hacia arriba pasa de media pantalla a completa (clase .full).
+// La lista de adentro solo se desplaza con la hoja completa (o sin grow), y estando arriba el arrastre hacia abajo
+// vuelve a ser de la hoja. Son eventos touch y no pointer: Safari no deja repartir el gesto con touch-action.
+export function sheetDrag(d, scroller, { grow = false } = {}) {
+  const phone = matchMedia('(max-width: 899px)');
+  const reduce = matchMedia('(prefers-reduced-motion: reduce)');
+  let g = null; // { y, t, h, top, on }
+  d.addEventListener('touchstart', (e) => {
+    g = phone.matches && e.touches.length === 1 && !e.target.closest('.grip, input')
+      ? { y: e.touches[0].clientY, t: e.timeStamp, h: d.offsetHeight, top: scroller.scrollTop <= 0 || !scroller.contains(e.target), on: false } : null;
+  }, { passive: true });
+  d.addEventListener('touchmove', (e) => {
+    if (!g) return;
+    const dy = e.touches[0].clientY - g.y;
+    const half = grow && !d.classList.contains('full');
+    // Se decide en el primer movimiento: después el navegador ya empezó a desplazar y no suelta el gesto.
+    if (!g.on && !(half || (dy > 0 && g.top))) return (g = null);
+    g.on = true;
+    if (e.cancelable) e.preventDefault();
+    d.style.transition = 'none';
+    d.style.height = half && dy < 0 ? `${Math.min(innerHeight, g.h - dy)}px` : '';
+    d.style.transform = `translateY(${Math.max(0, dy)}px)`;
+  }, { passive: false });
+  const end = async (e) => {
+    if (!g?.on) return (g = null);
+    const { y, t, h } = g;
+    g = null;
+    const dy = e.changedTouches[0].clientY - y;
+    if (Math.abs(dy) > 10 && e.cancelable) e.preventDefault(); // el botón donde empezó el gesto no se activa
+    const ok = e.type === 'touchend';
+    const flick = Math.abs(dy) > 30 && Math.abs(dy) / (e.timeStamp - t) > 0.5;
+    const ms = reduce.matches ? 0 : 200;
+    d.style.transition = `transform ${ms}ms var(--ease), height ${ms}ms var(--ease)`;
+    if (ok && grow && dy < 0 && (flick || -dy > 60)) d.classList.add('full');
+    else if (ok && dy > 0 && (flick || dy > h / 4)) {
+      if (d.classList.contains('full') && dy < h / 2) d.classList.remove('full'); // de completa a media
+      else {
+        d.style.transform = 'translateY(100%)';
+        await sleep(ms);
+        d.close();
+      }
+    }
+    d.style.transform = d.style.height = '';
+  };
+  d.addEventListener('touchend', end);
+  d.addEventListener('touchcancel', end);
+}
+sheetDrag($('#menu'), $('#menu'));

@@ -10,6 +10,7 @@
   --muted: #a3a8ba;          /* 8,1:1 sobre --bg */
   --accent: #4fb6c6;         /* 8,3:1 sobre --bg; cyan sereno: se nota sin gritar */
   --on-accent: #0a0a12;
+  --glass: rgb(255 255 255 / .06); /* superficies sobre el fondo: dejan pasar el color de atrás */
   --danger: #ff8a8a;
   --success: #4ade9a;
 
@@ -32,7 +33,15 @@
 
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
-html, body { margin: 0; background: var(--bg); color: var(--text); }
+/* --amb: el color de la carátula que suena (player.js); registrado como color para que el cambio entre canciones se funda. */
+@property --amb { syntax: '<color>'; inherits: true; initial-value: #262843; }
+html { transition: --amb .6s; }
+html, body { margin: 0; color: var(--text); }
+html { background: var(--bg); }
+/* El fondo no es un color plano: una luz del color que suena arriba y un reflejo del acento, fijos al desplazar. */
+body::before { content: ""; position: fixed; inset: 0; z-index: -1; pointer-events: none;
+  background: radial-gradient(120% 55% at 15% 0%, color-mix(in srgb, var(--amb) 55%, transparent), transparent 70%),
+    radial-gradient(90% 45% at 100% 8%, color-mix(in srgb, var(--accent) 13%, transparent), transparent 70%); }
 body { font-size: 16px; line-height: 1.45; -webkit-text-size-adjust: 100%; min-height: 100dvh; }
 h1, h2, p { margin: 0; }
 a { color: inherit; }
@@ -89,7 +98,10 @@ input:not([type=range]):focus { border-color: var(--accent); outline: none; box-
 .topbar {
   position: sticky; top: 0; z-index: 5;
   padding: calc(env(safe-area-inset-top) + 4px) var(--gutter) 12px;
-  background: var(--bg);
+  background: color-mix(in srgb, var(--bg) 45%, transparent);
+  backdrop-filter: saturate(160%) blur(20px); -webkit-backdrop-filter: saturate(160%) blur(20px);
+  /* el borde de abajo se desvanece: sin esto la barra se ve como una franja sobre el fondo */
+  -webkit-mask-image: linear-gradient(#000 calc(100% - 14px), transparent); mask-image: linear-gradient(#000 calc(100% - 14px), transparent);
 }
 .topbar-row { display: flex; align-items: center; gap: 4px; min-height: 44px; margin: 0 -8px 0 -4px; }
 .spacer { flex: 1; }
@@ -124,7 +136,7 @@ body:has(#upbar:not([hidden])) { --up-h: 52px; } /* lo último de la vista no qu
 @keyframes shimmer { to { background-position: -200% 0; } }
 
 /* ---- Listas (archivos, canciones) ---- */
-.list { list-style: none; margin: 0 var(--gutter); padding: 0; background: var(--surface); border-radius: var(--radius); overflow: hidden; }
+.list { list-style: none; margin: 0 var(--gutter); padding: 0; background: var(--glass); border-radius: var(--radius); overflow: hidden; }
 .list > li + li { border-top: 1px solid var(--line); }
 .row-wrap { display: flex; align-items: center; }
 .row { flex: 1; min-width: 0; display: flex; align-items: center; gap: 12px; padding: 10px 12px; min-height: 60px;
@@ -158,7 +170,7 @@ body:has(#upbar:not([hidden])) { --up-h: 52px; } /* lo último de la vista no qu
 
 /* Cabecera de álbum, artista y playlist: --tint lo pone music-views.js con el color de la carátula */
 .hero { display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; padding: 8px var(--gutter) 20px;
-  background: linear-gradient(color-mix(in srgb, var(--tint, var(--surface-2)) 30%, var(--bg)), var(--bg)); }
+  background: linear-gradient(color-mix(in srgb, var(--tint, var(--surface-2)) 60%, transparent), transparent); }
 .hero .cover { width: min(56vw, 232px); flex: none; box-shadow: 0 16px 40px -16px rgb(0 0 0 / .8); }
 .hero-text { min-width: 0; }
 .hero-label { font-size: .78rem; font-weight: 700; text-transform: uppercase; letter-spacing: .06em; }
@@ -212,14 +224,14 @@ li[draggable=true] { cursor: grab; }
 .quick { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; padding: 4px var(--gutter) 0; }
 @media (min-width: 900px) { .quick { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
 .quick-tile { display: flex; align-items: center; gap: 10px; min-height: 56px; padding-right: 10px; overflow: hidden;
-  background: var(--surface-2); border-radius: var(--radius-sm); text-decoration: none; font-weight: 600; font-size: .88rem; line-height: 1.25; }
+  background: rgb(255 255 255 / .09); border-radius: var(--radius-sm); text-decoration: none; font-weight: 600; font-size: .88rem; line-height: 1.25; }
 .quick-tile .cover.small { width: 56px; height: 56px; border-radius: 0; }
 .quick-tile span { overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .quick-tile:active, .top-result:active, .chip:active { opacity: .6; }
 
 .toolbar { display: flex; align-items: center; gap: 8px; padding: 4px var(--gutter) 8px; overflow-x: auto; }
 .chip { flex: none; font: inherit; font-size: .9rem; font-weight: 600; min-height: 44px; padding: 0 16px; cursor: pointer;
-  border-radius: 999px; border: 1px solid var(--line); background: var(--surface); color: var(--text); }
+  border-radius: 999px; border: 1px solid var(--line); background: var(--glass); color: var(--text); }
 .chip[aria-pressed=true] { background: var(--accent); color: var(--on-accent); border-color: transparent; }
 
 .dl-card { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 16px var(--gutter) 0; padding: 16px;
@@ -232,12 +244,12 @@ li[draggable=true] { cursor: grab; }
 .search-top { display: grid; grid-template-columns: minmax(0, 1fr); } /* minmax(0): sin esto un título largo ensancha la página */
 @media (min-width: 900px) { .search-top { grid-template-columns: minmax(280px, 2fr) minmax(0, 3fr); } }
 .top-result { display: block; width: calc(100% - 2 * var(--gutter)); margin: 0 var(--gutter); padding: 16px; border: 0; border-radius: var(--radius);
-  background: var(--surface); color: inherit; font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
+  background: var(--glass); color: inherit; font: inherit; text-align: left; text-decoration: none; cursor: pointer; }
 .top-result .cover { width: 96px; margin-bottom: 12px; }
 .top-result p:first-of-type { font-size: 1.4rem; font-weight: 700; line-height: 1.2; overflow-wrap: anywhere; }
 
 /* Menú de acciones: hoja inferior en celular, flotante junto al botón en escritorio (lib.js lo ubica) */
-.menu { position: fixed; inset: auto 0 0; width: 100%; max-width: none; max-height: 70dvh; margin: 0; padding: 0 0 var(--safe-b); overflow-y: auto;
+.menu { position: fixed; inset: auto 0 0; width: 100%; max-width: none; max-height: 70dvh; margin: 0; padding: 0 0 var(--safe-b); overflow-y: auto; overscroll-behavior: contain;
   border: 0; border-top: 1px solid var(--line); border-radius: 18px 18px 0 0; background: var(--surface-2); color: var(--text); }
 .menu::backdrop { background: rgb(0 0 0 / .5); }
 .menu ul { list-style: none; margin: 0; padding: 8px; }
@@ -259,7 +271,7 @@ li[draggable=true] { cursor: grab; }
 .panel::backdrop { background: rgb(0 0 0 / .5); }
 .panel-head { display: flex; align-items: center; justify-content: space-between; padding: calc(env(safe-area-inset-top) + 8px) 8px 0 var(--gutter); }
 .panel-head h2 { font-size: 1.15rem; }
-#queue-body, #jam-body { flex: 1; overflow-y: auto; padding-bottom: calc(var(--safe-b) + 16px); }
+#queue-body, #jam-body { flex: 1; overflow-y: auto; overscroll-behavior: contain; padding-bottom: calc(var(--safe-b) + 16px); }
 /* translateZ: en Safari de iOS, una lista con esquinas redondeadas y overflow oculto dentro de un panel con scroll deja filas en blanco al desplazarse */
 #queue-body .list, #jam-body .list { background: var(--surface-2); transform: translateZ(0); }
 
@@ -313,7 +325,8 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 .bar { height: 4px; margin: 10px 8px 2px 0; background: var(--line); border-radius: 999px; overflow: hidden; }
 .bar span { display: block; height: 100%; width: 0; background: var(--accent); border-radius: inherit; transition: width var(--med) linear; }
 
-#player { position: relative; display: flex; align-items: center; gap: 4px; padding: 8px 6px 18px 8px; }
+#player { position: relative; display: flex; align-items: center; gap: 4px; padding: 8px 6px 18px 8px;
+  background: color-mix(in srgb, color-mix(in srgb, var(--amb) 45%, var(--surface-2)) 86%, transparent); }
 .player-left { flex: 1; min-width: 0; display: flex; align-items: center; }
 .player-mid { display: contents; }
 .player-btns { display: flex; align-items: center; }
@@ -332,10 +345,9 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 /* solo la línea, sin bola: la bola sigue ahí invisible para poder arrastrar */
 .seek::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%; opacity: 0; }
 .seek::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; opacity: 0; }
-/* Gestos de la barra mini (player.js): a los lados cambia de canción; hacia abajo la oculta, solo en la Nube.
-   En Música el arrastre vertical sigue desplazando la página; en la Nube la barra se queda con él para poder ocultarla. */
+/* Gestos de la barra mini (player.js): a los lados cambia de canción; hacia arriba abre la pantalla completa;
+   hacia abajo la oculta, solo en la Nube. */
 #player { touch-action: none; -webkit-user-select: none; user-select: none; }
-body.music #player { touch-action: pan-y; }
 .player-grip { display: none; }
 #player-tuck, .player-tab { display: none; }
 body:not(.music) #player-tuck { display: inline-flex; }
@@ -356,11 +368,11 @@ body.has-player.paused:not(.music) #view { padding-bottom: calc(var(--tabs-h) + 
 /* ---- Reproductor a pantalla completa ---- */
 #np { border: 0; margin: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; color: var(--text);
   padding: calc(env(safe-area-inset-top) + 8px) 24px calc(var(--safe-b) + 28px);
-  background: linear-gradient(180deg, #262843, var(--bg) 75%); }
+  background: linear-gradient(180deg, color-mix(in srgb, var(--amb) 85%, var(--bg)), var(--bg) 90%); }
 #np[open] { display: flex; flex-direction: column; gap: 18px; }
 #np { touch-action: none; } /* el gesto de deslizar hacia abajo es de la app, no del navegador */
 .np-bar { display: flex; align-items: center; justify-content: space-between; margin: 0 -12px; font-size: .85rem; font-weight: 600; }
-.np-cover { width: min(100%, 44dvh); margin: auto; box-shadow: 0 24px 60px -20px rgb(0 0 0 / .85); }
+.np-cover { width: min(100%, 44dvh); margin: auto; box-shadow: 0 24px 60px -20px color-mix(in srgb, var(--amb) 50%, #000); }
 .np-head { display: flex; align-items: center; gap: 8px; }
 .np-text { flex: 1; min-width: 0; }
 .np-text p:first-child { font-size: 1.35rem; font-weight: 700; overflow-wrap: anywhere; }
@@ -452,7 +464,7 @@ body.has-player.paused:not(.music) #view { padding-bottom: calc(var(--tabs-h) + 
 
 /* ---- Administración ---- */
 .meters { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; margin: 8px var(--gutter) 0; }
-.meter { min-width: 0; padding: 12px; background: var(--surface); border-radius: var(--radius); font-size: .8rem; }
+.meter { min-width: 0; padding: 12px; background: var(--glass); border-radius: var(--radius); font-size: .8rem; }
 .meter-num { font-size: 1.6rem; font-weight: 700; letter-spacing: -.02em; line-height: 1.2; font-variant-numeric: tabular-nums; }
 .meter .bar { margin: 8px 0; }
 .meter.warn .bar span { background: var(--t-video); }
@@ -476,7 +488,7 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .meters.single { grid-template-columns: 1fr; }
 .stat-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 8px var(--gutter) 0; }
 @media (min-width: 900px) { .stat-cards { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
-.stat-card { min-width: 0; display: grid; gap: 2px; padding: 14px; background: var(--surface); border: 1px solid transparent; border-radius: var(--radius);
+.stat-card { min-width: 0; display: grid; gap: 2px; padding: 14px; background: var(--glass); border: 1px solid transparent; border-radius: var(--radius);
   color: var(--text); text-decoration: none; font-size: .8rem; transition: background var(--fast); }
 .stat-card:hover { background: var(--surface-2); }
 .stat-card:active { opacity: .6; }
@@ -544,12 +556,16 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 [aria-checked=true] .check svg { opacity: 1; }
 .sheet-grip { display: none; }
 @media (max-width: 899px) {
-  /* En celular la cola es una hoja inferior a media pantalla; deslizar el encabezado hacia arriba la abre completa. */
-  #queue { inset: auto 0 0 0; width: 100vw; height: 60dvh; border-radius: 16px 16px 0 0; transition: height .2s var(--ease); }
+  /* En celular la cola es una hoja inferior a media pantalla; deslizarla hacia arriba la abre completa (sheetDrag en lib.js). */
+  #queue { inset: auto 0 0 0; width: 100vw; height: 60dvh; border-radius: 16px 16px 0 0; transition: height .2s var(--ease);
+    background: linear-gradient(color-mix(in srgb, var(--amb) 35%, var(--surface)), var(--surface) 45%); }
+  /* Las hojas y la pantalla completa suben desde abajo al abrir, en vez de aparecer de golpe. */
+  #queue[open], #np[open], .menu[open] { animation: rise var(--med) var(--ease); }
   #queue.full { height: 100dvh; border-radius: 0; }
   #queue .panel-head { position: relative; padding-top: 20px; touch-action: none; }
   #queue.full .panel-head { padding-top: calc(env(safe-area-inset-top) + 20px); }
   .sheet-grip { display: block; position: absolute; top: 8px; left: 50%; translate: -50% 0; width: 36px; height: 4px; border-radius: 999px; background: var(--line); }
   #queue.full .sheet-grip { top: calc(env(safe-area-inset-top) + 8px); }
 }
+@keyframes rise { from { transform: translateY(100%); } }
 @media (prefers-reduced-motion: reduce) { #queue { transition: none; } }

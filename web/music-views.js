@@ -1,5 +1,5 @@
 // Música: las vistas. Inicio, Buscar y Tu biblioteca, y las páginas de álbum, artista y playlist.
-import { $, el, icon, json, plural, joinText, fmtLong, typeBadge, toast, ask, menu, empty } from './lib.js';
+import { $, el, icon, json, plural, joinText, fmtLong, typeBadge, toast, ask, menu, empty, coverColor } from './lib.js';
 import { href, go, render, route } from './nav.js';
 import { api, userName } from './session.js';
 import * as offline from './offline.js';
@@ -416,19 +416,8 @@ async function libraryView() {
 
 // Páginas de álbum, artista y playlist: encabezado grande, botones de reproducir y lista de pistas
 
-// tint tiñe el encabezado con el color medio de la carátula; si el canvas falla queda el fondo normal.
-function tint(hero, art) {
-  art.querySelector('img')?.addEventListener('load', (e) => {
-    try {
-      const c = el('canvas', { width: 8, height: 8 }).getContext('2d');
-      c.drawImage(e.target, 0, 0, 8, 8);
-      const px = c.getImageData(0, 0, 8, 8).data;
-      const sum = [0, 0, 0];
-      for (let i = 0; i < px.length; i += 4) for (let k = 0; k < 3; k++) sum[k] += px[i + k];
-      hero.style.setProperty('--tint', `rgb(${sum.map((v) => Math.round(v / 64)).join(' ')})`);
-    } catch {}
-  });
-}
+// tint tiñe el encabezado con el color de la carátula; si el canvas falla queda el fondo normal.
+const tint = (hero, art) => art.querySelector('img')?.addEventListener('load', (e) => hero.style.setProperty('--tint', coverColor(e.target) ?? ''));
 
 // page arma una página de colección. meta: textos o nodos bajo el título; actions: botones extra; body: lo que va bajo los botones.
 function page({ label, title, art, meta, tracks, actions = [], body }) {

@@ -1,5 +1,5 @@
 // Reproductor de música: cola, aleatorio, repetir y la barra que sigue sonando al cambiar de sección.
-import { $, el, icon, setIcon, json, joinText, lazyImg, toast, clock, plural, sleep, ask, menu } from './lib.js';
+import { $, el, icon, setIcon, json, joinText, lazyImg, toast, clock, plural, sleep, ask, menu, coverColor, sheetDrag } from './lib.js';
 import { thumbUrl, go } from './nav.js';
 import { api } from './session.js';
 import { ensureLib, markLikes, toggleLike, liked, pickPlaylist } from './music.js';
@@ -204,6 +204,10 @@ function present(t, at) {
     $(subEl).textContent = sub;
     $(coverEl).replaceChildren(...cover(t));
   }
+  // El color de la carátula tiñe el reproductor y el fondo de la app (--amb, style.css); sin carátula queda el de siempre.
+  const art = $('#player-cover img'); // la de la barra: la de pantalla completa no carga mientras está cerrada
+  document.documentElement.style.removeProperty('--amb');
+  art?.addEventListener('load', () => { if (art.isConnected) document.documentElement.style.setProperty('--amb', coverColor(art) ?? ''); });
   for (const b of document.querySelectorAll('#player .like, #np .like')) b.dataset.like = t.path;
   for (const s of seeks) setSeek(s, 0);
   paintTimes(at, t.dur);
@@ -367,7 +371,7 @@ document.addEventListener('click', (e) => {
     if (room) jam.send('repeat', { repeat }); // sala propia del flujo: el servidor decide qué suena al terminar
     else refill();
   }
-  else if (act === 'queue') { $('#queue').showModal(); paintQueue(); }
+  else if (act === 'queue') openQueue();
 });
 // El me gusta de los reproductores: un toque la guarda; si ya está guardada, ofrece quitarla o sumarla a una playlist.
 for (const b of document.querySelectorAll('#player .like, #np .like')) {
@@ -388,7 +392,7 @@ $('#np-more').onclick = () => {
   menu($('#np-more'), `Acciones de ${t.title}`, [
     !offline.active && { icon: 'heart', label: liked.has(t.path) ? 'Quitar de Canciones que te gustan' : 'Agregar a Canciones que te gustan', run: () => toggleLike(t.path) },
     !offline.active && { icon: 'list-plus', label: 'Agregar a playlist…', run: () => pickPlaylist($('#np-more'), t) },
-    { icon: 'queue', label: 'Abrir la cola', run: () => { $('#queue').showModal(); paintQueue(); } },
+    { icon: 'queue', label: 'Abrir la cola', run: openQueue },
     !offline.active && { icon: 'cast', label: 'Dispositivos y jam', run: () => { toNormal(); $('#jam').showModal(); paintJam(); } },
     { icon: 'disc', label: 'Ir al álbum', run: () => leave(`album/${t.albumPath}`) },
     t.artistPath && { icon: 'user', label: 'Ir al artista', run: () => leave(`artista/${t.artistPath}`) },
@@ -524,12 +528,12 @@ function mediaActions() {
 mediaActions();
 audio.addEventListener('playing', mediaActions);
 
-// Gestos de la barra mini: deslizar a los lados cambia de canción; hacia abajo la oculta (solo en la Nube:
-// en Música el reproductor es el centro de la sección y ese arrastre debe seguir desplazando la página).
+// Gestos de la barra mini: deslizar a los lados cambia de canción; hacia arriba abre la pantalla completa;
+// hacia abajo la oculta (solo en la Nube: en Música el reproductor es el centro de la sección).
 const bar = $('#player');
 const strip = bar.querySelector('.player-left'); // lo que acompaña al dedo al cambiar de canción
 const reduce = matchMedia('(prefers-reduced-motion: reduce)');
-let drag = null; // { id, x, y, t, mode: '' | 'x' | 'y' }
+let drag = null; // { id, x, y, t, mode: '' | 'x' | 'y' | 'up' }
 let swallowUntil = 0; // tras un arrastre, el click que le sigue no abre la pantalla completa
 function tuck(on) {
   const had = bar.contains(document.activeElement) || document.activeElement === $('#player-tab');
@@ -545,9 +549,9 @@ function slideTo(n, transform, opacity, ms = 0) {
   n.style.opacity = opacity;
 }
 const canGo = (dir) => (dir > 0 ? pos + 1 < queue.length || repeat > 0 : pos > 0);
-async function swipeTo(dir) {
+async function swipeTo(dir, n = strip) {
   const ms = reduce.matches ? 0 : 160;
-  slideTo(strip, `translateX(${-dir * bar.offsetWidth}px)`, 0, ms);
+  slideTo(n, `translateX(${-dir * bar.offsetWidth}px)`, 0, ms);
   await sleep(ms);
   if (dir > 0) next();
   else if (streaming()) streamDo('prev'); // a diferencia del botón, deslizar siempre cambia de canción
@@ -557,9 +561,9 @@ async function swipeTo(dir) {
     load(pos - 1);
     if (!local) startRoom({ playing: true, at: 0 });
   }
-  slideTo(strip, `translateX(${dir * 48}px)`, 0);
-  strip.offsetWidth; // aplica la posición de entrada antes de animar
-  slideTo(strip, '', '', ms);
+  slideTo(n, `translateX(${dir * 48}px)`, 0);
+  n.offsetWidth; // aplica la posición de entrada antes de animar
+  slideTo(n, '', '', ms);
 }
 bar.addEventListener('pointerdown', (e) => {
   if (!e.isPrimary || e.button !== 0 || e.target.closest('input')) return; // la barra de avance se arrastra sola
@@ -571,11 +575,12 @@ bar.addEventListener('pointermove', (e) => {
   const dy = e.clientY - drag.y;
   if (!drag.mode) {
     if (Math.hypot(dx, dy) < 12) return; // todavía puede ser un toque
-    drag.mode = Math.abs(dx) > Math.abs(dy) * 1.5 ? 'x' : dy > 0 && !document.body.classList.contains('music') ? 'y' : '';
+    drag.mode = Math.abs(dx) > Math.abs(dy) * 1.5 ? 'x' : dy < 0 ? 'up' : document.body.classList.contains('music') ? '' : 'y';
     if (!drag.mode) return (drag = null);
     bar.setPointerCapture(e.pointerId);
   }
   if (drag.mode === 'x') slideTo(strip, `translateX(${canGo(-Math.sign(dx)) ? dx : dx / 4}px)`, 1 - Math.min(Math.abs(dx) / bar.offsetWidth, 0.6));
+  else if (drag.mode === 'up') slideTo(bar, `translateY(${Math.max(-24, Math.min(0, dy / 3))}px)`, '');
   else slideTo(bar, `translateY(${Math.max(0, dy)}px)`, 1 - Math.min(Math.max(0, dy) / 160, 0.6));
 });
 function dragEnd(e) {
@@ -589,42 +594,52 @@ function dragEnd(e) {
   // Cambia con un cuarto del ancho, o con un gesto rápido corto.
   if (mode === 'x' && up && canGo(-Math.sign(dx)) && (Math.abs(dx) > bar.offsetWidth / 4 || (Math.abs(dx) > 40 && Math.abs(dx) / (e.timeStamp - t) > 0.5))) return swipeTo(-Math.sign(dx));
   if (mode === 'y' && up && dy > 48) return tuck(true);
-  slideTo(mode === 'y' ? bar : strip, '', '', 200);
+  if (mode === 'up' && up && dy < -30) $('#np').showModal();
+  slideTo(mode === 'x' ? strip : bar, '', '', 200);
 }
 bar.addEventListener('pointerup', dragEnd);
 bar.addEventListener('pointercancel', dragEnd); // el navegador tomó el gesto (desplazamiento vertical en Música)
-// Pantalla completa: deslizar hacia abajo la cierra y vuelve a la barra pequeña.
+// Pantalla completa, desde cualquier parte: hacia abajo la cierra y vuelve a la barra pequeña; a los lados cambia de
+// canción (la carátula acompaña al dedo); hacia arriba abre la cola.
 const np = $('#np');
-let npDrag = null; // { id, x, y, t, on }
+const npArt = $('#np-cover');
+const openQueue = () => { $('#queue').showModal(); paintQueue(); };
+let npDrag = null; // { id, x, y, t, mode: '' | 'x' | 'y' | 'up' }
 np.addEventListener('pointerdown', (e) => {
-  if (e.isPrimary && e.pointerType !== 'mouse' && !e.target.closest('input')) npDrag = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, on: false };
+  if (e.isPrimary && e.pointerType !== 'mouse' && !e.target.closest('input')) npDrag = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, mode: '' };
 });
 np.addEventListener('pointermove', (e) => {
   if (npDrag?.id !== e.pointerId) return;
+  const dx = e.clientX - npDrag.x;
   const dy = e.clientY - npDrag.y;
-  if (!npDrag.on) {
-    if (Math.hypot(e.clientX - npDrag.x, dy) < 12) return; // todavía puede ser un toque
-    if (dy < Math.abs(e.clientX - npDrag.x) * 1.5) return (npDrag = null); // hacia arriba o de lado
-    npDrag.on = true;
+  if (!npDrag.mode) {
+    if (Math.hypot(dx, dy) < 12) return; // todavía puede ser un toque
+    npDrag.mode = Math.abs(dx) > Math.abs(dy) * 1.5 ? 'x' : dy > 0 ? 'y' : 'up';
     np.setPointerCapture(e.pointerId);
   }
-  slideTo(np, `translateY(${Math.max(0, dy)}px)`, '');
+  if (npDrag.mode === 'x') slideTo(npArt, `translateX(${canGo(-Math.sign(dx)) ? dx : dx / 4}px)`, 1 - Math.min(Math.abs(dx) / np.offsetWidth, 0.6));
+  else if (npDrag.mode === 'y') slideTo(np, `translateY(${Math.max(0, dy)}px)`, '');
 });
 async function npEnd(e) {
   if (npDrag?.id !== e.pointerId) return;
-  const { on, y, t } = npDrag;
+  const { mode, x, y, t } = npDrag;
   npDrag = null;
-  if (!on) return;
+  if (!mode) return;
   swallowUntil = e.timeStamp + 400; // el botón donde empezó el gesto no se activa
+  const dx = e.clientX - x;
   const dy = e.clientY - y;
-  if (e.type === 'pointerup' && (dy > np.offsetHeight / 4 || (dy > 60 && dy / (e.timeStamp - t) > 0.5))) {
+  const up = e.type === 'pointerup';
+  const far = (d, size) => d > size / 4 || (d > 40 && d / (e.timeStamp - t) > 0.5); // un cuarto del tamaño, o un gesto rápido corto
+  if (mode === 'x' && up && canGo(-Math.sign(dx)) && far(Math.abs(dx), np.offsetWidth)) return swipeTo(-Math.sign(dx), npArt);
+  if (mode === 'up' && up && dy < -60) return openQueue();
+  if (mode === 'y' && up && far(dy, np.offsetHeight)) {
     const ms = reduce.matches ? 0 : 200;
     slideTo(np, 'translateY(100%)', '', ms);
     await sleep(ms);
     np.close();
     return slideTo(np, '', '');
   }
-  slideTo(np, '', '', 200);
+  slideTo(mode === 'x' ? npArt : np, '', '', 200);
 }
 np.addEventListener('pointerup', npEnd);
 np.addEventListener('pointercancel', npEnd);
@@ -806,22 +821,9 @@ function paintQueueFoot(rest) {
 $('#queue-edit').onclick = () => { editing = !editing; picked.clear(); paintQueue(); };
 $('#queue-clear').onclick = () => { setTail([], 0); toast('Se quitó lo que seguía en la cola.', { kind: 'ok' }); };
 $('#queue').addEventListener('close', () => { editing = false; picked.clear(); $('#queue').classList.remove('full'); });
-// En celular la cola es una hoja a media pantalla: desde el encabezado, deslizar hacia arriba la abre completa y
-// hacia abajo la encoge o la cierra.
-{
-  let y = null;
-  const head = $('#queue-head');
-  head.addEventListener('pointerdown', (e) => { if (e.isPrimary && !e.target.closest('button')) y = e.clientY; });
-  head.addEventListener('pointerup', (e) => {
-    if (y == null) return;
-    const dy = e.clientY - y;
-    y = null;
-    const q = $('#queue');
-    if (dy < -30) q.classList.add('full');
-    else if (dy > 30) q.classList.contains('full') ? q.classList.remove('full') : q.close();
-  });
-  head.addEventListener('pointercancel', () => (y = null));
-}
+// En celular la cola es una hoja a media pantalla que se arrastra desde cualquier parte: hacia arriba se abre completa
+// y hacia abajo se encoge o se cierra.
+sheetDrag($('#queue'), $('#queue-body'), { grow: true });
 
 // Cola, pista y posición se recuerdan en este navegador para retomar al volver a abrir la app.
 

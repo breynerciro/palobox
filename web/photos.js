@@ -69,15 +69,19 @@ $('#viewer').addEventListener('keydown', (e) => {
   if (e.key === 'ArrowLeft') step(-1);
   if (e.key === 'ArrowRight') step(1);
 });
-// Deslizar entre fotos. En videos no, para no chocar con los controles del reproductor.
+// Deslizar entre fotos, o hacia abajo para cerrar. En videos no, para no chocar con los controles del reproductor.
 let touchX = null;
+let touchY = 0;
 $('#stage').addEventListener('touchstart', (e) => {
   touchX = e.touches.length === 1 && photos[vIndex]?.kind !== 'video' ? e.touches[0].clientX : null;
+  touchY = e.touches[0].clientY;
 }, { passive: true });
 $('#stage').addEventListener('touchend', (e) => {
   if (touchX == null) return;
   const dx = e.changedTouches[0].clientX - touchX;
-  if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1);
+  const dy = e.changedTouches[0].clientY - touchY;
+  if (dy > 90 && dy > Math.abs(dx) * 1.5 && !(visualViewport?.scale > 1)) $('#viewer').close(); // con zoom, el dedo mueve la foto
+  else if (Math.abs(dx) > 50) step(dx < 0 ? 1 : -1);
   touchX = null;
 });
 $('#v-del').onclick = async () => {
