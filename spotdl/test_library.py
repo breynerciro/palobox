@@ -95,7 +95,7 @@ class FiltroTest(unittest.TestCase):
         self.assertEqual(tags, {"artists": ["AC/DC", "AC", "DC"], "title": "Thunderstruck", "duration": 292.0, "total": 10})
 
     def test_borra_solo_mp3_a_medias_del_trabajo(self):
-        disco = {"vieja.mp3": "", "a_medias.mp3": "", "buena.mp3": "Buena", "danada.mp3": None, "nota.txt": ""}
+        disco = {"vieja.mp3": "", "a_medias.mp3": "", "buena.mp3": "Buena", "danada.mp3": None, "nota.txt": "", "de_samba.mp3": ""}
         for nombre in disco:
             open(os.path.join(self.music, nombre), "wb").close()
         os.utime(os.path.join(self.music, "vieja.mp3"), (1, 1))  # anterior al trabajo: no es suya
@@ -107,8 +107,9 @@ class FiltroTest(unittest.TestCase):
             return {"title": titulo}
 
         with mock.patch("library.read_tags", side_effect=leer):
-            library.drop_partial(self.music, 1000 * 1000)
-        self.assertEqual(sorted(os.listdir(self.music)), ["buena.mp3", "danada.mp3", "nota.txt", "vieja.mp3"])
+            library.drop_partial(self.music, 1000 * 1000, ["Vieja", "A medias", "Buena", "Dañada", "Nota"])
+        # de_samba.mp3 tampoco tiene título, pero no es una canción del trabajo
+        self.assertEqual(sorted(os.listdir(self.music)), ["buena.mp3", "danada.mp3", "de_samba.mp3", "nota.txt", "vieja.mp3"])
 
     def test_mp3_ilegible_no_frena(self):
         biblioteca(self.music, [("Penyair", "La Ley del Todo", "Nada", 180, 12)])

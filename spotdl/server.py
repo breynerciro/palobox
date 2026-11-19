@@ -279,7 +279,7 @@ class Runner:
         todofile = os.path.join(self.s.state_dir, f"to-download-{jid}.spotdl")
         temps = (errfile, savefile, planfile, todofile)
         remove(temps)
-        drop_partial(self.s.music_dir, job["created"])
+        drop_partial(self.s.music_dir, job["created"], [t for _, t in self.store.songs(jid)])  # de una corrida anterior
         cookie = ["--cookie-file", self.s.cookie_file] if self.s.cookie_file else []
         # Las credenciales de Spotify las lee spotDL de su config.json (Settings.write_spotify_config).
 
@@ -353,7 +353,7 @@ class Runner:
                 self.settle(jid, keep + missing + failures_from(errfile, song_names(savefile)), False, skipped)
         finally:
             remove(temps)
-            drop_partial(self.s.music_dir, job["created"])
+            drop_partial(self.s.music_dir, job["created"], [t for _, t in self.store.songs(jid)])
 
     def spotdl(self, jid, args, feed, started):
         """Corre spotDL e informa el avance. Devuelve su código (o 1 si no arrancó o se pasó del

@@ -61,15 +61,19 @@ def playlist_tracks(songs, index, music_dir):
     return out
 
 
-def drop_partial(music_dir, since):
+def drop_partial(music_dir, since, titles):
     """Borra los MP3 que dejó a medias un spotDL cortado (cancelar, tiempo máximo, apagar): convierte
     directo a la ruta final y etiqueta después, y al reintentar los saltaría por existir. Solo toca
-    archivos más nuevos que el trabajo (since, en ms) y sin título en sus etiquetas."""
+    archivos más nuevos que el trabajo (since, en ms), sin título en sus etiquetas y con el nombre de una
+    de sus canciones (titles): un MP3 sin etiquetas copiado por Samba en ese rato no es del trabajo."""
+    titles = {norm(t) for t in titles if t}
+    if not titles:
+        return
     for root, _dirs, files in os.walk(music_dir):
         for name in files:
             path = os.path.join(root, name)
             try:
-                if not name.lower().endswith(".mp3") or os.path.getmtime(path) * 1000 <= since:
+                if not name.lower().endswith(".mp3") or norm(name[:-4]) not in titles or os.path.getmtime(path) * 1000 <= since:
                     continue
                 if not read_tags(path)["title"]:
                     log.warning("se borra un MP3 a medias: %s", path)
