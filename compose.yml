@@ -6,7 +6,7 @@ services:
     image: palobox
     build: .
     restart: unless-stopped
-    ports: ["127.0.0.1:8080:8080"] # solo para tailscale serve (HTTPS en *.ts.net); ni la LAN ni el tailnet llegan directo
+    ports: ["127.0.0.1:8080:8080"] # solo para tailscale serve; el túnel de Cloudflare entra por la red de compose, no por aquí
     volumes: ["${DATA_PATH:-/srv/data}:/data"]
     environment:
       ADMIN: ${ADMIN:-admin} # usuario que ve el panel de administrador
@@ -54,8 +54,22 @@ services:
       retries: 5
       start_period: 30s
 
+  # Acceso público por Cloudflare Tunnel: sale hacia Cloudflare, sin abrir puertos (sirve con CGNAT).
+  # Opcional: se enciende con COMPOSE_PROFILES=tunnel en .env. En el panel de Cloudflare, el hostname
+  # público apunta a http://palobox:8080 (la red de compose), así clientIP toma la IP real de X-Forwarded-For.
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    profiles: [tunnel]
+    restart: unless-stopped
+    command: tunnel --no-autoupdate run --token-file /run/secrets/cloudflared_token
+    secrets: [cloudflared_token]
+    depends_on: [palobox]
+
 # Un secreto por módulo, compartido solo entre la app y ese módulo. Lo crea deploy.sh en el
 # servidor (secrets/ es 700; el archivo 644 para que lo lea el usuario 1000 del contenedor).
 secrets:
   spotdl_token:
     file: ./secrets/spotdl.token
+  # Token del túnel (panel de Cloudflare); se copia a mano al servidor, ver README.
+  cloudflared_token:
+    file: ./secrets/cloudflared.token

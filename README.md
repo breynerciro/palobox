@@ -54,6 +54,15 @@ El puerto solo se publica en `127.0.0.1`: la idea es ponerle HTTPS por delante, 
 con `tailscale serve 8080` o un proxy inverso (Caddy, nginx). Si solo la quieres en tu red
 local, cambia `ports` en `compose.yml` a `"8080:8080"`.
 
+Para compartirla con gente que no está en tu tailnet, `compose.yml` trae Cloudflare Tunnel (apagado por defecto):
+
+1. Pasa el dominio a Cloudflare (cambia sus nameservers a los que te da Cloudflare).
+2. En Cloudflare Zero Trust → Networks → Tunnels, crea un túnel tipo `cloudflared` y copia su token.
+   En *Public Hostname* pon tu dominio con servicio `http://palobox:8080`.
+3. En el servidor guarda el token, legible para el contenedor (que no corre como root):
+   `(umask 022; echo 'TOKEN' > /srv/apps/palobox/secrets/cloudflared.token)`
+4. Agrega `COMPOSE_PROFILES=tunnel` al `.env` y vuelve a desplegar.
+
 ### Sin descargas de Spotify
 
 ```sh
