@@ -3,6 +3,7 @@ import { $, el, empty } from './lib.js';
 import { TABS, route, go, setRenderer, render } from './nav.js';
 import { audio, markPlaying, joinJam } from './player.js';
 import { isAdmin, musicOnly, start } from './session.js';
+import * as offline from './offline.js';
 import { uploading } from './uploads.js';
 import { photosView } from './photos.js';
 import { filesView } from './files.js';
@@ -82,7 +83,7 @@ async function renderView() {
 
   $('#searchbox').hidden = section !== 'buscar';
   if (section === 'buscar') {
-    $('#search').placeholder = 'Busca o pega un enlace de Spotify';
+    $('#search').placeholder = offline.active ? 'Busca en tu música descargada' : 'Busca o pega un enlace de Spotify';
     syncSearchBox();
   }
 

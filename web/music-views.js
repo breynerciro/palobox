@@ -2,6 +2,7 @@
 import { $, el, icon, json, plural, joinText, fmtLong, typeBadge, toast, ask, menu, empty } from './lib.js';
 import { href, go, render, route } from './nav.js';
 import { api, userName } from './session.js';
+import * as offline from './offline.js';
 import { playAt, isShuffle } from './player.js';
 import { library, ensureLib, liked, createPlaylist, cover, item, card, libRow, trackList, libItems, saveButton, downloadButton, offlineBox } from './music.js';
 
@@ -152,7 +153,7 @@ function remember(q) {
 function searchView() {
   searching?.abort();
   const link = spotifyLink(query);
-  if (link) return linkView(link);
+  if (link && !offline.active) return linkView(link); // descargar de Spotify necesita conexión
   return query.length < 2 ? suggestView() : resultsView(query);
 }
 
@@ -349,7 +350,7 @@ async function libraryView() {
   filters.setAttribute('role', 'group');
   filters.setAttribute('aria-label', 'Filtrar la biblioteca');
   return frag(filters,
-    el('div', { className: 'toolbar' }, order, el('span', { className: 'spacer' }), layout, add),
+    el('div', { className: 'toolbar' }, order, el('span', { className: 'spacer' }), layout, !offline.active && add),
     dl?.node, offlineBox(), dl && heading('Biblioteca'), box);
 }
 
@@ -428,6 +429,9 @@ async function playlistView(id) {
   const [pl] = await Promise.all([getJSON(base), ensureLib().catch(() => {})]);
   if (!pl) return gone('Esta playlist ya no está');
   const { tracks } = pl;
+  // Una playlist descargada se pone al día cada vez que se abre con conexión: sin conexión mostrará de estas
+  // canciones las que estén en el celular.
+  if (!offline.active && offline.keeps(pl.id)) offline.keepPlaylist(pl, tracks);
   const send = async (url, opts, fail) => {
     const r = await api(url, opts).catch(() => null);
     if (!r?.ok) return toast(r ? fail : OFFLINE, { kind: 'warn' });
@@ -453,11 +457,12 @@ async function playlistView(id) {
     } },
   ]);
   return page({
-    label: 'Playlist', title: pl.name, art: cover(tracks.length ? tracks[0].albumPath : null), tracks, actions: [downloadButton(tracks, pl), more],
+    label: 'Playlist', title: pl.name, art: cover(tracks.length ? tracks[0].albumPath : null), tracks, actions: [downloadButton(tracks, pl), !offline.active && more],
     meta: [songs(tracks.length), total(tracks)],
     body: !tracks.length ? emptyList() : trackList(tracks, {
-      covers: true, sub: (t) => joinText(t.artist, t.album), onMove: move,
-      extra: (t, i) => [
+      // Sin conexión la playlist se ve y suena, pero no se edita.
+      covers: true, sub: (t) => joinText(t.artist, t.album), onMove: offline.active ? undefined : move,
+      extra: (t, i) => !offline.active && [
         i > 0 && { icon: 'up', label: 'Subir', run: () => move(i, i - 1) },
         i < tracks.length - 1 && { icon: 'down', label: 'Bajar', run: () => move(i, i + 1) },
         { icon: 'x', label: 'Quitar de esta playlist', danger: true, run: async () => {

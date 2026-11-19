@@ -2,7 +2,7 @@
 import { $, json, ask, toast } from './lib.js';
 import { render } from './nav.js';
 import { restore, reset, goOffline } from './player.js';
-import { forget } from './music.js';
+import { forget, resumeDownloads } from './music.js';
 import * as offline from './offline.js';
 
 // Sin conexión (offline.js) las peticiones no van a la red: se responden con lo descargado en el celular.
@@ -163,4 +163,5 @@ export async function start() {
   $('#login').hidden = true;
   $('#app').hidden = false;
   render();
+  resumeDownloads(); // lo que quedó a medio descargar la última vez
 }

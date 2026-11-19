@@ -161,17 +161,17 @@ func TestJam(t *testing.T) {
 func TestJamStream(t *testing.T) {
 	a, data, ana, _ := musicSetup(t)
 	// MP3 de mentira con la forma de uno real: etiqueta ID3v2 (30 bytes), el cuadro de información de LAME
-	// (417 bytes, declara la duración del archivo) y cuadros de 417 bytes a 128 kbps y 44,1 kHz.
+	// (384 bytes, declara la duración del archivo) y cuadros de 384 bytes a 128 kbps y 48 kHz.
 	frame := func(fill byte) []byte {
-		b := bytes.Repeat([]byte{fill}, 417)
-		copy(b, []byte{0xFF, 0xFB, 0x90, 0x00})
+		b := bytes.Repeat([]byte{fill}, 384)
+		copy(b, []byte{0xFF, 0xFB, 0x94, 0x00})
 		return b
 	}
 	for i, name := range []string{"uno", "dos"} {
 		id3 := append([]byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 20}, make([]byte, 20)...)
 		info := frame(0)
 		copy(info[36:], "Info")
-		body := bytes.Repeat(frame('a'+byte(i)), 40) // 16 680 bytes
+		body := bytes.Repeat(frame('a'+byte(i)), 40) // 15 360 bytes
 		os.WriteFile(filepath.Join(data, "media", "musica", name+".mp3"), append(append(id3, info...), body...), 0o644)
 	}
 	ana.do("GET", "/api/music", nil)
@@ -201,7 +201,7 @@ func TestJamStream(t *testing.T) {
 	}
 	// Llegan los dos cuerpos seguidos por la misma conexión: primero «uno» y después «dos». Son 80 cuadros; el
 	// primero puede faltar, porque el flujo arranca en el cuadro siguiente a la posición de la sala.
-	got := make([]byte, 79*417)
+	got := make([]byte, 79*384)
 	if n, err := io.ReadFull(res.Body, got); err != nil {
 		t.Fatalf("el flujo se cortó antes de mandar las dos pistas: %v (llegaron %d bytes)", err, n)
 	}
@@ -209,7 +209,7 @@ func TestJamStream(t *testing.T) {
 		t.Fatal("las etiquetas y el cuadro de información no deben ir en el flujo")
 	}
 	na, nb, cambio := bytes.Count(got, []byte{'a'}), bytes.Count(got, []byte{'b'}), bytes.IndexByte(got, 'b')
-	if na < 39*413 || nb < 39*413 || bytes.IndexByte(got[cambio:], 'a') >= 0 {
+	if na < 39*380 || nb < 39*380 || bytes.IndexByte(got[cambio:], 'a') >= 0 {
 		t.Fatalf("deben llegar las dos pistas completas y en orden: %d de la primera, %d de la segunda", na, nb)
 	}
 	// El servidor avanzó la sala por su cuenta: nadie mandó «ended».
@@ -218,7 +218,7 @@ func TestJamStream(t *testing.T) {
 	}
 
 	// Descarga para escuchar sin conexión: el mismo audio limpio, completo y solo con sesión.
-	if code, _, raw := ana.do("GET", "/api/music/offline?path=uno.mp3", nil); code != 200 || len(raw) != 40*417 || bytes.Contains(raw, []byte("Info")) || bytes.Contains(raw, []byte("ID3")) {
+	if code, _, raw := ana.do("GET", "/api/music/offline?path=uno.mp3", nil); code != 200 || len(raw) != 40*384 || bytes.Contains(raw, []byte("Info")) || bytes.Contains(raw, []byte("ID3")) {
 		t.Fatalf("offline: %d, %d bytes", code, len(raw))
 	}
 	if code, _, _ := (client{t, ana.base, &http.Client{}}).do("GET", "/api/music/offline?path=uno.mp3", nil); code != 401 {
@@ -235,8 +235,8 @@ func TestJamStream(t *testing.T) {
 	}
 	cmd(map[string]any{"op": "jump", "index": 0})
 	cmd(map[string]any{"op": "cut"})
-	more := make([]byte, 10*417)
-	if _, err := io.ReadFull(res.Body, more); err != nil || bytes.Count(more[5*417:], []byte{'a'}) < 4*413 {
+	more := make([]byte, 10*384)
+	if _, err := io.ReadFull(res.Body, more); err != nil || bytes.Count(more[5*384:], []byte{'a'}) < 4*380 {
 		t.Fatalf("tras «cut» debe llegar de nuevo la primera pista: %v %q", err, more[len(more)-8:])
 	}
 

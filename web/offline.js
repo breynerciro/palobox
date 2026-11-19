@@ -9,10 +9,20 @@
 // Jam, Connect, descargas de Spotify y cualquier cambio (me gusta, playlists) necesitan conexión.
 const AUDIO = 'palobox-offline-audio';
 const KEY = 'palobox.offline';
-const FRAME = 1152 / 44100; // segundos de cada cuadro MP3: todo lo descargado es MPEG-1 capa III a 44,1 kHz
-const blank = () => ({ user: '', musicOnly: false, tracks: {}, albums: {}, artists: {}, playlists: {}, likes: [], top: [] });
+const HZ = 48000; // todo lo descargado es MPEG-1 capa III a 48 kHz en estéreo (StreamHz en el servidor)
+const FRAME = 1152 / HZ; // segundos de cada cuadro MP3
+const VERSION = 2; // formato de lo guardado: si cambia, lo descargado antes no se puede unir con lo nuevo
+const blank = () => ({ v: VERSION, user: '', musicOnly: false, tracks: {}, albums: {}, artists: {}, playlists: {}, likes: [], top: [], pending: [] });
 let state = blank();
-try { state = { ...blank(), ...JSON.parse(localStorage.getItem(KEY)) }; } catch {}
+try {
+  const kept = JSON.parse(localStorage.getItem(KEY));
+  if (kept?.v === VERSION) state = { ...blank(), ...kept };
+  else if (kept) { // descargas de un formato anterior: se sueltan (no se pueden unir con las nuevas); la cuenta sigue
+    state = { ...blank(), user: kept.user ?? '', musicOnly: !!kept.musicOnly };
+    localStorage.setItem(KEY, JSON.stringify(state));
+    caches.delete(AUDIO);
+  }
+} catch {}
 const store = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} };
 const forced = (() => { try { return localStorage.getItem('palobox.sinconexion') === '1'; } catch { return false; } })(); // para probar con otra cuenta
 
@@ -47,19 +57,29 @@ function countFrames(b) {
   const kbps = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
   let n = 0;
   for (let i = 0; i + 4 <= b.length;) {
-    const k = b[i] === 0xFF && (b[i + 1] & 0xFE) === 0xFA && ((b[i + 2] >> 2) & 3) === 0 ? kbps[b[i + 2] >> 4] : 0;
+    const k = b[i] === 0xFF && (b[i + 1] & 0xFE) === 0xFA && ((b[i + 2] >> 2) & 3) === 1 ? kbps[b[i + 2] >> 4] : 0;
     if (!k) { i++; continue; }
-    i += Math.floor(144000 * k / 44100) + ((b[i + 2] >> 1) & 1);
+    i += Math.floor(144000 * k / HZ) + ((b[i + 2] >> 1) & 1);
     n++;
   }
   return n;
 }
 const slim = (t) => ({ path: t.path, title: t.title, artist: t.artist, album: t.album, albumPath: t.albumPath, artistPath: t.artistPath, year: t.year, num: t.num, dur: t.dur });
 
+// pending: lo que se pidió descargar y aún no baja. Queda anotado para seguir si la app se cierra o el sistema
+// la detiene a mitad de camino.
+export const pending = () => state.pending.filter((t) => !has(t.path));
+// queue anota pistas para descargar sin bajarlas todavía (hay otra descarga en curso).
+export function queue(tracks) {
+  const known = new Set(state.pending.map((t) => t.path));
+  state.pending = [...state.pending.filter((t) => !has(t.path)), ...tracks.filter((t) => !known.has(t.path) && !has(t.path)).map(slim)];
+  store();
+}
 // download guarda en el celular las pistas que falten y avisa el avance (hechas, total).
 export async function download(tracks, onProgress = () => {}) {
   const c = await caches.open(AUDIO);
   let done = 0;
+  queue(tracks);
   for (const t of tracks) {
     if (!state.tracks[t.path]) {
       const r = await fetch(audioUrl(t.path));
@@ -73,6 +93,7 @@ export async function download(tracks, onProgress = () => {}) {
         if (img?.ok) await c.put(thumb(t.albumPath), img);
       }
       state.tracks[t.path] = { t: slim(t), frames, bytes: buf.byteLength, dur: frames * FRAME };
+      state.pending = state.pending.filter((x) => x.path !== t.path);
       store();
     }
     onProgress(++done, tracks.length);
@@ -86,6 +107,11 @@ export async function remove(paths) {
     await c.delete(audioUrl(p));
   }
   for (const id of Object.keys(state.playlists)) if (!state.playlists[id].paths.some(has)) delete state.playlists[id];
+  store();
+}
+export const keeps = (id) => !!state.playlists[id]; // esta playlist se eligió para tenerla sin conexión
+export function dropPlaylist(id) {
+  delete state.playlists[id];
   store();
 }
 // keepPlaylist recuerda una playlist descargada: sin conexión se arma con las canciones que cada quien eligió bajar.

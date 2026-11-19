@@ -2,7 +2,7 @@
 import { $, el, icon, json, joinText, plural, clock, lazyImg, toast, ask, menu } from './lib.js';
 import { route, href, go, thumbUrl, render } from './nav.js';
 import { api } from './session.js';
-import { playAt, playNext, enqueue } from './player.js';
+import { playAt, playNext, enqueue, audio } from './player.js';
 import * as offline from './offline.js';
 
 const OFFLINE = 'Sin conexión con el servidor.';
@@ -84,7 +84,7 @@ function trackMenu(anchor, t, extra = []) {
   menu(anchor, `Acciones de ${t.title}`, [
     { icon: 'skip', label: 'Reproducir a continuación', run: () => playNext(t) },
     { icon: 'queue', label: 'Agregar a la cola', run: () => enqueue(t) },
-    { icon: 'list-plus', label: 'Agregar a playlist…', run: async () => {
+    !offline.active && { icon: 'list-plus', label: 'Agregar a playlist…', run: async () => {
       const { playlists } = await ensureLib().catch(() => ({ playlists: [] }));
       menu(anchor, 'Agregar a playlist', [
         { icon: 'plus', label: 'Nueva playlist', run: () => createPlaylist(t) },
@@ -93,7 +93,7 @@ function trackMenu(anchor, t, extra = []) {
     } },
     t.artistPath && here !== `artista/${t.artistPath}` && { icon: 'user', label: 'Ir al artista', run: () => go('musica', `artista/${t.artistPath}`) },
     here !== `album/${t.albumPath}` && { icon: 'disc', label: 'Ir al álbum', run: () => go('musica', `album/${t.albumPath}`) },
-    ...extra,
+    ...(extra || []),
     canDownload() && (offline.has(t.path)
       ? { icon: 'trash', label: 'Quitar de las descargas', run: async () => { await offline.remove([t.path]); toast(`«${t.title}» ya no está en este celular.`, { kind: 'ok' }); render(); } }
       : { icon: 'download', label: 'Descargar', run: () => fetchOffline([t]) }),
@@ -102,29 +102,68 @@ function trackMenu(anchor, t, extra = []) {
 
 // Descargas para escuchar sin conexión (offline.js). Solo con conexión y en cuentas que pueden descargar.
 const canDownload = () => offline.enabled() && !offline.active;
+// keepAwake mantiene viva la app mientras descarga aunque el usuario salga de ella (sin cerrarla). El celular
+// detiene una app web en segundo plano salvo que esté reproduciendo audio: si no hay música sonando, suena un
+// silencio en bucle hasta que la descarga termina. Tiene que empezar dentro del toque que pide la descarga.
+let silence = null;
+function keepAwake(on) {
+  if (!on) return void silence?.pause();
+  if (!audio.paused) return; // con música sonando la app ya sigue viva
+  if (!silence) {
+    const wav = new Uint8Array(44 + 8000).fill(128); // un segundo de silencio: PCM de 8 bits, mono, 8 kHz
+    const view = new DataView(wav.buffer);
+    [[0, 0x52494646], [8, 0x57415645], [12, 0x666d7420], [36, 0x64617461]].forEach(([at, tag]) => view.setUint32(at, tag)); // RIFF WAVE fmt data
+    [[4, 36 + 8000], [16, 16], [24, 8000], [28, 8000], [40, 8000]].forEach(([at, n]) => view.setUint32(at, n, true));
+    [[20, 1], [22, 1], [32, 1], [34, 8]].forEach(([at, n]) => view.setUint16(at, n, true));
+    silence = new Audio(URL.createObjectURL(new Blob([wav], { type: 'audio/wav' })));
+    silence.loop = true;
+  }
+  silence.play().catch(() => {}); // sin toque (al retomar una descarga) no arranca: la app está a la vista y no hace falta
+}
+let downloading = false;
+// resumeDownloads retoma lo que quedó a medias si la app se cerró o el sistema la detuvo.
+export function resumeDownloads() {
+  const left = offline.pending();
+  if (!downloading && left.length && canDownload() && document.visibilityState === 'visible') fetchOffline(left);
+}
+document.addEventListener('visibilitychange', resumeDownloads);
 // fetchOffline baja las pistas al celular mostrando el avance; playlist: la lista que se descarga, para recordarla.
 async function fetchOffline(tracks, playlist) {
+  if (playlist) offline.keepPlaylist(playlist, tracks); // desde ya: si la descarga se retoma después, la playlist ya está anotada
+  if (downloading) {
+    offline.queue(tracks);
+    return void toast('Ya hay una descarga en curso; esta sigue cuando termine.');
+  }
+  downloading = true;
+  keepAwake(true);
   const missing = tracks.filter((t) => !offline.has(t.path)).length;
+  let failed = false;
   try {
-    await offline.download(tracks, (done, total) => total > 1 && toast(`Descargando ${done} de ${total}… Deja la app abierta.`, { sticky: true }));
-    if (playlist) offline.keepPlaylist(playlist, tracks);
+    await offline.download(tracks, (done, total) => total > 1 && toast(`Descargando ${done} de ${total}… Puedes salir de la app, sin cerrarla.`, { sticky: true }));
     offline.remember(lib ?? { albums: [], artists: [], playlists: [], likes: [], top: [] });
     toast(missing ? `${plural(missing, 'canción lista', 'canciones listas')} para escuchar sin conexión.` : 'Ya estaba todo descargado.', { kind: 'ok' });
   } catch (e) {
+    failed = true; // lo pendiente queda anotado y se retoma al volver a la app, no en bucle
     toast(e.name === 'QuotaExceededError' ? 'No hay espacio en este celular para descargar más.' : e.message || OFFLINE, { kind: 'warn', sticky: true });
   }
+  downloading = false;
+  keepAwake(false);
+  const queued = offline.pending(); // lo que se pidió mientras tanto
+  if (!failed && queued.length && canDownload()) return fetchOffline(queued);
   render();
 }
 // downloadButton descarga (o quita) todas las pistas de un álbum o una playlist.
 export function downloadButton(tracks, playlist) {
   if (!canDownload() || !tracks.length) return null;
-  const all = tracks.every((t) => offline.has(t.path));
+  // Una playlist está descargada si además se eligió tenerla: sus canciones pueden estar por un álbum y ella no.
+  const all = tracks.every((t) => offline.has(t.path)) && (!playlist || offline.keeps(playlist.id));
   const b = el('button', { className: 'icon-btn toggle' }, icon('download'));
   b.setAttribute('aria-pressed', all);
   b.setAttribute('aria-label', all ? 'Quitar de las descargas' : 'Descargar para escuchar sin conexión');
   b.onclick = async () => {
     if (!all) { b.disabled = true; return fetchOffline(tracks, playlist); }
     if (!(await ask({ heading: '¿Quitar de las descargas?', text: `${plural(tracks.length, 'canción deja', 'canciones dejan')} de estar en este celular. Siguen en la biblioteca.`, ok: 'Quitar', danger: true }))) return;
+    if (playlist) offline.dropPlaylist(playlist.id);
     await offline.remove(tracks.map((t) => t.path));
     render();
   };
@@ -193,6 +232,7 @@ export function libItems(d, { show = '', recent = true } = {}) {
 // saveButton guarda un álbum (+) o sigue a un artista (Seguir) en Tu biblioteca. x es la respuesta de
 // /api/music/album o /artist: trae path, name y saved (ms, 0 = no guardado).
 export function saveButton(kind, x) {
+  if (offline.active) return null; // guardar, seguir, me gusta y editar playlists necesitan conexión
   const album = kind === 'album';
   const b = el('button', { className: album ? 'icon-btn toggle' : 'btn secondary small' });
   const paint = () => {

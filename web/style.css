@@ -505,6 +505,8 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 
 /* ---- Modo sin conexión (offline.js): solo la música descargada; lo que necesita servidor se esconde ---- */
 .offline #jam-link, .offline #mtabs-exit, .offline .side-foot, .offline #admin-link { display: none; }
+/* Me gusta y crear playlists también necesitan servidor: sin conexión la música descargada solo se escucha. */
+.offline .like, .offline #side-new { display: none; }
 .offline .topbar-row::before { content: "Sin conexión"; order: -1; align-self: center; padding: 4px 10px; border-radius: 999px;
   background: color-mix(in srgb, var(--t-video) 22%, var(--surface)); color: var(--text); font-size: .78rem; font-weight: 600; }
 .offline-box { margin-top: 12px; }
