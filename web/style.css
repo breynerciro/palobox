@@ -486,7 +486,7 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 /* ---- Dispositivos y jam ---- */
 .icon-btn.on { color: var(--accent); } /* la reproducción es compartida; el panel dice con quién o dónde suena */
 .in-room [data-act=shuffle], .in-room [data-act=repeat] { opacity: .35; }
-.in-room.own-stream [data-act=shuffle] { opacity: 1; } /* en la sala propia del flujo continuo el aleatorio sí funciona */
+.in-room.own-stream [data-act=shuffle], .in-room.own-stream [data-act=repeat] { opacity: 1; } /* en la sala propia del flujo continuo sí funcionan */
 .jam-code { margin: 4px var(--gutter) 8px; font-size: 2rem; font-weight: 700; letter-spacing: .2em; text-align: center; font-variant-numeric: tabular-nums; -webkit-user-select: all; user-select: all; }
 .jam-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px var(--gutter) 8px; }
 .np-bar-btns { display: flex; }
