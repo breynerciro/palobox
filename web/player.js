@@ -792,10 +792,14 @@ function syncStream(t) {
     (room.pos === stream.pos && Math.abs(origin - stream.origin) < 1500) // la misma pista, sin saltos
     || (room.pos === stream.pos + 1 && Math.abs(origin - stream.end) < 3000) // pasó sola a la siguiente
     || (stream.held != null && room.pos === stream.pos && Math.abs(room.at - stream.held) < 1.5)); // se reanudó donde estaba
-  if (steady || (stream && audio.src && !audio.paused && document.visibilityState !== 'visible')) {
+  if (steady) {
     stream = mark;
     if (audio.paused) audio.play().catch(streamBlocked);
     return;
+  }
+  if (stream && audio.src && !audio.paused && document.visibilityState !== 'visible') {
+    stream = mark;
+    return void skipBuffer(); // en segundo plano no se abre otro audio: se salta el colchón dentro del mismo
   }
   stream = mark;
   audio.src = `/api/jam/stream?device=${jam.deviceId}&t=${Date.now()}`;
@@ -826,6 +830,34 @@ function streamDo(op, arg = {}) {
   paintQueue();
   paintRemote();
 }
+// skipBuffer hace oír de inmediato un cambio que hizo otro dispositivo con este en segundo plano. El audio que
+// suena no se suelta (ahí iOS no siempre deja abrir otro): se le pide al servidor que vuelva a empezar el envío en
+// lo que la sala suena ahora, y cuando eso empieza a llegar el reproductor se adelanta dentro del mismo audio
+// hasta ese punto, dejando atrás el colchón con la canción anterior. Si algo falla, la música sigue y el cambio
+// se oye al acabarse el colchón, como antes.
+const edge = () => (audio.buffered.length ? audio.buffered.end(audio.buffered.length - 1) : NaN);
+let skipping = false;
+async function skipBuffer() {
+  if (skipping) return;
+  skipping = true;
+  const ok = await jam.send('cut', {}, true);
+  const from = edge(); // lo recibido hasta la respuesta es lo viejo; lo que llegue después ya es lo nuevo
+  const started = Date.now();
+  const stop = () => {
+    skipping = false;
+    audio.removeEventListener('progress', check);
+    audio.removeEventListener('timeupdate', check);
+  };
+  function check() {
+    if (edge() >= from + 0.8) { // ya llegó casi un segundo de lo nuevo: alcanza para caer en él sin quedarse sin audio
+      stop();
+      try { audio.currentTime = from + 0.3; } catch (e) { console.warn('No se pudo saltar el colchón:', e); }
+    } else if (Date.now() - started > 5000) stop();
+  }
+  if (!ok || !(from >= 0) || !streaming()) return stop();
+  audio.addEventListener('progress', check); // estos eventos sí llegan con la pantalla bloqueada; los temporizadores no siempre
+  audio.addEventListener('timeupdate', check);
+}
 function streamBlocked(e) {
   stuck = e.name === 'NotAllowedError'; // wake lo reintenta al volver a la app
   warnPlay(e);
@@ -848,6 +880,7 @@ function streamLost() {
 // Con la música sonando en otro dispositivo el audio de aquí está quieto, y en el flujo continuo el audio no
 // sabe en qué pista va: en los dos casos el avance se calcula con el reloj de la sala.
 let stateAt = 0;
+let askedAt = 0;
 function paintRemote() {
   if (!room || (here && !STREAM) || pos < 0) return;
   if (streaming() && room.playing) {
@@ -862,6 +895,9 @@ function paintRemote() {
     resume = Math.min(roomTime(), queue[pos].dur || Infinity); // para retomar aquí si la sala se cierra
     if (resume >= 30) count();
     if (Date.now() - stateAt > 5000) { stateAt = Date.now(); positionState(); save(); }
+    // En segundo plano el flujo de eventos puede morir y nadie avisaría de un cambio hecho desde otro dispositivo:
+    // se pregunta cada par de segundos (este código lo mueve timeupdate, que sí corre con la pantalla bloqueada).
+    if (document.visibilityState !== 'visible' && Date.now() - askedAt > 2500) { askedAt = Date.now(); jam.send('state', {}, true); }
   }
   if (seeking) return;
   const d = queue[pos].dur || 0;

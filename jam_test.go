@@ -217,6 +217,18 @@ func TestJamStream(t *testing.T) {
 		t.Fatalf("la sala debe ir en la segunda pista o más: %v", m["room"])
 	}
 
+	// «cut»: el teléfono se salta su colchón y el envío vuelve a empezar en lo que la sala suena ahora, por la
+	// misma conexión; «state» solo devuelve la foto.
+	if m := cmd(map[string]any{"op": "state"}); m["room"] == nil {
+		t.Fatalf("state: %v", m)
+	}
+	cmd(map[string]any{"op": "jump", "index": 0})
+	cmd(map[string]any{"op": "cut"})
+	more := make([]byte, 10*417)
+	if _, err := io.ReadFull(res.Body, more); err != nil || bytes.Count(more[5*417:], []byte{'a'}) < 4*413 {
+		t.Fatalf("tras «cut» debe llegar de nuevo la primera pista: %v %q", err, more[len(more)-8:])
+	}
+
 	// Saltar al abrir el flujo: la acción viaja en la petición y repetirla (Safari lo hace) no salta dos veces.
 	cmd(map[string]any{"op": "jump", "index": 0})
 	for i := 0; i < 2; i++ {

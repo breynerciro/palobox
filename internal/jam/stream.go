@@ -11,6 +11,10 @@ package jam
 // alguien saltó de canción o adelantó, lo que toca ya no es continuación y el envío cambia ahí mismo: quien oye
 // en segundo plano nota el cambio cuando se le acaba el colchón, y quien tiene la app abierta reabre el flujo
 // (player.js) y lo oye de inmediato.
+//
+// Para oírlo de inmediato también en segundo plano, el teléfono puede saltarse su colchón sin soltar el audio:
+// manda «cut», este envío vuelve a empezar en lo que la sala suena en ese instante (y rellena el colchón), y el
+// teléfono se adelanta dentro del mismo audio hasta donde empezó a llegar lo nuevo.
 
 import (
 	"io"
@@ -67,6 +71,13 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 	// una respuesta aparte mientras sigue sonando la anterior. «n» identifica la acción: Safari puede pedir la
 	// misma dirección más de una vez y no debe saltar dos canciones.
 	q := r.URL.Query()
+	device := q.Get("device")
+	wake := make(chan struct{}, 1)
+	if u.wake == nil {
+		u.wake = map[string]chan struct{}{}
+	}
+	u.wake[device] = wake
+	cuts := u.cuts[device]
 	if op, n := q.Get("op"), q.Get("n"); op != "" && n != "" && u.nonce != n {
 		u.nonce = n
 		from, _ := strconv.Atoi(q.Get("from"))
@@ -95,6 +106,9 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
+		if u.wake[device] == wake {
+			delete(u.wake, device)
+		}
 		room.streams--
 		h.sweep()
 		h.mu.Unlock()
@@ -178,6 +192,8 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 			select {
 			case <-tick.C:
 				continue
+			case <-wake:
+				continue
 			case <-r.Context().Done():
 				return nil
 			}
@@ -198,7 +214,10 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 				return nil
 			}
 		}
-		lead := full
+		if c := u.cuts[device]; c != cuts {
+			cuts, first = c, true // el teléfono se va a saltar su colchón: se vuelve a empezar como al abrir
+		}
+		lead, fresh := full, first
 		if first {
 			lead, first = 0, false // al abrir se empieza justo en lo que suena ahora; el colchón se llena enseguida
 		}
@@ -207,9 +226,9 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		h.mu.Unlock()
 
 		switch {
-		case src != nil && ti == idx && want.Path == path && tat-at > -streamSlip && tat-at < leadS+streamSlip:
+		case !fresh && src != nil && ti == idx && want.Path == path && tat-at > -streamSlip && tat-at < leadS+streamSlip:
 			pump(tat - at) // la misma pista, un poco más adelante
-		case src != nil && ti == idx+1 && dur-at+tat < leadS+streamSlip:
+		case !fresh && src != nil && ti == idx+1 && dur-at+tat < leadS+streamSlip:
 			pump(dur - at + leadS) // lo que falte de la anterior, hasta que se acabe el archivo…
 			if !gone && !open(want, ti, 0) {
 				return nil
@@ -223,6 +242,7 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		fl.Flush()
 		select {
 		case <-tick.C:
+		case <-wake:
 		case <-r.Context().Done():
 			return nil
 		}

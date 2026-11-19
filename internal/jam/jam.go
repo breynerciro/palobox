@@ -57,6 +57,9 @@ type user struct {
 	room   *jamRoom
 	active map[string]bool // dispositivos en los que suena para este usuario: uno, o varios a la vez
 	nonce  string          // última acción aplicada al abrir un flujo (stream.go): el navegador puede repetir la petición
+	// Flujos continuos abiertos, por dispositivo: «cut» le pide al suyo que vuelva a empezar donde va la sala.
+	cuts map[string]int
+	wake map[string]chan struct{}
 }
 
 type jamRoom struct {
@@ -449,6 +452,20 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 	case "leave":
 		h.leave(u)
 		room = nil
+	case "state": // solo la foto: el teléfono en segundo plano pregunta así cuando pierde el flujo de eventos
+	case "cut":
+		// El dispositivo va a saltarse su colchón (stream.go): su flujo vuelve a empezar en lo que la sala suena
+		// ahora mismo, y lo que llegue después de esta respuesta ya es eso.
+		if u.cuts == nil {
+			u.cuts = map[string]int{}
+		}
+		u.cuts[in.Device]++
+		if ch := u.wake[in.Device]; ch != nil {
+			select {
+			case ch <- struct{}{}:
+			default:
+			}
+		}
 	default:
 		if room == nil {
 			return errNoRoom

@@ -47,10 +47,11 @@ export function close() {
 }
 
 // send manda una acción y aplica la foto que vuelve; devuelve si salió bien.
-export async function send(op, data = {}) {
+// quiet: para lo que el reproductor hace solo (preguntar el estado en segundo plano), sin avisos si la red falla.
+export async function send(op, data = {}, quiet = false) {
   const r = await api('/api/jam', json('POST', { device: deviceId, op, qrev: cache.rev, ...data })).catch(() => null);
   if (!r?.ok) {
-    toast(r ? await r.text() : 'Sin conexión con el servidor.', { kind: 'warn' });
+    if (!quiet) toast(r ? await r.text() : 'Sin conexión con el servidor.', { kind: 'warn' });
     return false;
   }
   take(await r.json());
