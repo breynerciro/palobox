@@ -40,7 +40,7 @@ func penalty(n int) time.Duration {
 	if n <= 3 {
 		return time.Second
 	}
-	return min(time.Second<<(n-3), 30*time.Second)
+	return min(time.Second<<min(n-3, 5), 30*time.Second) // tope al corrimiento: sin él desborda desde n=37 y el freno desaparece
 }
 
 // forget: tras este tiempo sin fallar, la IP empieza de cero y su entrada se puede borrar.
@@ -113,12 +113,19 @@ func ValidName(name string) error {
 	return nil
 }
 
-func hash(pass string) ([]byte, error) {
+func checkPass(pass string) error {
 	if len(pass) < 8 {
-		return nil, errors.New("la contraseña debe tener al menos 8 caracteres")
+		return errors.New("la contraseña debe tener al menos 8 caracteres")
 	}
 	if len(pass) > 72 { // bcrypt ignora lo que pase de 72 bytes
-		return nil, errors.New("la contraseña puede tener máximo 72 caracteres")
+		return errors.New("la contraseña puede tener máximo 72 caracteres")
+	}
+	return nil
+}
+
+func hash(pass string) ([]byte, error) {
+	if err := checkPass(pass); err != nil {
+		return nil, err
 	}
 	return bcrypt.GenerateFromPassword([]byte(pass), bcrypt.DefaultCost)
 }
@@ -207,8 +214,7 @@ func (s *Service) Accept(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, err)
 		return
 	}
-	h, err := hash(in.Pass)
-	if err != nil {
+	if err := checkPass(in.Pass); err != nil {
 		httpx.Fail(w, httpx.Error(400, err.Error()))
 		return
 	}
@@ -217,8 +223,21 @@ func (s *Service) Accept(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, err)
 		return
 	}
+	// bcrypt solo con un enlace válido: un token inventado no le cuesta CPU al servidor.
+	h, err := hash(in.Pass)
+	if err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	// Gastar la invitación y poner la clave juntos: si algo falla, el enlace sigue sirviendo.
+	tx, err := s.DB.Begin()
+	if err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	defer tx.Rollback()
 	// Borrar la invitación primero y comprobar que se borró: dos usos simultáneos del mismo enlace no pasan los dos.
-	res, err := s.DB.Exec(`DELETE FROM invites WHERE hash = ?`, inviteHash(in.Token))
+	res, err := tx.Exec(`DELETE FROM invites WHERE hash = ?`, inviteHash(in.Token))
 	if err != nil {
 		httpx.Fail(w, err)
 		return
@@ -227,7 +246,11 @@ func (s *Service) Accept(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, errInvite)
 		return
 	}
-	if _, err := s.DB.Exec(`UPDATE users SET pass = ? WHERE id = ?`, h, id); err != nil {
+	if _, err := tx.Exec(`UPDATE users SET pass = ? WHERE id = ?`, h, id); err != nil {
+		httpx.Fail(w, err)
+		return
+	}
+	if err := tx.Commit(); err != nil {
 		httpx.Fail(w, err)
 		return
 	}
@@ -315,12 +338,9 @@ func clientIP(r *http.Request) string {
 		host = r.RemoteAddr
 	}
 	// Suposición (compose.yml): el puerto solo se publica en 127.0.0.1 del host y Docker entrega esas conexiones desde
-	// la puerta de enlace de su red (privada), así que loopback o privada = tailscale serve, cloudflared u otro contenedor.
+	// la puerta de enlace de su red (privada), así que loopback o privada = tailscale serve u otro contenedor.
 	if ip := net.ParseIP(host); ip == nil || !(ip.IsLoopback() || ip.IsPrivate()) {
 		return host
-	}
-	if f := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); f != "" {
-		return f
 	}
 	if f := r.Header.Get("X-Forwarded-For"); f != "" { // el último lo agregó nuestro proxy; los anteriores los manda el cliente
 		return strings.TrimSpace(f[strings.LastIndex(f, ",")+1:])
@@ -346,8 +366,12 @@ func (s *Service) Wrap(h httpx.Handler) http.HandlerFunc {
 			err = s.DB.QueryRow(`SELECT u.id, u.name, u.music_only, MIN(u.seen, s.seen), s.expires FROM sessions s JOIN users u ON u.id = s.user_id
 				WHERE s.token = ? AND s.expires > ? AND u.disabled = 0`, c.Value, now).Scan(&u.ID, &u.Name, &u.MusicOnly, &seen, &expires)
 		}
-		if err != nil {
+		if errors.Is(err, http.ErrNoCookie) || errors.Is(err, sql.ErrNoRows) {
 			http.Error(w, "no autenticado", 401)
+			return
+		}
+		if err != nil { // un 401 hace que el celular borre su música: un fallo de la base no es eso
+			httpx.Fail(w, err)
 			return
 		}
 		u.Admin = u.Name == s.Admin
