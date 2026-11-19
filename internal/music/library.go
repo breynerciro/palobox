@@ -23,13 +23,17 @@ import (
 )
 
 type Library struct {
-	DB     *sql.DB
-	Data   string
-	Sem    chan struct{} // cupo de procesos pesados, compartido con las miniaturas
-	Thumbs media.Thumbs
-	Max    int        // tope de canciones de la biblioteca para las descargas; 0 = sin tope
-	idxMu  sync.Mutex // un recorrido del índice a la vez
-	idxAt  time.Time  // último recorrido completo; lo protege idxMu
+	DB      *sql.DB
+	Data    string
+	Sem     chan struct{} // cupo de procesos pesados, compartido con las miniaturas
+	Thumbs  media.Thumbs
+	Max     int        // tope de canciones de la biblioteca para las descargas; 0 = sin tope
+	idxMu   sync.Mutex // un recorrido del índice a la vez
+	idxAt   time.Time  // último recorrido completo; lo protege idxMu
+	changed bool       // el recorrido en curso tocó la tabla tracks; lo protege idxMu
+
+	snapshot atomic.Pointer[snapshot] // lo del índice que no depende del usuario (snapshot.go)
+	snapMu   sync.Mutex               // una construcción de la instantánea a la vez
 
 	// Para el panel de administrador, legibles sin esperar a idxMu.
 	scanning atomic.Bool

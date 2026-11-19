@@ -39,6 +39,8 @@ type track struct {
 	Dur        float64 `json:"dur"` // segundos; 0 = desconocida
 	disc       int
 	genre      string
+	text       norm // título, artista y álbum, para Buscar; solo en la instantánea
+	titleText  norm
 }
 
 // Track es una pista del índice tal como la recibe la interfaz (para otros paquetes, como jam).
@@ -70,11 +72,6 @@ func (l *Library) ByPaths(paths []string) ([]Track, error) {
 	return out, nil
 }
 
-// Random devuelve hasta n pistas al azar de toda la biblioteca, menos not.
-func (l *Library) Random(n int, not string) ([]Track, error) {
-	return l.tracks(`WHERE t.path != ? ORDER BY RANDOM() LIMIT ?`, not, n)
-}
-
 type album struct {
 	Path       string  `json:"path"`
 	Name       string  `json:"name"`
@@ -87,6 +84,7 @@ type album struct {
 	Played     int64   `json:"played"` // ms; última vez que este usuario lo escuchó
 	Plays      int     `json:"plays"`
 	Saved      int64   `json:"saved"` // ms; cuándo lo guardó este usuario en Tu biblioteca, 0 = no
+	text       norm
 }
 
 type artist struct {
@@ -98,6 +96,7 @@ type artist struct {
 	Played int64  `json:"played"`
 	Plays  int    `json:"plays"`
 	Saved  int64  `json:"saved"` // ms; cuándo lo empezó a seguir este usuario, 0 = no
+	text   norm
 }
 
 type playlist struct {
@@ -202,6 +201,13 @@ func (l *Library) Sync() {
 	}
 	l.scanning.Store(true)
 	defer l.scanning.Store(false)
+	// También si el recorrido se corta a medias: lo que alcanzó a escribir ya está en la tabla.
+	defer func() {
+		if l.changed {
+			l.changed = false
+			l.rebuild()
+		}
+	}()
 	root := l.musicRoot()
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		log.Print("índice de música: ", err)
@@ -258,6 +264,7 @@ func (l *Library) Sync() {
 		cancel()
 		<-l.Sem
 		applyTags(&t, out)
+		l.changed = true
 		if _, err := l.DB.Exec(`INSERT OR REPLACE INTO tracks(path, size, mtime, title, artist, album, album_dir, artist_dir, year, disc, num, dur, fold, genre)
 			VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`, rel, now.size, now.mtime, t.Title, t.Artist, t.Album, t.AlbumPath, t.ArtistPath,
 			t.Year, t.disc, t.Num, t.Dur, fold(t.Title+" "+t.Artist+" "+t.Album), t.genre); err != nil {
@@ -271,6 +278,7 @@ func (l *Library) Sync() {
 	}
 	for rel := range old {
 		l.DB.Exec(`DELETE FROM tracks WHERE path = ?`, rel)
+		l.changed = true
 	}
 	l.dedupe()
 	l.idxAt = time.Now()
@@ -308,48 +316,8 @@ func (l *Library) tracks(tail string, args ...any) ([]track, error) {
 	return out, rows.Err()
 }
 
-// albums agrupa el índice por carpeta y le suma lo que este usuario ha escuchado.
-func (l *Library) albums(u httpx.User) ([]album, error) {
-	type stat struct {
-		last  int64
-		plays int
-	}
-	heard := map[string]stat{}
-	rows, err := l.DB.Query(`SELECT t.album_dir, MAX(p.at), COUNT(*) FROM plays p JOIN tracks t ON t.path = p.path WHERE p.user_id = ? GROUP BY t.album_dir`, u.ID)
-	if err != nil {
-		return nil, err
-	}
-	for rows.Next() {
-		var dir string
-		var s stat
-		rows.Scan(&dir, &s.last, &s.plays)
-		heard[dir] = s
-	}
-	rows.Close()
-	saved, err := l.savedOf(u, "album")
-	if err != nil {
-		return nil, err
-	}
-	rows, err = l.DB.Query(`SELECT album_dir, MIN(album), artist_dir, MAX(year), COUNT(*), SUM(dur), MAX(mtime) FROM tracks GROUP BY album_dir`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	out := []album{}
-	for rows.Next() {
-		var al album
-		if err := rows.Scan(&al.Path, &al.Name, &al.ArtistPath, &al.Year, &al.Tracks, &al.Dur, &al.Added); err != nil {
-			return nil, err
-		}
-		al.Artist, al.Played, al.Plays, al.Saved = al.ArtistPath, heard[al.Path].last, heard[al.Path].plays, saved[al.Path]
-		out = append(out, al)
-	}
-	sort.Slice(out, func(i, j int) bool { return natsort.Less(fold(out[i].Name), fold(out[j].Name)) })
-	return out, rows.Err()
-}
-
-// artistsOf agrupa los álbumes por artista; followed son los que sigue el usuario (ver savedOf).
-func artistsOf(albums []album, followed map[string]int64) []artist {
+// artistsOf agrupa los álbumes por artista; lo del usuario lo suma library.
+func artistsOf(albums []album) []artist {
 	at := map[string]int{}
 	out := []artist{}
 	for _, al := range albums {
@@ -360,7 +328,7 @@ func artistsOf(albums []album, followed map[string]int64) []artist {
 		if !ok {
 			i = len(out)
 			at[al.ArtistPath] = i
-			out = append(out, artist{Path: al.ArtistPath, Name: al.ArtistPath, Saved: followed[al.ArtistPath]})
+			out = append(out, artist{Path: al.ArtistPath, Name: al.ArtistPath})
 		}
 		ar := &out[i]
 		ar.Albums++
@@ -395,7 +363,7 @@ func (l *Library) playlists(u httpx.User) ([]playlist, error) {
 // musicLib entrega de una vez lo que necesitan Inicio, Tu biblioteca y la barra lateral.
 func (l *Library) Lib(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	l.fresh()
-	albums, err := l.albums(u)
+	s, albums, artists, err := l.library(u)
 	if err != nil {
 		return err
 	}
@@ -414,10 +382,6 @@ func (l *Library) Lib(w http.ResponseWriter, r *http.Request, u httpx.User) erro
 	if err != nil {
 		return err
 	}
-	fresh, err := l.tracks(`ORDER BY t.mtime DESC, t.path LIMIT 40`)
-	if err != nil {
-		return err
-	}
 	likes := []string{}
 	rows, err := l.DB.Query(`SELECT l.path FROM likes l JOIN tracks t ON t.path = l.path WHERE l.user_id = ?`, u.ID)
 	if err != nil {
@@ -429,11 +393,7 @@ func (l *Library) Lib(w http.ResponseWriter, r *http.Request, u httpx.User) erro
 		rows.Scan(&p)
 		likes = append(likes, p)
 	}
-	followed, err := l.savedOf(u, "artist")
-	if err != nil {
-		return err
-	}
-	return httpx.WriteJSON(w, 200, map[string]any{"albums": albums, "artists": artistsOf(albums, followed), "playlists": pls, "likes": likes, "top": top, "recent": recent, "fresh": fresh})
+	return httpx.WriteJSON(w, 200, map[string]any{"albums": albums, "artists": artists, "playlists": pls, "likes": likes, "top": top, "recent": recent, "fresh": s.fresh})
 }
 
 func (l *Library) Album(w http.ResponseWriter, r *http.Request, u httpx.User) error {
@@ -473,7 +433,7 @@ func (l *Library) Artist(w http.ResponseWriter, r *http.Request, u httpx.User) e
 	if err != nil {
 		return err
 	}
-	all, err := l.albums(u)
+	_, all, _, err := l.library(u)
 	if err != nil {
 		return err
 	}
@@ -493,14 +453,14 @@ func (l *Library) Artist(w http.ResponseWriter, r *http.Request, u httpx.User) e
 
 // best deja lo que coincide con q, primero lo más exacto, hasta n (0 = todo); text dice dónde buscar.
 // A igual distancia gana el menor rank (nil = sin preferencia) y luego el orden de entrada.
-func best[T any](q query, items []T, n int, text func(T) string, rank func(T) int) []T {
+func best[T any](q query, items []T, n int, text func(T) norm, rank func(T) int) []T {
 	type hit struct {
 		it   T
 		d, r int
 	}
 	hits := []hit{}
 	for _, it := range items {
-		if d, ok := q.match(text(it)); ok {
+		if d, ok := q.matchNorm(text(it)); ok {
 			h := hit{it: it, d: d}
 			if rank != nil {
 				h.r = rank(it)
@@ -521,8 +481,8 @@ func best[T any](q query, items []T, n int, text func(T) string, rank func(T) in
 
 // Search busca en el índice: cada palabra debe aparecer, sin importar tildes, mayúsculas ni ortografía
 // ("alkolirykos" encuentra "Alcolirykoz"), y tolera algún error de tecleo en palabras largas.
-// shortcut: recorre toda la biblioteca en Go en cada búsqueda; sobra con el tope de MUSIC_MAX, pero con
-// cientos de miles de pistas habría que guardar sound() en el índice.
+// shortcut: recorre en Go toda la instantánea (ya normalizada) en cada búsqueda; sobra con el tope de
+// MUSIC_MAX, pero con cientos de miles de pistas haría falta un índice de trigramas o similar.
 func (l *Library) Search(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	l.fresh()
 	out := map[string]any{"tracks": []track{}, "albums": []album{}, "artists": []artist{}, "playlists": []playlist{}}
@@ -531,15 +491,7 @@ func (l *Library) Search(w http.ResponseWriter, r *http.Request, u httpx.User) e
 		return httpx.WriteJSON(w, 200, out)
 	}
 	q := newQuery(raw)
-	all, err := l.tracks(`ORDER BY t.title`)
-	if err != nil {
-		return err
-	}
-	albums, err := l.albums(u)
-	if err != nil {
-		return err
-	}
-	followed, err := l.savedOf(u, "artist")
+	snap, albums, artists, err := l.library(u)
 	if err != nil {
 		return err
 	}
@@ -549,15 +501,15 @@ func (l *Library) Search(w http.ResponseWriter, r *http.Request, u httpx.User) e
 	}
 	// Lo que coincide en el título sale antes que lo que coincide solo en el artista o el álbum.
 	inTitle := func(t track) int {
-		if _, ok := q.match(t.Title); ok {
+		if _, ok := q.matchNorm(t.titleText); ok {
 			return 0
 		}
 		return 1
 	}
-	out["tracks"] = best(q, all, 30, func(t track) string { return t.Title + " " + t.Artist + " " + t.Album }, inTitle)
-	out["albums"] = best(q, albums, 12, func(a album) string { return a.Name + " " + a.Artist }, nil)
-	out["artists"] = best(q, artistsOf(albums, followed), 8, func(a artist) string { return a.Name }, nil)
-	out["playlists"] = best(q, pls, 0, func(p playlist) string { return p.Name }, nil)
+	out["tracks"] = best(q, snap.tracks, 30, func(t track) norm { return t.text }, inTitle)
+	out["albums"] = best(q, albums, 12, func(a album) norm { return a.text }, nil)
+	out["artists"] = best(q, artists, 8, func(a artist) norm { return a.text }, nil)
+	out["playlists"] = best(q, pls, 0, func(p playlist) norm { return normOf(p.Name) }, nil)
 	return httpx.WriteJSON(w, 200, out)
 }
 

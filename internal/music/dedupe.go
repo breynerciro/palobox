@@ -182,5 +182,6 @@ func (l *Library) remap(old, keep string) error {
 			return err
 		}
 	}
+	l.changed = true // remap corre dentro de Sync: al terminar se rehace la instantánea
 	return tx.Commit()
 }

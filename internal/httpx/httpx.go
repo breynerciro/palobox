@@ -3,6 +3,7 @@
 package httpx
 
 import (
+	"compress/gzip"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -10,6 +11,8 @@ import (
 	"log"
 	"net/http"
 	"path/filepath"
+	"strings"
+	"sync"
 )
 
 // User es el usuario de la sesión, ya verificado por auth.
@@ -38,6 +41,54 @@ func WriteJSON(w http.ResponseWriter, code int, v any) error {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(code)
 	return json.NewEncoder(w).Encode(v)
+}
+
+// Gzip comprime las respuestas JSON de h si el cliente lo acepta: /api/music pasa de MB a cientos de KB.
+// Solo para rutas que responden JSON: el envoltorio no es http.Flusher, que el audio y los eventos necesitan.
+func Gzip(h http.HandlerFunc) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Add("Vary", "Accept-Encoding")
+		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+			h(w, r)
+			return
+		}
+		g := &gzipWriter{ResponseWriter: w}
+		h(g, r)
+		if g.zw != nil {
+			g.zw.Close()
+			zips.Put(g.zw)
+		}
+	}
+}
+
+// El compresor reserva cientos de KB al crearse: se reutiliza entre respuestas.
+var zips = sync.Pool{New: func() any { z, _ := gzip.NewWriterLevel(nil, gzip.BestSpeed); return z }}
+
+type gzipWriter struct {
+	http.ResponseWriter
+	zw    *gzip.Writer // nil: la respuesta sale tal cual (errores en texto)
+	wrote bool
+}
+
+func (g *gzipWriter) WriteHeader(code int) {
+	if !g.wrote && code != http.StatusNoContent && g.Header().Get("Content-Type") == "application/json" {
+		g.Header().Set("Content-Encoding", "gzip")
+		g.Header().Del("Content-Length")
+		g.zw = zips.Get().(*gzip.Writer)
+		g.zw.Reset(g.ResponseWriter)
+	}
+	g.wrote = true
+	g.ResponseWriter.WriteHeader(code)
+}
+
+func (g *gzipWriter) Write(b []byte) (int, error) {
+	if !g.wrote {
+		g.WriteHeader(http.StatusOK)
+	}
+	if g.zw != nil {
+		return g.zw.Write(b)
+	}
+	return g.ResponseWriter.Write(b)
 }
 
 func ReadJSON(w http.ResponseWriter, r *http.Request, v any) error {
