@@ -68,6 +68,7 @@ type jamRoom struct {
 	members []*user
 	queue   []music.Track
 	qrev    int
+	shift   int // pistas ya escuchadas que extend recortó del principio: cada flujo corre su índice lo mismo
 	manual  int // pistas agregadas justo después de la actual: «agregar a la cola» va detrás de ellas
 	repeat  int // 0 apagado, 1 toda la cola, 2 solo la pista actual; solo en la sala propia del flujo continuo
 	pos     int
@@ -383,9 +384,16 @@ func (h *Hub) newCode() string {
 
 var errNoRoom = httpx.Error(409, "Esa sesión ya terminó.")
 
-// extend agrega sugerencias cuando a la cola le quedan menos de tres pistas por delante.
+// extend agrega sugerencias cuando a la cola le quedan menos de tres pistas por delante. Con la cola llena (una
+// lista larga) primero recorta las ya escuchadas, dejando unas cuantas para «anterior».
 func (h *Hub) extend(r *jamRoom) {
-	if r.repeat == 0 && len(r.queue)-(r.pos+1) < 3 && h.More != nil && len(r.queue) > 0 && len(r.queue) < maxQueue {
+	if r.repeat == 0 && len(r.queue)-(r.pos+1) < 3 && h.More != nil && len(r.queue) > 0 {
+		if cut := r.pos - 50; len(r.queue) >= maxQueue && cut > 0 {
+			r.queue = append([]music.Track(nil), r.queue[cut:]...) // copia: una foto ya armada puede seguir usando la anterior
+			r.pos -= cut
+			r.shift += cut
+			r.qrev++
+		}
 		have := map[string]bool{}
 		for _, t := range r.queue {
 			have[t.Path] = true
@@ -443,152 +451,158 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			return err
 		}
 	}
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	u := h.get(hu.Name)
-	room := u.room
-	clampPos := func(n int) int { return max(0, min(in.Pos, n-1)) }
-	switch in.Op {
-	case "start": // crea la sala con la cola de este dispositivo; target = dónde debe sonar
-		if room == nil {
-			if len(tracks) > maxQueue {
-				tracks = tracks[:maxQueue]
-			}
-			room = &jamRoom{code: h.newCode(), queue: tracks, qrev: 1}
-			h.rooms[room.code] = room
-			room.set(clampPos(len(tracks)), max(in.At, 0), in.Playing && len(tracks) > 0)
-			room.repeat = max(0, min(in.Repeat, 2))
-			room.manual = max(0, min(in.Manual, len(room.queue)-room.pos-1)) // lo que ya se había puesto en cola antes de sonar
-			room.members, u.room = []*user{u}, room
-			u.listen(in.Device, false)
-		}
-		if u.conns[in.Target] != nil {
-			u.listen(in.Target, in.Add)
-		}
-		room.open = room.open || in.Open
-		if room.open {
-			room.repeat = 0 // en un jam no se repite: al acabarse la cola siguen sugerencias
-		}
-	case "join":
-		target := h.rooms[strings.ToUpper(strings.TrimSpace(in.Code))]
-		if target == nil || !target.open {
-			return httpx.Error(404, "No hay un jam con ese código.")
-		}
-		if room != target {
-			h.leave(u)
-			target.members, u.room = append(target.members, u), target
-		}
-		u.listen(in.Device, false)
-		room = target
-	case "leave":
-		h.leave(u)
-		room = nil
-	case "state": // solo la foto: el teléfono en segundo plano pregunta así cuando pierde el flujo de eventos
-	case "cut":
-		// El dispositivo va a saltarse su colchón (stream.go): su flujo vuelve a empezar en lo que la sala suena
-		// ahora mismo, y lo que llegue después de esta respuesta ya es eso.
-		if u.cuts == nil {
-			u.cuts = map[string]int{}
-		}
-		u.cuts[in.Device]++
-		if ch := u.wake[in.Device]; ch != nil {
-			select {
-			case ch <- struct{}{}:
-			default:
-			}
-		}
-	default:
-		if room == nil {
-			return errNoRoom
-		}
-		now := time.Now()
+	// La foto se escribe al teléfono sin el candado: uno con mala señal no debe frenar a los demás.
+	v, err := func() (view, error) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		u := h.get(hu.Name)
+		room := u.room
+		clampPos := func(n int) int { return max(0, min(in.Pos, n-1)) }
 		switch in.Op {
-		case "open":
-			room.open, room.repeat = true, 0
-		case "repeat":
-			if !room.open {
-				room.repeat = max(0, min(in.Repeat, 2))
-			}
-		case "here":
-			if u.conns[in.Target] == nil {
-				return httpx.Error(409, "Ese dispositivo ya no está conectado.")
-			}
-			u.listen(in.Target, in.Add)
-		case "queue": // alguien puso a sonar otra lista
-			if len(tracks) == 0 {
-				return httpx.Error(404, "Esa música ya no está en la biblioteca.")
-			}
-			room.queue, room.manual = tracks, 0
-			room.qrev++
-			room.set(clampPos(len(tracks)), 0, true)
-		case "add":
-			if len(tracks) == 0 {
-				return httpx.Error(404, "Esa canción ya no está en la biblioteca.")
-			}
-			if len(room.queue)+len(tracks) > maxQueue {
-				return httpx.Error(409, "La cola está llena.")
-			}
-			if len(room.queue) == 0 {
-				room.queue = tracks
-				room.set(0, 0, true)
-			} else {
-				i := room.pos + 1
-				if !in.Next {
-					i += room.manual
+		case "start": // crea la sala con la cola de este dispositivo; target = dónde debe sonar
+			if room == nil {
+				if len(tracks) > maxQueue {
+					tracks = tracks[:maxQueue]
 				}
-				i = min(i, len(room.queue))
-				room.queue = append(room.queue[:i:i], append(tracks, room.queue[i:]...)...)
-				room.manual += len(tracks)
+				room = &jamRoom{code: h.newCode(), queue: tracks, qrev: 1}
+				h.rooms[room.code] = room
+				room.set(clampPos(len(tracks)), max(in.At, 0), in.Playing && len(tracks) > 0)
+				room.repeat = max(0, min(in.Repeat, 2))
+				room.manual = max(0, min(in.Manual, len(room.queue)-room.pos-1)) // lo que ya se había puesto en cola antes de sonar
+				room.members, u.room = []*user{u}, room
+				u.listen(in.Device, false)
 			}
-			room.qrev++
-		case "remove":
-			i := in.Index
-			if i <= room.pos || i >= len(room.queue) || room.queue[i].Path != in.Path {
-				break // la cola cambió mientras tanto: la foto que vuelve lo muestra
+			if u.conns[in.Target] != nil {
+				u.listen(in.Target, in.Add)
 			}
-			if i <= room.pos+room.manual {
-				room.manual--
+			room.open = room.open || in.Open
+			if room.open {
+				room.repeat = 0 // en un jam no se repite: al acabarse la cola siguen sugerencias
 			}
-			room.queue = append(room.queue[:i:i], room.queue[i+1:]...)
-			room.qrev++
-		case "tail": // reemplaza lo que sigue después de la pista actual (aleatorio en el flujo continuo)
-			keep := room.pos + 1
-			if len(tracks) > maxQueue-keep {
-				tracks = tracks[:max(0, maxQueue-keep)]
+		case "join":
+			target := h.rooms[strings.ToUpper(strings.TrimSpace(in.Code))]
+			if target == nil || !target.open {
+				return view{}, httpx.Error(404, "No hay un jam con ese código.")
 			}
-			// manual: cuántas del principio son de la cola del usuario (al reordenar o quitar desde la cola).
-			room.queue, room.manual = append(room.queue[:keep:keep], tracks...), max(0, min(in.Manual, len(tracks)))
-			room.qrev++
-		case "jump":
-			if in.Index < 0 || in.Index >= len(room.queue) {
-				break
+			if room != target {
+				h.leave(u)
+				target.members, u.room = append(target.members, u), target
 			}
-			room.manual = max(0, room.manual-(in.Index-room.pos))
-			room.set(in.Index, 0, true)
-		case "ended": // un dispositivo terminó la pista pos; si otro ya avisó, no se avanza dos veces
-			if in.Pos == room.pos {
-				h.advance(room, true)
+			u.listen(in.Device, false)
+			room = target
+		case "leave":
+			h.leave(u)
+			room = nil
+		case "state": // solo la foto: el teléfono en segundo plano pregunta así cuando pierde el flujo de eventos
+		case "cut":
+			// El dispositivo va a saltarse su colchón (stream.go): su flujo vuelve a empezar en lo que la sala suena
+			// ahora mismo, y lo que llegue después de esta respuesta ya es eso.
+			if u.cuts == nil {
+				u.cuts = map[string]int{}
 			}
-		case "next":
-			h.advance(room, false)
-		case "prev":
-			room.manual = 0
-			room.set(max(room.pos-1, 0), 0, room.playing || room.pos > 0)
-		case "play":
-			room.set(room.pos, room.cur(now), len(room.queue) > 0)
-		case "pause":
-			room.set(room.pos, room.cur(now), false)
-		case "seek":
-			at := max(in.At, 0)
-			if d := room.dur(); d > 0 {
-				at = min(at, d)
+			u.cuts[in.Device]++
+			if ch := u.wake[in.Device]; ch != nil {
+				select {
+				case ch <- struct{}{}:
+				default:
+				}
 			}
-			room.set(room.pos, at, room.playing)
 		default:
-			return httpx.Error(400, "petición inválida")
+			if room == nil {
+				return view{}, errNoRoom
+			}
+			now := time.Now()
+			switch in.Op {
+			case "open":
+				room.open, room.repeat = true, 0
+			case "repeat":
+				if !room.open {
+					room.repeat = max(0, min(in.Repeat, 2))
+				}
+			case "here":
+				if u.conns[in.Target] == nil {
+					return view{}, httpx.Error(409, "Ese dispositivo ya no está conectado.")
+				}
+				u.listen(in.Target, in.Add)
+			case "queue": // alguien puso a sonar otra lista
+				if len(tracks) == 0 {
+					return view{}, httpx.Error(404, "Esa música ya no está en la biblioteca.")
+				}
+				room.queue, room.manual = tracks, 0
+				room.qrev++
+				room.set(clampPos(len(tracks)), 0, true)
+			case "add":
+				if len(tracks) == 0 {
+					return view{}, httpx.Error(404, "Esa canción ya no está en la biblioteca.")
+				}
+				if len(room.queue)+len(tracks) > maxQueue {
+					return view{}, httpx.Error(409, "La cola está llena.")
+				}
+				if len(room.queue) == 0 {
+					room.queue = tracks
+					room.set(0, 0, true)
+				} else {
+					i := room.pos + 1
+					if !in.Next {
+						i += room.manual
+					}
+					i = min(i, len(room.queue))
+					room.queue = append(room.queue[:i:i], append(tracks, room.queue[i:]...)...)
+					room.manual += len(tracks)
+				}
+				room.qrev++
+			case "remove":
+				i := in.Index
+				if i <= room.pos || i >= len(room.queue) || room.queue[i].Path != in.Path {
+					break // la cola cambió mientras tanto: la foto que vuelve lo muestra
+				}
+				if i <= room.pos+room.manual {
+					room.manual--
+				}
+				room.queue = append(room.queue[:i:i], room.queue[i+1:]...)
+				room.qrev++
+			case "tail": // reemplaza lo que sigue después de la pista actual (aleatorio en el flujo continuo)
+				if len(room.queue) == 0 {
+					break
+				}
+				keep := room.pos + 1
+				if len(tracks) > maxQueue-keep {
+					tracks = tracks[:max(0, maxQueue-keep)]
+				}
+				// manual: cuántas del principio son de la cola del usuario (al reordenar o quitar desde la cola).
+				room.queue, room.manual = append(room.queue[:keep:keep], tracks...), max(0, min(in.Manual, len(tracks)))
+				room.qrev++
+			case "jump":
+				if in.Index < 0 || in.Index >= len(room.queue) {
+					break
+				}
+				room.manual = max(0, room.manual-(in.Index-room.pos))
+				room.set(in.Index, 0, true)
+			case "next":
+				h.advance(room, false)
+			case "prev":
+				room.manual = 0
+				room.set(max(room.pos-1, 0), 0, room.playing || room.pos > 0)
+			case "play":
+				room.set(room.pos, room.cur(now), len(room.queue) > 0)
+			case "pause":
+				room.set(room.pos, room.cur(now), false)
+			case "seek":
+				at := max(in.At, 0)
+				if d := room.dur(); d > 0 {
+					at = min(at, d)
+				}
+				room.set(room.pos, at, room.playing)
+			default:
+				return view{}, httpx.Error(400, "petición inválida")
+			}
 		}
+		h.sweep()
+		notify(u)
+		return h.snapshot(u, in.Device, in.Qrev), nil
+	}()
+	if err != nil {
+		return err
 	}
-	h.sweep()
-	notify(u)
-	return httpx.WriteJSON(w, 200, h.snapshot(u, in.Device, in.Qrev))
+	return httpx.WriteJSON(w, 200, v)
 }

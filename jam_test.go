@@ -140,10 +140,8 @@ func TestJam(t *testing.T) {
 	if _, m = cmd(luis, "luistelefono", map[string]any{"op": "next"}); room(m)["pos"].(float64) != 1 {
 		t.Fatalf("next: %v", m)
 	}
-	// Dos dispositivos avisan que terminó la misma pista: solo se avanza una vez.
-	cmd(ana, "anatelefono", map[string]any{"op": "ended", "pos": 1})
-	if _, m = cmd(luis, "luistelefono", map[string]any{"op": "ended", "pos": 1}); room(m)["pos"].(float64) != 2 {
-		t.Fatalf("ended repetido: %v", m)
+	if _, m = cmd(ana, "anatelefono", map[string]any{"op": "next"}); room(m)["pos"].(float64) != 2 {
+		t.Fatalf("next del otro: %v", m)
 	}
 	if _, m = cmd(ana, "anatelefono", map[string]any{"op": "pause"}); room(m)["playing"] != false {
 		t.Fatalf("pause: %v", m)
@@ -167,6 +165,11 @@ func TestJam(t *testing.T) {
 	}
 	if _, m = cmd(ana, "anatelefono", map[string]any{"op": "play"}); len(room(m)["members"].([]any)) != 1 {
 		t.Fatalf("la sala sigue con ana: %v", m)
+	}
+	// Reordenar una cola vacía no tumba el servidor.
+	cmd(luis, "luistelefono", map[string]any{"op": "start"})
+	if code, _ := cmd(luis, "luistelefono", map[string]any{"op": "tail", "paths": []string{suelta}}); code != 200 {
+		t.Fatalf("tail con la cola vacía: %d", code)
 	}
 }
 
@@ -278,22 +281,32 @@ func TestJamStream(t *testing.T) {
 		t.Fatalf("con repetir esta canción debe sonar dos veces la primera: %v", err)
 	}
 	room := func(m map[string]any) map[string]any { return m["room"].(map[string]any) }
-	if r := room(cmd(map[string]any{"op": "ended", "pos": room(cmd(map[string]any{"op": "state"}))["pos"]})); r["pos"].(float64) != 0 {
+	if r := room(cmd(map[string]any{"op": "state"})); r["pos"].(float64) != 0 || r["playing"] != true {
 		t.Fatalf("repetir esta canción: al terminar sigue la misma: %v", r)
 	}
 	if r := room(cmd(map[string]any{"op": "next"})); r["pos"].(float64) != 1 {
 		t.Fatalf("«siguiente» a mano sí pasa de canción: %v", r)
 	}
 	// Repetir toda la cola: después de la última vuelve la primera, sin sugerencias.
+	res.Body.Close()
 	cmd(map[string]any{"op": "queue", "paths": []string{"uno.mp3", "dos.mp3"}, "pos": 1}) // sin las sugerencias de antes
 	cmd(map[string]any{"op": "repeat", "repeat": 1})
-	if r := room(cmd(map[string]any{"op": "ended", "pos": 1})); r["pos"].(float64) != 0 || r["playing"] != true {
+	req, _ = http.NewRequestWithContext(ctx, "GET", ana.base+"/api/jam/stream?device=anatelefono", nil)
+	if res, err = ana.c.Do(req); err != nil {
+		t.Fatal(err)
+	}
+	defer res.Body.Close()
+	if _, err := io.ReadFull(res.Body, got); err != nil || bytes.Count(got, []byte{'a'}) < 39*380 || bytes.IndexByte(got, 'a') < bytes.IndexByte(got, 'b') {
+		t.Fatalf("repetir la cola: tras la última debe llegar la primera: %v", err)
+	}
+	if r := room(cmd(map[string]any{"op": "state"})); len(r["queue"].([]any)) != 2 || r["playing"] != true {
 		t.Fatalf("repetir la cola: %v", r)
 	}
 	// En un jam no se repite.
+	res.Body.Close()
 	cmd(map[string]any{"op": "open"})
 	cmd(map[string]any{"op": "jump", "index": 1})
-	if r := room(cmd(map[string]any{"op": "ended", "pos": 1})); r["pos"].(float64) == 0 {
+	if r := room(cmd(map[string]any{"op": "next"})); r["pos"].(float64) == 0 {
 		t.Fatalf("en un jam la cola no vuelve a empezar: %v", r)
 	}
 }

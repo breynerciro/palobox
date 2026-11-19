@@ -42,7 +42,9 @@ func (h *Hub) target(r *jamRoom, now time.Time, lead time.Duration) (int, float6
 			break
 		}
 		if r.after(idx, r.repeat) < 0 {
+			shift := r.shift
 			h.extend(r) // la cola se acaba dentro del colchón: las sugerencias se piden ya
+			idx -= r.shift - shift
 			if r.after(idx, r.repeat) < 0 {
 				return idx, d
 			}
@@ -103,6 +105,7 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		}
 	}
 	room.streams++
+	shift := room.shift // con qué recorte de la cola cuenta idx (abajo)
 	h.mu.Unlock()
 	defer func() {
 		h.mu.Lock()
@@ -150,10 +153,12 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		return true
 	}
 	// pump manda secs segundos de la pista abierta; dice si el archivo se acabó antes.
+	rc := http.NewResponseController(w)
 	pump := func(secs float64) (eof bool) {
 		for n := int64(secs * rate); n > 0 && !gone; {
 			k, err := src.Read(buf[:min(int64(len(buf)), n)])
 			if k > 0 {
+				rc.SetWriteDeadline(time.Now().Add(30 * time.Second)) // un teléfono que desaparece no retiene el flujo
 				if _, werr := w.Write(buf[:k]); werr != nil {
 					gone = true
 				}
@@ -174,6 +179,22 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		full = streamLead
 	}
 	leadS := full.Seconds()
+	// ended pasa la sala de la pista i (ruta p) a la siguiente, si sigue en ella y la cola no se recortó entretanto;
+	// ahead: segundos de esa pista ya mandados que la sala aún no suena.
+	ended := func(i int, p string, manual bool, ahead float64) {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if u.room != room || room.shift != shift || room.pos != i || room.queue[i].Path != p {
+			return
+		}
+		h.advance(room, !manual)
+		if room.playing {
+			room.at = -min(max(ahead, 0), leadS) // empieza cuando el teléfono termine de sonar lo que ya tiene
+		}
+		for _, m := range room.members {
+			m.poke()
+		}
+	}
 	for !gone {
 		h.mu.Lock()
 		now := time.Now()
@@ -222,22 +243,32 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 			lead, first = 0, false // al abrir se empieza justo en lo que suena ahora; el colchón se llena enseguida
 		}
 		ti, tat := h.target(room, now, lead)
+		if d := room.shift - shift; d != 0 { // extend recortó lo ya escuchado: la misma pista quedó d puestos antes
+			idx, shift = idx-d, room.shift
+		}
 		want, after := room.queue[ti], room.after(idx, room.repeat)
+		cur := room.cur(now) // para una pista sin duración en el índice, que solo se sabe terminada al acabarse su archivo
 		h.mu.Unlock()
 
 		switch {
 		// La que sigue (con repetir puede ser la misma o la primera de la cola): se reconoce porque volvió a empezar.
 		case !fresh && src != nil && ti == after && (ti != idx || tat < at) && dur-at+tat < leadS+streamSlip:
 			pump(dur - at + leadS) // lo que falte de la anterior, hasta que se acabe el archivo…
-			if !gone && !open(want, ti, 0) {
-				return nil
+			if gone {
+				break
+			}
+			if !open(want, ti, 0) {
+				ended(ti, want.Path, true, 0) // ya no está en disco: se salta cuando la sala llegue a ella
+				break
 			}
 			pump(tat) // …y el comienzo de la que sigue, por la misma conexión
 		case !fresh && src != nil && ti == idx && want.Path == path && tat-at > -streamSlip && tat-at < leadS+streamSlip:
-			pump(tat - at) // la misma pista, un poco más adelante
+			if pump(tat-at) && dur <= 0 { // la pista sin duración se acabó: nadie más lo puede saber
+				ended(idx, path, false, at-cur)
+			}
 		default: // primera vez, o alguien saltó o adelantó: se empieza donde toca
 			if !open(want, ti, tat) {
-				return nil // la pista ya no está: el reproductor reabre el flujo cuando la sala siga
+				ended(ti, want.Path, true, 0) // ya no está en disco: se pasa a la siguiente, por la espera del tick
 			}
 		}
 		fl.Flush()
