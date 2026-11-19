@@ -1,10 +1,16 @@
 // Reproductor de música: cola, aleatorio, repetir y la barra que sigue sonando al cambiar de sección.
-import { $, el, icon, setIcon, json, joinText, lazyImg, toast, clock, plural, sleep, ask, menu, coverColor, sheetDrag } from './lib.js';
+import { $, icon, setIcon, json, joinText, lazyImg, toast, clock, menu, coverColor } from './lib.js';
 import { thumbUrl, go } from './nav.js';
 import { api } from './session.js';
 import { ensureLib, markLikes, toggleLike, liked, pickPlaylist } from './music.js';
 import * as jam from './jam.js';
 import * as offline from './offline.js';
+// Los paneles (cola, dispositivos y jam) y los gestos viven aparte; leen el estado con state() y cambian la
+// reproducción con las acciones que se exportan aquí.
+import { paintQueue, openQueue } from './player-queue.js';
+import { paintJam } from './player-jam.js';
+import './player-gestures.js';
+export { joinJam } from './player-jam.js';
 
 export const audio = new Audio();
 audio.preload = 'metadata';
@@ -38,7 +44,7 @@ let offset = 0; // reloj del servidor menos el de este dispositivo
 let curPath = ''; // pista cargada en el audio
 let warned = false; // ya se avisó que el navegador no dejó sonar sin un toque
 const roomTime = () => (room.playing ? room.at + (Date.now() + offset - room.stamp) / 1000 : room.at);
-const playing = () => (room && !here ? room.playing : !audio.paused);
+export const playing = () => (room && !here ? room.playing : !audio.paused);
 
 // Dos motores, el mismo en todos los dispositivos:
 // - Con conexión, flujo continuo. Android e iOS dejan que una página siga sonando en segundo plano mientras sea
@@ -182,7 +188,7 @@ const mix = (a) => {
   }
   return a;
 };
-const cover = (t) => [icon('music'), lazyImg(thumbUrl('musica', t.albumPath))];
+export const cover = (t) => [icon('music'), lazyImg(thumbUrl('musica', t.albumPath))];
 
 function load(i, { play = true, at = 0 } = {}) {
   if (i < 0 || i >= queue.length) return;
@@ -298,7 +304,7 @@ function addAt(t, nextUp) {
 export const playNext = (t) => addAt(t, true);
 export const enqueue = (t) => addAt(t, false);
 
-function next() {
+export function next() {
   if (streaming()) return streamDo('next');
   if (room) return void jam.send('next', { pos }); // suena en otro dispositivo: este es el control remoto
   let n = pos + 1;
@@ -350,7 +356,7 @@ function streamShuffle() {
   save();
 }
 
-const REPEAT = ['Repetir', 'Repetir: toda la cola', 'Repetir: esta canción'];
+export const REPEAT = ['Repetir', 'Repetir: toda la cola', 'Repetir: esta canción'];
 export function syncToggles() {
   for (const b of document.querySelectorAll('[data-act=shuffle]')) b.setAttribute('aria-pressed', shuffle);
   for (const b of document.querySelectorAll('[data-act=repeat]')) {
@@ -491,7 +497,7 @@ function seekTo(at) {
   resume = at; // cola restaurada, aún sin sala: arrancará desde aquí
   paintTimes(at, dur());
 }
-function toggle() {
+export function toggle() {
   if (local) return audio.paused ? audio.play().catch(warnPlay) : audio.pause();
   if (!room) return void (pos >= 0 && startRoom({ playing: true })); // cola restaurada: arranca en una sala
   if (!here && !devices.some((d) => d.active)) { // el dispositivo donde sonaba se desconectó: reproducir aquí lo toma
@@ -513,8 +519,6 @@ $('#next').onclick = $('#np-next').onclick = () => next();
 $('#prev').onclick = $('#np-prev').onclick = prev;
 $('#player-open').onclick = () => $('#np').showModal();
 $('#np-close').onclick = () => $('#np').close();
-$('#queue-close').onclick = () => $('#queue').close();
-$('#queue').onclick = (e) => e.target === e.currentTarget && e.currentTarget.close(); // clic en el telón
 // Controles de la pantalla de bloqueo y la notificación. iOS decide qué botones muestra cuando empieza a sonar
 // cada pista: con «adelantar/atrasar» registrados, o sin «siguiente/anterior» en ese momento, pone los de ±10 s.
 // Por eso se registran de nuevo con cada pista y los de salto quedan explícitamente apagados.
@@ -532,134 +536,29 @@ function mediaActions() {
 mediaActions();
 audio.addEventListener('playing', mediaActions);
 
-// Gestos de la barra mini: deslizar a los lados cambia de canción; hacia arriba abre la pantalla completa;
-// hacia abajo la oculta (solo en la Nube: en Música el reproductor es el centro de la sección).
-const bar = $('#player');
-const strip = bar.querySelector('.player-text'); // solo el título acompaña al dedo; carátula y botones se quedan
-const reduce = matchMedia('(prefers-reduced-motion: reduce)');
-let drag = null; // { id, x, y, t, mode: '' | 'x' | 'y' | 'up' }
-let swallowUntil = 0; // tras un arrastre, el click que le sigue no abre la pantalla completa
-function tuck(on) {
-  const had = bar.contains(document.activeElement) || document.activeElement === $('#player-tab');
-  document.body.classList.toggle('player-tucked', on);
-  for (const n of [bar, strip]) slideTo(n, '', '');
-  if (had) $(on ? '#player-tab' : '#player-open').focus(); // el foco no se pierde con el botón que desaparece
-}
-$('#player-tuck').onclick = () => tuck(true);
-$('#player-tab').onclick = () => tuck(false);
-function slideTo(n, transform, opacity, ms = 0) {
-  n.style.transition = ms && !reduce.matches ? `transform ${ms}ms var(--ease), opacity ${ms}ms` : 'none';
-  n.style.transform = transform;
-  n.style.opacity = opacity;
-}
-const canGo = (dir) => (dir > 0 ? pos + 1 < queue.length || repeat > 0 : pos > 0);
-async function swipeTo(dir, n = strip) {
-  const ms = reduce.matches ? 0 : 160;
-  slideTo(n, `translateX(${-dir * bar.offsetWidth}px)`, 0, ms);
-  await sleep(ms);
-  if (dir > 0) next();
-  else if (streaming()) streamDo('prev'); // a diferencia del botón, deslizar siempre cambia de canción
+// state: lo que los paneles y los gestos leen del reproductor (los let de aquí no se pueden leer desde otro módulo).
+export const state = () => ({ queue, pos, manual, shuffle, repeat, room, devices, here });
+export const canGo = (dir) => (dir > 0 ? pos + 1 < queue.length || repeat > 0 : pos > 0);
+// swipePrev: la anterior al deslizar; a diferencia del botón, deslizar siempre cambia de canción.
+export function swipePrev() {
+  if (streaming()) streamDo('prev');
   else if (room) jam.send('prev');
   else {
     manual = 0;
     load(pos - 1);
     if (!local) startRoom({ playing: true, at: 0 });
   }
-  slideTo(n, `translateX(${dir * 48}px)`, 0);
-  n.offsetWidth; // aplica la posición de entrada antes de animar
-  slideTo(n, '', '', ms);
 }
-bar.addEventListener('pointerdown', (e) => {
-  if (!e.isPrimary || e.button !== 0 || e.target.closest('input')) return; // la barra de avance se arrastra sola
-  drag = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, mode: '' };
-});
-bar.addEventListener('pointermove', (e) => {
-  if (drag?.id !== e.pointerId) return;
-  const dx = e.clientX - drag.x;
-  const dy = e.clientY - drag.y;
-  if (!drag.mode) {
-    if (Math.hypot(dx, dy) < 12) return; // todavía puede ser un toque
-    drag.mode = Math.abs(dx) > Math.abs(dy) * 1.5 ? 'x' : dy < 0 ? 'up' : document.body.classList.contains('music') ? '' : 'y';
-    if (!drag.mode) return (drag = null);
-    bar.setPointerCapture(e.pointerId);
+// jumpTo salta a la pista i de la cola (un toque en su fila).
+export function jumpTo(i) {
+  if (!room) {
+    manual = Math.max(0, manual - (i - pos));
+    load(i);
+    return void (!local && startRoom({ playing: true, at: 0 }));
   }
-  if (drag.mode === 'x') slideTo(strip, `translateX(${canGo(-Math.sign(dx)) ? dx : dx / 4}px)`, 1 - Math.min(Math.abs(dx) / bar.offsetWidth, 0.6));
-  else if (drag.mode === 'up') slideTo(bar, `translateY(${Math.max(-24, Math.min(0, dy / 3))}px)`, '');
-  else slideTo(bar, `translateY(${Math.max(0, dy)}px)`, 1 - Math.min(Math.max(0, dy) / 160, 0.6));
-});
-function dragEnd(e) {
-  if (drag?.id !== e.pointerId) return;
-  const { mode, x, y, t } = drag;
-  drag = null;
-  const dx = e.clientX - x;
-  const dy = e.clientY - y;
-  const up = e.type === 'pointerup';
-  if (mode) swallowUntil = e.timeStamp + 400;
-  // Cambia con un cuarto del ancho, o con un gesto rápido corto.
-  if (mode === 'x' && up && canGo(-Math.sign(dx)) && (Math.abs(dx) > bar.offsetWidth / 4 || (Math.abs(dx) > 40 && Math.abs(dx) / (e.timeStamp - t) > 0.5))) return swipeTo(-Math.sign(dx));
-  if (mode === 'y' && up && dy > 48) return tuck(true);
-  if (mode === 'up' && up && dy < -30) $('#np').showModal();
-  slideTo(mode === 'x' ? strip : bar, '', '', 200);
+  if (streaming()) return streamDo('jump', { index: i });
+  jam.send('jump', { index: i });
 }
-bar.addEventListener('pointerup', dragEnd);
-bar.addEventListener('pointercancel', dragEnd); // el navegador tomó el gesto (desplazamiento vertical en Música)
-// Pantalla completa, desde cualquier parte: hacia abajo la cierra y vuelve a la barra pequeña; a los lados cambia de
-// canción (la carátula acompaña al dedo); hacia arriba abre la cola.
-const np = $('#np');
-const npArt = $('#np-cover');
-const openQueue = () => { $('#queue').showModal(); paintQueue(); };
-let npDrag = null; // { id, x, y, t, mode: '' | 'x' | 'y' | 'up' }
-np.addEventListener('pointerdown', (e) => {
-  if (e.isPrimary && e.pointerType !== 'mouse' && !e.target.closest('input')) npDrag = { id: e.pointerId, x: e.clientX, y: e.clientY, t: e.timeStamp, mode: '' };
-});
-np.addEventListener('pointermove', (e) => {
-  if (npDrag?.id !== e.pointerId) return;
-  const dx = e.clientX - npDrag.x;
-  const dy = e.clientY - npDrag.y;
-  if (!npDrag.mode) {
-    if (Math.hypot(dx, dy) < 12) return; // todavía puede ser un toque
-    npDrag.mode = Math.abs(dx) > Math.abs(dy) * 1.5 ? 'x' : dy > 0 ? 'y' : 'up';
-    np.setPointerCapture(e.pointerId);
-  }
-  if (npDrag.mode === 'x') slideTo(npArt, `translateX(${canGo(-Math.sign(dx)) ? dx : dx / 4}px)`, 1 - Math.min(Math.abs(dx) / np.offsetWidth, 0.6));
-  else if (npDrag.mode === 'y') slideTo(np, `translateY(${Math.max(0, dy)}px)`, '');
-});
-async function npEnd(e) {
-  if (npDrag?.id !== e.pointerId) return;
-  const { mode, x, y, t } = npDrag;
-  npDrag = null;
-  if (!mode) return;
-  swallowUntil = e.timeStamp + 400; // el botón donde empezó el gesto no se activa
-  const dx = e.clientX - x;
-  const dy = e.clientY - y;
-  const up = e.type === 'pointerup';
-  const far = (d, size) => d > size / 4 || (d > 40 && d / (e.timeStamp - t) > 0.5); // un cuarto del tamaño, o un gesto rápido corto
-  if (mode === 'x' && up && canGo(-Math.sign(dx)) && far(Math.abs(dx), np.offsetWidth)) return swipeTo(-Math.sign(dx), npArt);
-  if (mode === 'up' && up && dy < -60) return openQueue();
-  if (mode === 'y' && up && far(dy, np.offsetHeight)) {
-    const ms = reduce.matches ? 0 : 200;
-    slideTo(np, 'translateY(100%)', '', ms);
-    await sleep(ms);
-    np.close();
-    return slideTo(np, '', '');
-  }
-  slideTo(mode === 'x' ? npArt : np, '', '', 200);
-}
-np.addEventListener('pointerup', npEnd);
-np.addEventListener('pointercancel', npEnd);
-np.addEventListener('click', (e) => {
-  if (e.timeStamp > swallowUntil) return;
-  swallowUntil = 0;
-  e.stopPropagation();
-  e.preventDefault();
-}, true);
-
-bar.addEventListener('click', (e) => {
-  if (e.timeStamp > swallowUntil) return;
-  swallowUntil = 0;
-  e.stopPropagation();
-  e.preventDefault();
-}, true);
 
 // Atajos de escritorio: espacio pausa, flechas adelantan 5 s, Mayús + flechas cambian de pista.
 document.addEventListener('keydown', (e) => {
@@ -670,14 +569,8 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'ArrowLeft') e.shiftKey ? prev() : seekTo((room ? roomTime() : deck ? deckTime() : resume) - 5);
 });
 
-// Cola: la pista que suena, lo que el usuario puso en cola («En la cola») y lo que sigue de la lista o las
-// sugerencias. Cada fila se arrastra por su agarre; Editar deja elegir varias para subirlas o quitarlas.
-
-const QUEUE_MAX = 100; // filas pintadas; una cola de miles de pistas no cabe en una lista cómoda
-let editing = false;
-const picked = new Set(); // en edición: las pistas elegidas (los objetos de la cola)
 // setTail deja lo que sigue después de la pista actual como list; m: cuántas del principio son «En la cola».
-function setTail(list, m) {
+export function setTail(list, m) {
   m = Math.max(0, Math.min(m, list.length));
   if (room) return void jam.send('tail', { paths: list.map((t) => t.path), manual: m });
   queue = [...queue.slice(0, pos + 1), ...list];
@@ -686,158 +579,6 @@ function setTail(list, m) {
   paintQueue();
   save();
 }
-// moveInQueue pasa la pista i de lo que sigue al lugar j (ya sin ella). Soltarla dentro de «En la cola» o justo
-// al final la deja ahí; sacarla de ahí la devuelve a lo que sigue.
-function moveInQueue(i, j) {
-  const rest = queue.slice(pos + 1);
-  if (i === j || !rest[i]) return;
-  let m = manual - (i < manual ? 1 : 0);
-  const [t] = rest.splice(i, 1);
-  rest.splice(j, 0, t);
-  if (j <= m) m++;
-  setTail(rest, m);
-}
-function queueRow(t, i) {
-  const text = el('div', { className: 'row-text' }, el('p', { className: 'ellipsis', textContent: t.title }), el('p', { className: 'muted ellipsis', textContent: joinText(t.artist, t.auto && 'Sugerida') }));
-  const art = el('span', { className: 'cover small', style: '--tc: var(--t-audio)' }, cover(t));
-  if (i === pos) { // la que suena: se pausa y se reanuda desde aquí
-    const b = el('button', { className: 'row playing' }, art, text);
-    b.setAttribute('aria-current', 'true');
-    b.onclick = toggle;
-    const pp = el('button', { className: 'icon-btn queue-play' }, icon(playing() ? 'pause' : 'play'));
-    pp.setAttribute('aria-label', playing() ? 'Pausar' : 'Reproducir');
-    pp.onclick = toggle;
-    return el('li', { className: 'row-wrap' }, b, pp);
-  }
-  const k = i - pos - 1; // lugar dentro de lo que sigue
-  if (editing) {
-    const b = el('button', { className: 'row' }, el('span', { className: 'check' }, icon('check')), art, text);
-    b.setAttribute('role', 'checkbox');
-    b.setAttribute('aria-checked', picked.has(t));
-    b.onclick = () => { picked.has(t) ? picked.delete(t) : picked.add(t); paintQueue(); };
-    return el('li', { className: 'row-wrap' }, b);
-  }
-  const b = el('button', { className: 'row' }, art, text);
-  b.setAttribute('aria-label', `Saltar a ${t.title}`);
-  b.onclick = () => {
-    if (!room) {
-      manual = Math.max(0, manual - (i - pos));
-      load(i);
-      return void (!local && startRoom({ playing: true, at: 0 }));
-    }
-    if (streaming()) return streamDo('jump', { index: i });
-    jam.send('jump', { index: i });
-  };
-  const grip = el('button', { className: 'icon-btn grip' }, icon('list'));
-  grip.setAttribute('aria-label', `Mover ${t.title}. Con el teclado: flechas arriba y abajo`);
-  grip.onkeydown = (e) => {
-    if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return;
-    e.preventDefault();
-    moveInQueue(k, Math.max(0, Math.min(queue.length - pos - 2, k + (e.key === 'ArrowUp' ? -1 : 1))));
-  };
-  const li = el('li', { className: 'row-wrap' }, b, grip);
-  li.dataset.k = k;
-  grip.onpointerdown = (e) => dragRow(e, li, k);
-  return li;
-}
-// dragRow arrastra una fila por su agarre: la fila sigue al dedo y una línea marca dónde quedaría.
-function dragRow(e, li, k) {
-  if (!e.isPrimary || e.button > 0) return;
-  e.preventDefault();
-  const grip = e.currentTarget;
-  const rows = [...li.parentElement.querySelectorAll('li[data-k]')];
-  const y0 = e.clientY;
-  let to = k;
-  grip.setPointerCapture(e.pointerId);
-  li.classList.add('dragging');
-  rowDrag = true;
-  const move = (ev) => {
-    li.style.transform = `translateY(${ev.clientY - y0}px)`;
-    // El lugar: cuántas de las otras filas quedan por encima del dedo.
-    to = rows.filter((x) => x !== li && x.getBoundingClientRect().top + x.offsetHeight / 2 < ev.clientY).length;
-    for (const x of rows) x.classList.remove('drop-above', 'drop-below');
-    const others = rows.filter((x) => x !== li);
-    if (others[to]) others[to].classList.add('drop-above'); else others.at(-1)?.classList.add('drop-below');
-  };
-  const end = (ev) => {
-    grip.removeEventListener('pointermove', move);
-    grip.removeEventListener('pointerup', end);
-    grip.removeEventListener('pointercancel', end);
-    for (const x of rows) x.classList.remove('drop-above', 'drop-below');
-    li.classList.remove('dragging');
-    li.style.transform = '';
-    rowDrag = false;
-    if (ev.type === 'pointerup' && to !== k) moveInQueue(k, to);
-    else paintQueue(); // lo que llegó durante el arrastre
-  };
-  grip.addEventListener('pointermove', move);
-  grip.addEventListener('pointerup', end);
-  grip.addEventListener('pointercancel', end);
-}
-let painted = ''; // lo que muestran las filas de la cola (paintQueue)
-let rowDrag = false; // una fila va en el dedo: la cola no se repinta
-function paintQueue() {
-  if (!$('#queue').open) return;
-  const body = $('#queue-body');
-  const rest = queue.slice(pos + 1);
-  for (const t of [...picked]) if (!rest.includes(t)) picked.delete(t); // la cola cambió
-  if (!rest.length) editing = false;
-  $('#queue-clear').hidden = editing || !rest.length;
-  $('#queue-edit').hidden = !rest.length;
-  $('#queue-edit').textContent = editing ? 'Listo' : 'Editar';
-  $('#queue-edit').setAttribute('aria-pressed', editing);
-  paintQueueFoot(rest);
-  if (pos < 0) return (painted = '', body.replaceChildren(el('p', { className: 'muted note', textContent: 'No hay nada en la cola.' })));
-  const shown = rest.slice(0, QUEUE_MAX);
-  const more = rest.length - shown.length;
-  const m = Math.min(manual, shown.length);
-  // Los avisos de la sala llegan a menudo y casi siempre sin cambios en la cola: rehacer las filas haría
-  // parpadear las carátulas y soltaría la fila que se está arrastrando.
-  const key = JSON.stringify([pos, queue[pos].path, playing(), editing, m, more, repeat, shown.map((t) => [t.path, t.auto, picked.has(t)])]);
-  if (rowDrag || (key === painted && body.isConnected && body.childElementCount)) return;
-  painted = key;
-  const sep = (text) => el('li', { className: 'queue-sep', textContent: text });
-  const rows = shown.map((t, k) => queueRow(t, pos + 1 + k));
-  if (m > 0) rows.splice(m, 0, ...(m < shown.length ? [sep('A continuación')] : []));
-  body.replaceChildren(...[
-    el('h3', { className: 'section-title', textContent: 'Sonando' }),
-    el('ul', { className: 'list' }, queueRow(queue[pos], pos)),
-    el('h3', { className: 'section-title', textContent: m > 0 ? 'En la cola' : 'A continuación' }),
-    shown.length
-      ? el('ul', { className: 'list' }, rows)
-      : el('p', { className: 'muted note', textContent: repeat === 1 ? 'La cola vuelve a empezar al terminar esta canción.' : 'Esta es la última canción de la cola.' }),
-    more > 0 && el('p', { className: 'muted note', textContent: `Y ${plural(more, 'canción más', 'canciones más')}.` }),
-  ].filter(Boolean));
-}
-// Abajo: aleatorio y repetir; en edición, qué hacer con las elegidas.
-function paintQueueFoot(rest) {
-  const btn = (glyph, text, attrs = {}) => {
-    const b = el('button', { className: 'queue-btn' }, icon(glyph), el('span', { textContent: text }));
-    for (const [k, v] of Object.entries(attrs)) b.setAttribute(k, v);
-    return b;
-  };
-  if (!editing) {
-    $('#queue-foot').replaceChildren(btn('shuffle', 'Aleatorio', { 'data-act': 'shuffle', 'aria-pressed': shuffle }),
-      btn(repeat === 2 ? 'repeat-1' : 'repeat', REPEAT[repeat], { 'data-act': 'repeat', 'aria-pressed': repeat > 0 }));
-    return;
-  }
-  const sel = rest.filter((t) => picked.has(t));
-  const others = rest.filter((t) => !picked.has(t));
-  const inQueue = (list) => list.filter((t) => rest.indexOf(t) < manual).length;
-  const top = btn('up', 'Mover al inicio');
-  const rm = btn('trash', sel.length ? `Quitar (${sel.length})` : 'Quitar');
-  top.disabled = rm.disabled = !sel.length;
-  const done = () => { picked.clear(); editing = false; };
-  top.onclick = () => { done(); setTail([...sel, ...others], sel.length + inQueue(others)); };
-  rm.onclick = () => { done(); setTail(others, inQueue(others)); };
-  $('#queue-foot').replaceChildren(top, rm);
-}
-$('#queue-edit').onclick = () => { editing = !editing; picked.clear(); paintQueue(); };
-$('#queue-clear').onclick = () => { setTail([], 0); toast('Se quitó lo que seguía en la cola.', { kind: 'ok' }); };
-$('#queue').addEventListener('close', () => { editing = false; picked.clear(); $('#queue').classList.remove('full'); });
-// En celular la cola es una hoja a media pantalla que se arrastra desde cualquier parte: hacia arriba se abre completa
-// y hacia abajo se encoge o se cierra.
-sheetDrag($('#queue'), $('#queue-body'), { grow: true });
 
 // Cola, pista y posición se recuerdan en este navegador para retomar al volver a abrir la app.
 
@@ -940,7 +681,7 @@ function applyJam(s) {
 }
 
 // startRoom pasa la cola de este dispositivo a una sala nueva.
-function startRoom(extra = {}) {
+export function startRoom(extra = {}) {
   const from = Math.max(0, pos - 50);
   return jam.send('start', {
     paths: queue.slice(from, from + 500).map((t) => t.path), pos: Math.max(0, pos - from),
@@ -1107,85 +848,3 @@ function paintRemote() {
 }
 setInterval(paintRemote, 500);
 
-export async function joinJam(code) {
-  code = code.trim().toUpperCase();
-  if (code && await jam.send('join', { code })) toast('Te uniste al jam. Todos pueden agregar canciones y cambiar la que suena.', { kind: 'ok' });
-}
-
-// playOn elige en cuál de mis dispositivos suena; con add lo suma a los que ya suenan (o lo quita si ya sonaba).
-function playOn(d, add = false) {
-  if (room) return void jam.send('here', { target: d.id, add });
-  if (d.me) return; // sin sala ya suena aquí
-  if (pos < 0) return toast('Pon a sonar algo primero y luego elige el dispositivo.');
-  startRoom({ target: d.id, add });
-}
-
-function paintJam() {
-  const sounding = devices.filter((d) => d.active);
-  const active = sounding.length && { name: sounding.map((d) => d.name).join(' y ') };
-  const shared = !!room && (room.members.length > 1 || !here);
-  for (const b of document.querySelectorAll('[data-act=jam]')) b.classList.toggle('on', shared);
-  $('#np-where').textContent = room && !here ? (active ? `Sonando en ${active.name}` : 'En pausa: ningún dispositivo') : room?.members.length > 1 ? `Jam con ${plural(room.members.length - 1, 'persona', 'personas')}` : 'Reproduciendo';
-  if (!$('#jam').open) return;
-  const title = (text) => el('h3', { className: 'section-title', textContent: text });
-  const note = (text) => el('p', { className: 'muted note', textContent: text });
-  const btn = (cls, glyph, text, run) => {
-    const b = el('button', { className: `btn ${cls}` }, glyph && icon(glyph), text);
-    b.onclick = run;
-    return b;
-  };
-  const out = [title('Reproducir en')];
-  out.push(el('ul', { className: 'list' }, devices.map((d) => {
-    const on = room ? d.active : d.me;
-    const b = el('button', { className: 'row' }, el('span', { className: 'type', style: `--tc: var(--t-${on ? 'audio' : 'doc'})` }, icon('cast')),
-      el('div', { className: 'row-text' }, el('p', { textContent: d.name }), el('p', { className: 'muted', textContent: joinText(d.me && 'Este dispositivo', on && 'Suena aquí') })),
-      on && icon('check'));
-    if (on) b.setAttribute('aria-current', 'true');
-    b.onclick = () => playOn(d);
-    // El botón de la derecha suma o quita este dispositivo sin tocar los demás: así suenan varios a la vez.
-    const several = devices.filter((x) => (room ? x.active : x.me)).length > 1;
-    const also = (!on || several) && el('button', { className: 'icon-btn' }, icon(on ? 'x' : 'plus'));
-    if (also) {
-      also.setAttribute('aria-label', on ? `Dejar de sonar en ${d.name}` : `Sonar también en ${d.name}`);
-      also.onclick = () => playOn(d, true);
-    }
-    return el('li', { className: 'row-wrap' }, b, also);
-  })));
-  out.push(note(devices.length > 1
-    ? 'Toca un dispositivo para que suene solo ahí, o + para que suene también ahí, a la vez. El sonido sale por lo que tenga conectado: su parlante, audífonos o un equipo Bluetooth.'
-    : 'Abre PaloBox con tu cuenta en otro dispositivo y aparecerá aquí para pasarle la música o controlarla desde este.'));
-  if (audio.webkitShowPlaybackTargetPicker) { // Safari: AirPlay y salidas del sistema
-    out.push(el('div', { className: 'jam-actions' }, btn('secondary small', 'volume', 'AirPlay y otras salidas', () => audio.webkitShowPlaybackTargetPicker())));
-  }
-
-  out.push(title('Jam'));
-  if (room?.open) {
-    const link = `${location.origin}/#/jam/${room.code}`;
-    out.push(note('Comparte este código con otra persona de PaloBox. Cada quien oye en su dispositivo y todos manejan la cola.'),
-      el('p', { className: 'jam-code', textContent: room.code }),
-      el('div', { className: 'jam-actions' }, btn('primary small', null, navigator.share ? 'Compartir enlace' : 'Copiar enlace', async () => {
-        try {
-          if (navigator.share) await navigator.share({ title: 'Jam en PaloBox', url: link });
-          else { await navigator.clipboard.writeText(link); toast('Enlace copiado.', { kind: 'ok' }); }
-        } catch {} // se cerró el menú de compartir
-      })),
-      el('ul', { className: 'list' }, room.members.map((m) => el('li', {}, el('div', { className: 'row static' },
-        el('span', { className: 'type', style: '--tc: var(--t-image)' }, icon('user')),
-        el('div', { className: 'row-text' }, el('p', { textContent: m.name }),
-          el('p', { className: 'muted', textContent: !m.online ? 'Sin conexión' : m.device ? `Oye en ${m.device}` : 'Conectado, sin sonido' })))))));
-  } else {
-    out.push(note('Escucha lo mismo con otras personas de PaloBox: cada quien en su dispositivo, al mismo tiempo.'),
-      el('div', { className: 'jam-actions' },
-        btn('primary small', 'plus', 'Iniciar jam', () => (room ? jam.send('open') : startRoom({ open: true }))),
-        btn('secondary small', null, 'Unirme con un código', async () => {
-          const code = await ask({ heading: 'Unirme a un jam', text: 'Escribe el código de 6 caracteres que te compartieron.', input: '', label: 'Código', ok: 'Unirme' });
-          if (code) joinJam(code);
-        })));
-  }
-  if (room?.open) { // la sala propia no se «deja»: es el reproductor
-    out.push(el('div', { className: 'jam-actions' }, btn('secondary small', 'logout', 'Salir del jam', () => jam.send('leave'))));
-  }
-  $('#jam-body').replaceChildren(...out);
-}
-$('#jam-close').onclick = () => $('#jam').close();
-$('#jam').onclick = (e) => e.target === e.currentTarget && e.currentTarget.close(); // clic en el telón
