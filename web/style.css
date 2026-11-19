@@ -104,6 +104,8 @@ input:not([type=range]):focus { border-color: var(--accent); outline: none; box-
 body:has(#upbar:not([hidden])) { --up-h: 52px; } /* lo último de la vista no queda bajo la píldora de subida */
 .section-title { font-size: 1.05rem; font-weight: 700; margin: 22px var(--gutter) 10px; display: flex; gap: 8px; align-items: baseline; }
 .section-title span { font-weight: 500; font-size: .85rem; color: var(--muted); text-transform: none; }
+.section-title .section-link { margin-left: auto; font-weight: 600; font-size: .85rem; color: var(--muted); text-decoration: none; }
+.section-title .section-link:hover { color: var(--text); }
 
 /* ---- Galería ---- */
 .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(116px, 1fr)); gap: 2px; }

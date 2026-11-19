@@ -408,6 +408,16 @@ func (l *Library) Lib(w http.ResponseWriter, r *http.Request, u httpx.User) erro
 	if err != nil {
 		return err
 	}
+	// Inicio va por canciones, no por álbumes: casi todo llega de playlists de Spotify, una canción por álbum.
+	recent, err := l.tracks(`JOIN (SELECT path, MAX(rowid) r FROM plays WHERE user_id = ? GROUP BY path) p ON p.path = t.path
+		ORDER BY p.r DESC LIMIT 20`, u.ID)
+	if err != nil {
+		return err
+	}
+	fresh, err := l.tracks(`ORDER BY t.mtime DESC, t.path LIMIT 40`)
+	if err != nil {
+		return err
+	}
 	likes := []string{}
 	rows, err := l.DB.Query(`SELECT l.path FROM likes l JOIN tracks t ON t.path = l.path WHERE l.user_id = ?`, u.ID)
 	if err != nil {
@@ -423,7 +433,7 @@ func (l *Library) Lib(w http.ResponseWriter, r *http.Request, u httpx.User) erro
 	if err != nil {
 		return err
 	}
-	return httpx.WriteJSON(w, 200, map[string]any{"albums": albums, "artists": artistsOf(albums, followed), "playlists": pls, "likes": likes, "top": top})
+	return httpx.WriteJSON(w, 200, map[string]any{"albums": albums, "artists": artistsOf(albums, followed), "playlists": pls, "likes": likes, "top": top, "recent": recent, "fresh": fresh})
 }
 
 func (l *Library) Album(w http.ResponseWriter, r *http.Request, u httpx.User) error {

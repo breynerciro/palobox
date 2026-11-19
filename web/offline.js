@@ -13,7 +13,7 @@ const HZ = 48000; // todo lo descargado es MPEG-1 capa III a 48 kHz en estéreo 
 const FRAME = 1152 / HZ; // segundos de cada cuadro MP3
 const VERSION = 2; // formato de lo guardado: si cambia, lo descargado antes no se puede unir con lo nuevo
 const MAX_AWAY = 30 * 24 * 3600 * 1000; // sin pasar por el servidor en este tiempo (lo que dura una sesión), ya no se entra
-const blank = () => ({ v: VERSION, user: '', musicOnly: false, seen: 0, tracks: {}, albums: {}, artists: {}, playlists: {}, likes: [], top: [], pending: [] });
+const blank = () => ({ v: VERSION, user: '', musicOnly: false, seen: 0, tracks: {}, albums: {}, artists: {}, playlists: {}, likes: [], top: [], recent: [], pending: [] });
 let state = blank();
 try {
   const kept = JSON.parse(localStorage.getItem(KEY));
@@ -145,6 +145,7 @@ export function remember(lib) {
   state.artists = Object.fromEntries(lib.artists.map((a) => [a.path, a.saved]));
   state.likes = lib.likes;
   state.top = lib.top.map((t) => t.path);
+  state.recent = (lib.recent || []).map((t) => t.path);
   for (const p of lib.playlists) if (state.playlists[p.id]) Object.assign(state.playlists[p.id], { name: p.name, updated: p.updated });
   const alive = new Set(lib.playlists.map((p) => String(p.id)));
   for (const id of Object.keys(state.playlists)) if (!alive.has(String(id))) delete state.playlists[id];
@@ -267,7 +268,8 @@ export function handle(path, opts = {}) {
   const list = albums();
   switch (u.pathname) {
     case '/api/me': return reply(saved());
-    case '/api/music': return reply({ albums: list, artists: artists(list), playlists: playlists(), likes: state.likes.filter(has), top: state.top.filter(has).map((p) => state.tracks[p].t) });
+    case '/api/music': return reply({ albums: list, artists: artists(list), playlists: playlists(), likes: state.likes.filter(has), top: state.top.filter(has).map((p) => state.tracks[p].t),
+      recent: state.recent.filter(has).map((p) => state.tracks[p].t), fresh: [] });
     case '/api/music/album': {
       const dir = q.get('path') ?? '';
       if (!byAlbum(dir).length) return gone();

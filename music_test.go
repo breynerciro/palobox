@@ -167,6 +167,12 @@ func TestMeGustaEHistorial(t *testing.T) {
 	if titles(m["top"]) != "Amor de San Juan|suelta" {
 		t.Fatalf("lo más escuchado: %s", raw)
 	}
+	if titles(m["recent"]) != "Amor de San Juan|suelta" { // la última escucha primero, cada canción una vez
+		t.Fatalf("escuchado recientemente: %s", raw)
+	}
+	if len(m["fresh"].([]any)) == 0 {
+		t.Fatalf("agregado recientemente: %s", raw)
+	}
 	for _, x := range m["albums"].([]any) {
 		if al := x.(map[string]any); (al["name"] == "Joyas") != (al["plays"] == float64(2)) || (al["played"].(float64) > 0) != (al["plays"].(float64) > 0) {
 			t.Fatalf("escuchas por álbum: %v", al)

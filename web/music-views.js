@@ -74,27 +74,75 @@ async function homeView() {
     return empty('music', 'Tu música empieza aquí', 'La biblioteca está vacía. En Buscar puedes pegar un enlace de Spotify; aparece aquí cuando termine de descargar.',
       linkBtn('Buscar música', href('musica', 'buscar'), 'search'));
   }
-  const heard = d.albums.filter((a) => a.played).sort((a, b) => b.played - a.played);
-  // Accesos rápidos: lo último que tocaste, sea playlist o álbum.
-  const recent = [...d.playlists.map(item.playlist), ...heard.map(item.album)].sort((a, b) => b.when - a.when);
-  const quick = [liked.size > 0 && item.liked(), ...recent].filter(Boolean).slice(0, 8);
+  // Lo que cambia en cada visita: canciones al azar de toda la biblioteca y uno de los artistas con más música.
+  // El artista: uno de tus 3 más escuchados con varias canciones; si aún no hay escuchas, cualquiera de esos.
+  const big = d.artists.filter((a) => a.tracks >= 3);
+  const heardBig = big.filter((a) => a.plays).sort((a, b) => b.plays - a.plays).slice(0, 3);
+  const pool = heardBig.length ? heardBig : big;
+  const pick = pool[Math.floor(Math.random() * pool.length)];
+  const [random, artist] = await Promise.all([
+    getJSON('/api/music/radio').catch(() => null),
+    pick ? getJSON(`/api/music/artist?path=${encodeURIComponent(pick.path)}`).catch(() => null) : null,
+  ]);
+  // Accesos rápidos: playlists, me gusta y álbumes de verdad (varias canciones) que tocaste hace poco.
+  const heard = d.albums.filter((a) => a.played && a.tracks > 1);
+  const quick = [liked.size > 0 && item.liked(), ...[...d.playlists.map(item.playlist), ...heard.map(item.album)].sort((a, b) => b.when - a.when)].filter(Boolean).slice(0, 8);
   return frag(
     quick.length > 0 && el('div', { className: 'quick' }, quick.map((it) => el('a', { className: 'quick-tile', href: it.href }, it.art(true), el('span', { textContent: it.name })))),
-    shelves(d));
+    shelves(d, { random: random || [], artist }));
 }
-// shelves: lo escuchado, lo más escuchado, lo nuevo y los artistas. Inicio y las sugerencias de Buscar.
-function shelves(d) {
-  const trackCard = (t, i) => {
-    const b = el('button', { className: 'card' }, cover(t.albumPath), el('p', { textContent: t.title }), el('p', { className: 'muted', textContent: t.artist }));
-    b.setAttribute('aria-label', `Reproducir ${joinText(t.title, t.artist)}`);
-    b.onclick = () => playAt(d.top, i);
-    return b;
+
+// lead deja solo el artista principal: spotDL escribe a los invitados con barras («A/B/C»).
+const lead = (s) => String(s || '').split('/')[0];
+const single = (d) => { const n = new Map(d.albums.map((a) => [a.path, a.tracks])); return (t) => (n.get(t.albumPath) ?? 1) < 2; };
+// songCard: una canción que suena con un toque; list es la fila, para que siga con las demás.
+function songCard(t, list, sub = lead(t.artist)) {
+  const b = el('button', { className: 'card' }, cover(t.albumPath), el('p', { textContent: t.title }), el('p', { className: 'muted', textContent: sub }));
+  b.setAttribute('aria-label', `Reproducir ${joinText(t.title, lead(t.artist))}`);
+  b.onclick = () => playAt(list, list.indexOf(t));
+  return b;
+}
+// shelves arma Inicio sin repetir: cada canción y cada álbum aparece una sola vez. Casi todo llega de playlists de
+// Spotify (una canción por álbum), así que las filas son de canciones; un álbum con varias se muestra como álbum.
+// extra: lo que se pidió aparte (canciones al azar y un artista); sin él quedan las filas de la biblioteca.
+function shelves(d, { random = [], artist = null } = {}) {
+  const seen = new Set();
+  const isSingle = single(d);
+  const albums = new Map(d.albums.map((a) => [a.path, a]));
+  const fresh = (ts, n = 12) => ts.filter((t) => !seen.has(t.path)).slice(0, n);
+  const mark = (ts) => { for (const t of ts) seen.add(t.path); return ts; };
+  const songs = (text, ts, link) => {
+    if (ts.length < 2) return null;
+    mark(ts);
+    return frag(el('h2', { className: 'section-title' }, text, link), scroller(el('div', { className: 'shelf' }, ts.map((t) => songCard(t, ts)))));
   };
-  return frag(
-    shelf('Escuchado recientemente', d.albums.filter((a) => a.played).sort((a, b) => b.played - a.played).slice(0, 12).map((a) => card(item.album(a), a.artist))),
-    shelf('Lo que más escuchas', d.top.map(trackCard)),
-    shelf('Agregado recientemente', [...d.albums].sort((a, b) => b.added - a.added).slice(0, 12).map((a) => card(item.album(a), a.artist))),
-    shelf('Tus artistas', [...d.artists].sort((a, b) => b.plays - a.plays).slice(0, 12).map((a) => card(item.artist(a)))));
+  // Agregado recientemente: las canciones nuevas; las de un álbum con varias se juntan en una tarjeta del álbum.
+  const added = [];
+  const addedSongs = [];
+  for (const t of d.fresh || []) {
+    if (added.length >= 12 || seen.has(t.path)) continue;
+    if (isSingle(t)) { addedSongs.push(t); added.push(t); } else if (albums.has(t.albumPath) && !added.some((x) => x.path === t.albumPath)) added.push(albums.get(t.albumPath));
+  }
+  const recent = fresh(d.recent || []);
+  const out = [
+    songs('Escuchado recientemente', recent),
+    songs('Lo que más escuchas', fresh(d.top || [])),
+  ];
+  const addedFresh = added.filter((x) => !seen.has(x.path));
+  if (addedFresh.length >= 2) {
+    mark(addedSongs);
+    const list = addedSongs.filter((t) => addedFresh.includes(t));
+    out.push(frag(heading('Agregado recientemente'), scroller(el('div', { className: 'shelf' },
+      addedFresh.map((x) => (x.albumPath !== undefined ? songCard(x, list) : card(item.album(x), lead(x.artist))))))));
+  }
+  if (artist) {
+    const more = fresh([...artist.popular, ...artist.tracks.filter((t) => !artist.popular.some((p) => p.path === t.path))]);
+    out.push(songs(`Más de ${artist.name}`, more, el('a', { className: 'section-link', href: href('musica', `artista/${artist.path}`), textContent: 'Ver artista' })));
+  }
+  out.push(songs('Descubre en tu biblioteca', fresh(random)));
+  // Artistas con varias canciones: los de una sola ya salen en las filas de canciones.
+  out.push(shelf('Tus artistas', d.artists.filter((a) => a.tracks >= 3).sort((a, b) => b.plays - a.plays || b.tracks - a.tracks).slice(0, 12).map((a) => card(item.artist(a)))));
+  return frag(out);
 }
 
 // Buscar: un solo campo. Un enlace de Spotify se ofrece para descargar; cualquier otro texto busca en la biblioteca.
@@ -202,7 +250,7 @@ async function resultsView(q) {
       tracks.length > 0 && el('section', {}, heading('Canciones'), trackList(tracks.slice(0, 5), { covers: true, sub: (t) => joinText(t.artist, t.album) }))));
   } else out.push(note('Aún no está en PaloBox. Si lo tienes en Spotify, pega aquí el enlace para descargarlo.', 'first'));
   out.push(shelf('Artistas', artists.map((a) => card(item.artist(a)))),
-    shelf('Álbumes', albums.map((a) => card(item.album(a), joinText(a.artist, a.year)))),
+    shelf('Álbumes', albums.filter((a) => a.tracks > 1).map((a) => card(item.album(a), joinText(a.artist, a.year)))), // los de una canción ya salen como canción
     shelf('Tus playlists', playlists.map((p) => card(item.playlist(p)))));
   if (tracks.length > 5) out.push(heading('Más canciones'), trackList(tracks.slice(5), { covers: true, sub: (t) => joinText(t.artist, t.album) }));
   // Lo que se abre o reproduce desde aquí queda en las búsquedas recientes.
@@ -413,7 +461,11 @@ async function artistView(path) {
     label: 'Artista', title: ar.name, art: cover(ar.path, { round: true, glyph: 'user' }), tracks: ar.tracks, actions: [saveButton('artist', ar)],
     meta: [plural(ar.albums.length, 'álbum', 'álbumes'), songs(ar.tracks.length)],
     body: frag(heading('Populares'), trackList(ar.popular, { covers: true, sub: (t) => t.album }),
-      heading('Discografía'), el('div', { className: 'cards' }, ar.albums.map((a) => card(item.album(a), joinText(a.year || null, songs(a.tracks)))))),
+      heading('Discografía'), el('div', { className: 'cards' }, ar.albums.map((a) => {
+        // Un álbum de una sola canción es un sencillo: suena con un toque en vez de abrir una página con una fila.
+        const t = a.tracks === 1 && ar.tracks.find((x) => x.albumPath === a.path);
+        return t ? songCard(t, ar.tracks, joinText(a.year || null, 'Sencillo')) : card(item.album(a), joinText(a.year || null, songs(a.tracks)));
+      }))),
   });
 }
 
