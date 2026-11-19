@@ -1,5 +1,5 @@
 // Música: estado compartido (biblioteca, me gusta, playlists) y las piezas que repiten las vistas.
-import { $, el, icon, json, joinText, plural, clock, lazyImg, toast, ask, menu } from './lib.js';
+import { $, el, icon, json, joinText, plural, size, clock, lazyImg, toast, ask, menu } from './lib.js';
 import { route, href, go, thumbUrl, render } from './nav.js';
 import { api } from './session.js';
 import { playAt, playNext, enqueue, audio } from './player.js';
@@ -184,10 +184,21 @@ export async function wipeDownloads() {
 export function offlineBox() {
   const n = offline.count();
   if (!(offline.enabled() || offline.active) || !n) return null;
-  const mb = Math.round(offline.bytes() / 1048576);
+  const used = offline.bytes();
+  const fill = el('span', { style: 'width: 0%' });
+  const sub = el('p', { className: 'muted', textContent: `${size(used)} usados` });
+  const bar = el('div', { className: 'bar', hidden: true }, fill);
+  // El espacio libre es la cuota que el navegador le da a la app, no todo el disco del celular.
+  navigator.storage?.estimate?.().then(({ usage = 0, quota = 0 }) => {
+    if (!quota) return;
+    const free = Math.max(0, quota - usage);
+    fill.style.width = `${Math.min(100, (used / (used + free)) * 100)}%`;
+    bar.hidden = false;
+    sub.textContent = `${size(used)} usados · ${size(free)} libres`;
+  }).catch(() => {});
   const row = el('div', { className: 'row static' }, el('span', { className: 'type', style: '--tc: var(--t-audio)' }, icon('download')),
-    el('div', { className: 'row-text' }, el('p', { textContent: `${plural(n, 'canción descargada', 'canciones descargadas')} · ${mb} MB` }),
-      el('p', { className: 'muted', textContent: offline.active ? 'Estás sin conexión: esto es lo que hay en este celular.' : 'Disponibles en este celular aunque no haya conexión.' })));
+    el('div', { className: 'row-text' }, el('p', { textContent: plural(n, 'canción descargada', 'canciones descargadas') }),
+      offline.active && el('p', { className: 'muted', textContent: 'Estás sin conexión: esto es lo que hay en este celular.' }), bar, sub));
   const del = el('button', { className: 'icon-btn' }, icon('trash'));
   del.setAttribute('aria-label', 'Borrar todas las descargas');
   del.onclick = wipeDownloads;
@@ -233,7 +244,7 @@ export function libItems(d, { show = '', recent = true } = {}) {
   items.sort(recent ? (a, b) => b.when - a.when : (a, b) => a.name.localeCompare(b.name, 'es'));
   if (pick('playlists')) items.unshift(item.liked()); // siempre fija arriba
   // Lo que hay en este celular, antes que todo: sin conexión es lo único que se puede oír.
-  if (pick('playlists') && (offline.active || (offline.enabled() && offline.count()))) items.unshift(item.downloads());
+  if (pick('playlists') && offline.active) items.unshift(item.downloads());
   return items;
 }
 
