@@ -360,10 +360,14 @@ func (l *Library) playlists(u httpx.User) ([]playlist, error) {
 	return out, rows.Err()
 }
 
-// musicLib entrega de una vez lo que necesitan Inicio, Tu biblioteca y la barra lateral.
+// Lib entrega de una vez lo que necesitan Inicio, Tu biblioteca y la barra lateral (web/music.js library()).
 func (l *Library) Lib(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	l.fresh()
-	s, albums, artists, err := l.library(u)
+	s, err := l.snap()
+	if err != nil {
+		return err
+	}
+	albums, artists, err := l.userData(s, u)
 	if err != nil {
 		return err
 	}
@@ -393,7 +397,17 @@ func (l *Library) Lib(w http.ResponseWriter, r *http.Request, u httpx.User) erro
 		rows.Scan(&p)
 		likes = append(likes, p)
 	}
-	return httpx.WriteJSON(w, 200, map[string]any{"albums": albums, "artists": artists, "playlists": pls, "likes": likes, "top": top, "recent": recent, "fresh": s.fresh})
+	out := map[string]any{"playlists": pls, "likes": likes, "top": top, "recent": recent, "fresh": s.fresh}
+	if r.URL.Query().Has("catalog") {
+		// Álbumes y artistas van aparte, en /api/music/catalog: aquí solo lo de este usuario.
+		out["catalog"], out["mine"] = s.gen, map[string]any{"albums": albums, "artists": artists}
+		return httpx.WriteJSON(w, 200, out)
+	}
+	// Una interfaz anterior (abierta desde antes de actualizar) espera la biblioteca completa en esta respuesta.
+	if _, out["albums"], out["artists"], err = l.library(u); err != nil {
+		return err
+	}
+	return httpx.WriteJSON(w, 200, out)
 }
 
 func (l *Library) Album(w http.ResponseWriter, r *http.Request, u httpx.User) error {

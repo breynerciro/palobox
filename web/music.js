@@ -1,5 +1,6 @@
 // Música: estado compartido (biblioteca, me gusta, playlists) y las piezas que repiten las vistas.
 import { $, el, icon, json, joinText, plural, size, clock, lazyImg, toast, ask, menu } from './lib.js';
+import { withCatalog } from './catalog.js';
 import { route, href, go, thumbUrl, render } from './nav.js';
 import { api } from './session.js';
 import { playAt, playNext, enqueue, audio, purge } from './player.js';
@@ -7,14 +8,24 @@ import * as offline from './offline.js';
 
 const OFFLINE = 'Sin conexión con el servidor.';
 export const liked = new Set(); // rutas de las pistas con me gusta
-let lib = null; // última respuesta de /api/music
+let lib = null; // última respuesta de /api/music, ya con álbumes y artistas del catálogo
+let cat = null; // { v, albums, artists }: el catálogo ya leído, para no volver a leer MB de JSON si no cambió
 let saving = 0; // me gusta enviados que el servidor aún no confirma
 
 // library trae álbumes, artistas, playlists y me gusta, y con eso repinta la barra lateral.
 export async function library() {
-  const r = await api('/api/music');
+  const r = await api('/api/music?catalog=1');
   if (!r.ok) throw new Error('Intenta de nuevo en un momento.');
-  lib = await r.json();
+  let d = await r.json();
+  if (d.catalog) { // sin conexión (offline.js) la respuesta ya viene completa
+    if (cat?.v !== d.catalog) {
+      const c = await api(`/api/music/catalog?v=${encodeURIComponent(d.catalog)}`); // la versión va en la URL: sale de la caché del navegador
+      if (!c.ok) throw new Error('Intenta de nuevo en un momento.');
+      cat = { v: d.catalog, ...await c.json() };
+    }
+    d = withCatalog(d, cat);
+  }
+  lib = d;
   offline.remember(lib); // lo que la biblioteca dice de lo descargado, para verlo igual sin conexión
   if (!saving) { // con un me gusta en camino, esta respuesta puede ser anterior a él
     liked.clear();
@@ -27,7 +38,7 @@ export async function library() {
 export const ensureLib = () => (lib ? Promise.resolve(lib) : library());
 // forget suelta lo del usuario al salir: el siguiente no ve su biblioteca ni sus me gusta.
 export function forget() {
-  lib = null;
+  lib = cat = null;
   liked.clear();
   $('#side-list').replaceChildren();
 }

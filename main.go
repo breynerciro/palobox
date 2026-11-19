@@ -112,6 +112,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/media/raw", auth(a.music.Raw))
 	mux.HandleFunc("GET /api/media/thumb", auth(a.music.Thumb))
 	mux.HandleFunc("GET /api/music", zip(auth(a.music.Lib)))
+	mux.HandleFunc("GET /api/music/catalog", auth(a.music.Catalog)) // ya viene comprimido: sin zip
 	mux.HandleFunc("GET /api/music/album", zip(auth(a.music.Album)))
 	mux.HandleFunc("GET /api/music/artist", zip(auth(a.music.Artist)))
 	mux.HandleFunc("GET /api/music/search", zip(auth(a.music.Search)))

@@ -5,10 +5,19 @@ package music
 // cambio del índice; lo del usuario (escuchas, guardados) se sigue pidiendo a SQLite y se combina.
 
 import (
+	"bytes"
+	"compress/gzip"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"io"
 	"log"
 	"math/rand/v2"
+	"net/http"
 	"slices"
 	"sort"
+	"strconv"
+	"strings"
 
 	"palobox/internal/httpx"
 	"palobox/internal/natsort"
@@ -22,6 +31,8 @@ type snapshot struct {
 	artists  []artist
 	albumAt  map[string]int // carpeta -> posición en albums
 	artistAt map[string]int
+	gen      string // huella de catalog: la misma biblioteca da la misma URL, aunque la app se reinicie
+	catalog  []byte // {albums, artists} en JSON, ya comprimido con gzip
 }
 
 func (l *Library) build() (*snapshot, error) {
@@ -64,7 +75,51 @@ func (l *Library) build() (*snapshot, error) {
 		s.artists[i].text = normOf(s.artists[i].Name)
 		s.artistAt[s.artists[i].Path] = i
 	}
+	// Se comprime una vez por instantánea, al máximo: cada /api/music repetía 2 MB de JSON y su gzip.
+	raw, err := json.Marshal(map[string]any{"albums": s.albums, "artists": s.artists})
+	if err != nil {
+		return nil, err
+	}
+	sum := sha256.Sum256(raw)
+	s.gen = hex.EncodeToString(sum[:8])
+	var b bytes.Buffer
+	z, _ := gzip.NewWriterLevel(&b, gzip.BestCompression)
+	z.Write(raw)
+	if err := z.Close(); err != nil {
+		return nil, err
+	}
+	s.catalog = b.Bytes()
 	return s, nil
+}
+
+// Catalog entrega álbumes y artistas sin nada del usuario: son iguales para todos y solo cambian con el
+// índice, así que el navegador los guarda hasta que /api/music anuncie otra versión (?v=).
+func (l *Library) Catalog(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	s, err := l.snap()
+	if err != nil {
+		return err
+	}
+	h := w.Header()
+	if r.URL.Query().Get("v") != s.gen { // una versión vieja no se responde: quedaría guardada como si fuera esa
+		h.Set("Cache-Control", "no-store")
+		http.Redirect(w, r, "/api/music/catalog?v="+s.gen, http.StatusFound)
+		return nil
+	}
+	h.Set("Content-Type", "application/json")
+	h.Set("Cache-Control", "private, max-age=31536000, immutable")
+	h.Set("Vary", "Accept-Encoding")
+	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		h.Set("Content-Encoding", "gzip")
+		h.Set("Content-Length", strconv.Itoa(len(s.catalog)))
+		_, err = w.Write(s.catalog)
+		return err
+	}
+	zr, err := gzip.NewReader(bytes.NewReader(s.catalog)) // casi ningún cliente llega aquí: no vale guardar otra copia
+	if err != nil {
+		return err
+	}
+	_, err = io.Copy(w, zr)
+	return err
 }
 
 // snap devuelve la instantánea vigente; la primera petición la arma.
@@ -96,57 +151,81 @@ func (l *Library) rebuild() {
 	l.snapshot.Store(s)
 }
 
+// mine es lo de un usuario sobre un álbum o artista; /api/music lo manda solo donde hay algo.
+type mine struct {
+	Played int64 `json:"played"`
+	Plays  int   `json:"plays"`
+	Saved  int64 `json:"saved"`
+}
+
+// userData devuelve lo que u ha escuchado y guardado, por carpeta de álbum y de artista de la instantánea.
+func (l *Library) userData(s *snapshot, u httpx.User) (albums, artists map[string]mine, err error) {
+	albums, artists = map[string]mine{}, map[string]mine{}
+	rows, err := l.DB.Query(`SELECT t.album_dir, MAX(p.at), COUNT(*) FROM plays p JOIN tracks t ON t.path = p.path WHERE p.user_id = ? GROUP BY t.album_dir`, u.ID)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var dir string
+		var last int64
+		var plays int
+		rows.Scan(&dir, &last, &plays)
+		i, ok := s.albumAt[dir]
+		if !ok { // la escucha es de algo que la instantánea aún no tiene
+			continue
+		}
+		m := albums[dir]
+		m.Played, m.Plays = last, plays
+		albums[dir] = m
+		if ar := s.albums[i].ArtistPath; ar != "" {
+			m := artists[ar]
+			m.Plays += plays
+			m.Played = max(m.Played, last)
+			artists[ar] = m
+		}
+	}
+	if err := rows.Err(); err != nil {
+		return nil, nil, err
+	}
+	for _, k := range []struct {
+		kind string
+		at   map[string]int
+		out  map[string]mine
+	}{{"album", s.albumAt, albums}, {"artist", s.artistAt, artists}} {
+		saved, err := l.savedOf(u, k.kind)
+		if err != nil {
+			return nil, nil, err
+		}
+		for dir, when := range saved {
+			if _, ok := k.at[dir]; ok {
+				m := k.out[dir]
+				m.Saved = when
+				k.out[dir] = m
+			}
+		}
+	}
+	return albums, artists, nil
+}
+
 // library devuelve los álbumes y artistas de la instantánea con lo que u ha escuchado y guardado.
 func (l *Library) library(u httpx.User) (*snapshot, []album, []artist, error) {
 	s, err := l.snap()
 	if err != nil {
 		return nil, nil, nil, err
 	}
-	type stat struct {
-		last  int64
-		plays int
-	}
-	heard := map[string]stat{}
-	rows, err := l.DB.Query(`SELECT t.album_dir, MAX(p.at), COUNT(*) FROM plays p JOIN tracks t ON t.path = p.path WHERE p.user_id = ? GROUP BY t.album_dir`, u.ID)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	for rows.Next() {
-		var dir string
-		var h stat
-		rows.Scan(&dir, &h.last, &h.plays)
-		heard[dir] = h
-	}
-	rows.Close()
-	saved, err := l.savedOf(u, "album")
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	followed, err := l.savedOf(u, "artist")
+	ma, mr, err := l.userData(s, u)
 	if err != nil {
 		return nil, nil, nil, err
 	}
 	albums, artists := slices.Clone(s.albums), slices.Clone(s.artists)
-	for dir, h := range heard {
-		i, ok := s.albumAt[dir]
-		if !ok { // la escucha es de algo que la instantánea aún no tiene
-			continue
-		}
-		albums[i].Played, albums[i].Plays = h.last, h.plays
-		if j, ok := s.artistAt[albums[i].ArtistPath]; ok {
-			artists[j].Plays += h.plays
-			artists[j].Played = max(artists[j].Played, h.last)
-		}
+	for dir, m := range ma {
+		al := &albums[s.albumAt[dir]]
+		al.Played, al.Plays, al.Saved = m.Played, m.Plays, m.Saved
 	}
-	for dir, at := range saved {
-		if i, ok := s.albumAt[dir]; ok {
-			albums[i].Saved = at
-		}
-	}
-	for dir, at := range followed {
-		if j, ok := s.artistAt[dir]; ok {
-			artists[j].Saved = at
-		}
+	for dir, m := range mr {
+		ar := &artists[s.artistAt[dir]]
+		ar.Played, ar.Plays, ar.Saved = m.Played, m.Plays, m.Saved
 	}
 	return s, albums, artists, nil
 }

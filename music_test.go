@@ -67,11 +67,12 @@ func TestIndiceYBusqueda(t *testing.T) {
 	if code, _, _ := (client{t, ana.base, &http.Client{}}).do("GET", "/api/music", nil); code != 401 {
 		t.Fatalf("sin sesión debe dar 401: %d", code)
 	}
-	code, m, raw := ana.do("GET", "/api/music", nil)
-	if code != 200 || len(m["albums"].([]any)) != 4 || len(m["artists"].([]any)) != 2 {
-		t.Fatalf("biblioteca: %d %s", code, raw)
+	code, m, raw := ana.do("GET", "/api/music?catalog=1", nil)
+	_, cat, craw := ana.do("GET", fmt.Sprint("/api/music/catalog?v=", m["catalog"]), nil)
+	if code != 200 || len(cat["albums"].([]any)) != 4 || len(cat["artists"].([]any)) != 2 {
+		t.Fatalf("biblioteca: %d %s %s", code, raw, craw)
 	}
-	if s := string(raw); strings.Contains(s, "oculta") || strings.Contains(s, "notas") {
+	if s := string(raw) + string(craw); strings.Contains(s, "oculta") || strings.Contains(s, "notas") {
 		t.Fatalf("el índice solo lleva audio visible: %s", s)
 	}
 
@@ -145,16 +146,16 @@ func TestMeGustaEHistorial(t *testing.T) {
 		}
 	}
 	// Cada usuario tiene los suyos.
-	_, m, _ := luis.do("GET", "/api/music", nil)
+	_, m, _ := luis.do("GET", "/api/music?catalog=1", nil)
 	if len(m["likes"].([]any)) != 0 {
 		t.Fatalf("luis no ha marcado nada: %v", m["likes"])
 	}
 	luis.do("DELETE", "/api/music/likes?path="+cai, nil)
-	if _, m, _ = ana.do("GET", "/api/music", nil); len(m["likes"].([]any)) != 2 {
+	if _, m, _ = ana.do("GET", "/api/music?catalog=1", nil); len(m["likes"].([]any)) != 2 {
 		t.Fatalf("luis no puede quitar los de ana: %v", m["likes"])
 	}
 	ana.do("DELETE", "/api/music/likes?path="+cai, nil)
-	if _, m, _ = ana.do("GET", "/api/music", nil); len(m["likes"].([]any)) != 1 {
+	if _, m, _ = ana.do("GET", "/api/music?catalog=1", nil); len(m["likes"].([]any)) != 1 {
 		t.Fatalf("quitar me gusta: %v", m["likes"])
 	}
 
@@ -162,7 +163,7 @@ func TestMeGustaEHistorial(t *testing.T) {
 	a.music.ImportPlaylist("ana", "trabajo1", "De Spotify", []string{"suelta.mp3", "Niña Pastori/Joyas/1. Amor de San Juan.flac", "no-existe.mp3"})
 	a.music.ImportPlaylist("ana", "trabajo1", "De Spotify", []string{"suelta.mp3"})
 	a.music.ImportPlaylist("ana", "trabajo2", "De Spotify", []string{"suelta.mp3", "Niña Pastori/Cañaílla/02 - Cai.mp3"}) // la misma, pedida otra vez: se completa
-	_, m, raw = ana.do("GET", "/api/music", nil)
+	_, m, raw = ana.do("GET", "/api/music?catalog=1", nil)
 	var sp map[string]any
 	for _, x := range m["playlists"].([]any) {
 		if p := x.(map[string]any); p["name"] == "De Spotify" {
@@ -178,7 +179,7 @@ func TestMeGustaEHistorial(t *testing.T) {
 	if _, m, raw = ana.do("GET", fmt.Sprintf("/api/music/playlists/%v", sp["id"]), nil); titles(m["tracks"]) != "suelta|Amor de San Juan|Cai" {
 		t.Fatalf("canciones de la playlist de Spotify: %s", raw)
 	}
-	if _, m, raw = luis.do("GET", "/api/music", nil); strings.Contains(string(raw), "De Spotify") {
+	if _, m, raw = luis.do("GET", "/api/music?catalog=1", nil); strings.Contains(string(raw), "De Spotify") {
 		t.Fatalf("la playlist es solo de quien la pidió: %s", raw)
 	}
 
@@ -188,7 +189,7 @@ func TestMeGustaEHistorial(t *testing.T) {
 			t.Fatalf("escucha: %d %s", code, raw)
 		}
 	}
-	_, m, raw = ana.do("GET", "/api/music", nil)
+	_, m, raw = ana.do("GET", "/api/music?catalog=1", nil)
 	if titles(m["top"]) != "Amor de San Juan|suelta" {
 		t.Fatalf("lo más escuchado: %s", raw)
 	}
@@ -198,9 +199,9 @@ func TestMeGustaEHistorial(t *testing.T) {
 	if len(m["fresh"].([]any)) == 0 {
 		t.Fatalf("agregado recientemente: %s", raw)
 	}
-	for _, x := range m["albums"].([]any) {
-		if al := x.(map[string]any); (al["name"] == "Joyas") != (al["plays"] == float64(2)) || (al["played"].(float64) > 0) != (al["plays"].(float64) > 0) {
-			t.Fatalf("escuchas por álbum: %v", al)
+	for dir, x := range m["mine"].(map[string]any)["albums"].(map[string]any) { // solo los álbumes con algo de ana
+		if al := x.(map[string]any); (dir == "Niña Pastori/Joyas") != (al["plays"] == float64(2)) || (al["played"].(float64) > 0) != (al["plays"].(float64) > 0) {
+			t.Fatalf("escuchas por álbum: %s %v", dir, al)
 		}
 	}
 	_, m, raw = ana.do("GET", "/api/music/artist?path=Ni%C3%B1a%20Pastori", nil)
@@ -312,10 +313,13 @@ func TestTuBiblioteca(t *testing.T) {
 	ap.music.Reindex()
 	saved := func(c client, key, path string) float64 {
 		t.Helper()
-		_, m, raw := c.do("GET", "/api/music", nil)
-		for _, x := range m[key].([]any) {
+		_, m, _ := c.do("GET", "/api/music?catalog=1", nil)
+		_, cat, raw := c.do("GET", fmt.Sprint("/api/music/catalog?v=", m["catalog"]), nil)
+		for _, x := range cat[key].([]any) {
 			if it := x.(map[string]any); it["path"] == path {
-				return it["saved"].(float64)
+				mine, _ := m["mine"].(map[string]any)[key].(map[string]any)[path].(map[string]any)
+				saved, _ := mine["saved"].(float64) // sin datos del usuario no viene: 0
+				return saved
 			}
 		}
 		t.Fatalf("%s no está en %s: %s", path, key, raw)

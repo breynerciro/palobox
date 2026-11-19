@@ -1,7 +1,11 @@
 package music
 
 import (
+	"bytes"
+	"compress/gzip"
+	"encoding/json"
 	"fmt"
+	"io"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
@@ -63,13 +67,100 @@ func pedir(tb testing.TB, h httpx.Handler, url string, u httpx.User) string {
 	return w.Body.String()
 }
 
+// completa arma álbumes y artistas como web/music.js: el catálogo de /api/music/catalog más lo de "mine".
+func completa(tb testing.TB, l *Library, u httpx.User) string {
+	tb.Helper()
+	var lib struct {
+		Catalog string
+		Mine    struct{ Albums, Artists map[string]mine }
+	}
+	json.Unmarshal([]byte(pedir(tb, l.Lib, "/api/music?catalog=1", u)), &lib)
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest("GET", "/api/music/catalog?v="+lib.Catalog, nil)
+	r.Header.Set("Accept-Encoding", "gzip")
+	if err := l.Catalog(w, r, u); err != nil || w.Code != 200 || w.Header().Get("Content-Encoding") != "gzip" {
+		tb.Fatalf("catálogo: %v %d %v", err, w.Code, w.Header())
+	}
+	zr, err := gzip.NewReader(w.Body)
+	if err != nil {
+		tb.Fatal(err)
+	}
+	raw, _ := io.ReadAll(zr)
+	var cat struct {
+		Albums  []album
+		Artists []artist
+	}
+	if err := json.Unmarshal(raw, &cat); err != nil {
+		tb.Fatal(err)
+	}
+	for i, al := range cat.Albums {
+		m := lib.Mine.Albums[al.Path]
+		cat.Albums[i].Played, cat.Albums[i].Plays, cat.Albums[i].Saved = m.Played, m.Plays, m.Saved
+	}
+	for i, ar := range cat.Artists {
+		m := lib.Mine.Artists[ar.Path]
+		cat.Artists[i].Played, cat.Artists[i].Plays, cat.Artists[i].Saved = m.Played, m.Plays, m.Saved
+	}
+	b, _ := json.Marshal(cat)
+	return string(b)
+}
+
+// Catálogo más lo del usuario da exactamente los álbumes y artistas que /api/music mandaba completos.
+func TestCatalogoMasUsuario(t *testing.T) {
+	l, u := sintetica(t, 3000)
+	_, albums, artists, err := l.library(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want, _ := json.Marshal(map[string]any{"Albums": albums, "Artists": artists})
+	if got := completa(t, l, u); got != string(want) {
+		t.Fatal("la combinación no coincide con la respuesta completa")
+	}
+	if !bytes.Contains(want, []byte(`"saved":`)) || !strings.Contains(pedir(t, l.Lib, "/api/music", u), `"plays":1`) {
+		t.Fatal("la prueba no tiene datos del usuario")
+	}
+	// Una interfaz anterior, sin ?catalog, sigue recibiendo la biblioteca completa en /api/music.
+	var vieja struct{ Albums, Artists json.RawMessage }
+	json.Unmarshal([]byte(pedir(t, l.Lib, "/api/music", u)), &vieja)
+	if got, _ := json.Marshal(map[string]any{"Albums": vieja.Albums, "Artists": vieja.Artists}); string(got) != string(want) {
+		t.Fatal("la respuesta completa para interfaces anteriores cambió")
+	}
+	// Sin gzip sale el mismo JSON, y una versión vieja redirige a la vigente sin quedar en caché.
+	s, _ := l.snap()
+	w := httptest.NewRecorder()
+	l.Catalog(w, httptest.NewRequest("GET", "/api/music/catalog?v="+s.gen, nil), u)
+	if w.Header().Get("Content-Encoding") != "" || !strings.HasPrefix(w.Body.String(), `{"albums":[`) || !strings.Contains(w.Header().Get("Cache-Control"), "immutable") {
+		t.Fatalf("sin gzip: %v %.40s", w.Header(), w.Body)
+	}
+	w = httptest.NewRecorder()
+	l.Catalog(w, httptest.NewRequest("GET", "/api/music/catalog?v=vieja", nil), u)
+	if w.Code != 302 || w.Header().Get("Location") != "/api/music/catalog?v="+s.gen || w.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("versión vieja: %d %v", w.Code, w.Header())
+	}
+}
+
+func BenchmarkCatalog(b *testing.B) {
+	l, u := sintetica(b, 15000)
+	s, _ := l.snap()
+	r := httptest.NewRequest("GET", "/api/music/catalog?v="+s.gen, nil)
+	r.Header.Set("Accept-Encoding", "gzip")
+	b.ReportAllocs()
+	for b.Loop() {
+		w := httptest.NewRecorder()
+		if err := l.Catalog(w, r, u); err != nil {
+			b.Fatal(err)
+		}
+		b.SetBytes(int64(w.Body.Len()))
+	}
+}
+
 func BenchmarkLib(b *testing.B) {
 	l, u := sintetica(b, 15000)
-	pedir(b, l.Lib, "/api/music", u)
+	pedir(b, l.Lib, "/api/music?catalog=1", u)
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		pedir(b, l.Lib, "/api/music", u)
+		pedir(b, l.Lib, "/api/music?catalog=1", u)
 	}
 }
 
@@ -94,7 +185,7 @@ func TestInstantaneaSigueAlIndice(t *testing.T) {
 	u := httpx.User{ID: 1}
 	l.Sync()
 	buscar := func() string { return pedir(t, l.Search, "/api/music/search?q=alkolirykos", u) }
-	lib, uno := pedir(t, l.Lib, "/api/music", u), buscar()
+	lib, uno := completa(t, l, u), buscar()
 	if !strings.Contains(uno, "Changó") || !strings.Contains(lib, "Desde Abajo") {
 		t.Fatalf("sin la pista inicial: %s %s", uno, lib)
 	}
@@ -105,7 +196,7 @@ func TestInstantaneaSigueAlIndice(t *testing.T) {
 	if s := buscar(); !strings.Contains(s, "Otra") {
 		t.Fatalf("la pista nueva no sale en la búsqueda: %s", s)
 	}
-	if s := pedir(t, l.Lib, "/api/music", u); !strings.Contains(s, "Alcolirykoz/Servicios") {
+	if s := completa(t, l, u); !strings.Contains(s, "Alcolirykoz/Servicios") {
 		t.Fatalf("el álbum nuevo no sale en Inicio: %s", s)
 	}
 	os.Remove(nueva)
@@ -113,7 +204,7 @@ func TestInstantaneaSigueAlIndice(t *testing.T) {
 	if s := buscar(); s != uno {
 		t.Fatalf("la pista borrada sigue en la búsqueda: %s", s)
 	}
-	if s := pedir(t, l.Lib, "/api/music", u); s != lib {
+	if s := completa(t, l, u); s != lib {
 		t.Fatalf("Inicio no volvió a como estaba:\n%s\n%s", s, lib)
 	}
 }

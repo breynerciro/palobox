@@ -4,7 +4,7 @@
 const SHELL = 'palobox-shell';
 const AUDIO = 'palobox-offline-audio'; // lo llena offline.js: audio y carátulas de lo descargado
 // Todos los archivos de la interfaz (main_test.go comprueba que no falte ninguno).
-const FILES = ['/', '/style.css', '/app.js', '/admin.js', '/files.js', '/jam.js', '/lib.js', '/music.js', '/music-views.js', '/nav.js',
+const FILES = ['/', '/style.css', '/app.js', '/admin.js', '/files.js', '/jam.js', '/lib.js', '/catalog.js', '/music.js', '/music-views.js', '/nav.js',
   '/offline.js', '/photos.js', '/player.js', '/session.js', '/uploads.js', '/manifest.webmanifest', '/icon.svg', '/icon-180.png', '/icon-192.png', '/icon-512.png'];
 
 self.addEventListener('install', (e) => {
