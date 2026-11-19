@@ -3,7 +3,7 @@ import { $, el, icon, json, plural, joinText, fmtLong, typeBadge, toast, ask, me
 import { href, go, render, route } from './nav.js';
 import { api, userName } from './session.js';
 import { playAt, isShuffle } from './player.js';
-import { library, ensureLib, liked, createPlaylist, cover, item, card, libRow, trackList, libItems, saveButton } from './music.js';
+import { library, ensureLib, liked, createPlaylist, cover, item, card, libRow, trackList, libItems, saveButton, downloadButton, offlineBox } from './music.js';
 
 const OFFLINE = 'Sin conexión con el servidor.';
 const frag = (...kids) => { const f = document.createDocumentFragment(); f.append(...kids.flat().filter(Boolean)); return f; };
@@ -350,7 +350,7 @@ async function libraryView() {
   filters.setAttribute('aria-label', 'Filtrar la biblioteca');
   return frag(filters,
     el('div', { className: 'toolbar' }, order, el('span', { className: 'spacer' }), layout, add),
-    dl?.node, dl && heading('Biblioteca'), box);
+    dl?.node, offlineBox(), dl && heading('Biblioteca'), box);
 }
 
 // Páginas de álbum, artista y playlist: encabezado grande, botones de reproducir y lista de pistas
@@ -393,7 +393,7 @@ async function albumView(path) {
   const [al] = await Promise.all([getJSON(`/api/music/album?path=${encodeURIComponent(path)}`), ensureLib().catch(() => {})]);
   if (!al) return gone('Este álbum ya no está');
   return page({
-    label: 'Álbum', title: al.name, art: cover(al.path), tracks: al.tracks, actions: [saveButton('album', al)],
+    label: 'Álbum', title: al.name, art: cover(al.path), tracks: al.tracks, actions: [saveButton('album', al), downloadButton(al.tracks)],
     meta: [al.artistPath && el('a', { href: href('musica', `artista/${al.artistPath}`), textContent: al.artist }), al.year || null, songs(al.tracks.length), total(al.tracks)],
     body: trackList(al.tracks),
   });
@@ -416,7 +416,7 @@ async function likedView() {
   const tracks = await getJSON('/api/music/likes');
   await ensureLib().catch(() => {});
   return page({
-    label: 'Playlist', title: 'Canciones que te gustan', art: el('div', { className: 'cover liked' }, icon('heart')), tracks,
+    label: 'Playlist', title: 'Canciones que te gustan', art: el('div', { className: 'cover liked' }, icon('heart')), tracks, actions: [downloadButton(tracks)],
     meta: [songs(tracks.length), total(tracks)],
     body: tracks.length ? trackList(tracks, { covers: true, sub: (t) => joinText(t.artist, t.album) })
       : empty('heart', 'Aún no te gusta ninguna', 'Toca el corazón de una canción y queda guardada aquí.', linkBtn('Buscar música', href('musica', 'buscar'), 'search')),
@@ -453,7 +453,7 @@ async function playlistView(id) {
     } },
   ]);
   return page({
-    label: 'Playlist', title: pl.name, art: cover(tracks.length ? tracks[0].albumPath : null), tracks, actions: [more],
+    label: 'Playlist', title: pl.name, art: cover(tracks.length ? tracks[0].albumPath : null), tracks, actions: [downloadButton(tracks, pl), more],
     meta: [songs(tracks.length), total(tracks)],
     body: !tracks.length ? emptyList() : trackList(tracks, {
       covers: true, sub: (t) => joinText(t.artist, t.album), onMove: move,

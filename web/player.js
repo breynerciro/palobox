@@ -4,6 +4,7 @@ import { rawUrl, thumbUrl } from './nav.js';
 import { api } from './session.js';
 import { ensureLib, markLikes, toggleLike } from './music.js';
 import * as jam from './jam.js';
+import * as offline from './offline.js';
 
 export const audio = new Audio();
 audio.preload = 'metadata';
@@ -50,14 +51,69 @@ const playing = () => (room && !here ? room.playing : !audio.paused);
 // sala; esta página pinta el avance con el reloj de la sala y manda cada acción como comando, igual que en un jam.
 // Se fuerza o se apaga con localStorage «palobox.flujo» = 1 / 0.
 const IOS = /iP(hone|ad|od)/.test(navigator.userAgent) || (navigator.maxTouchPoints > 1 && /Macintosh/.test(navigator.userAgent)); // el iPad se presenta como Mac
-const STREAM = (() => {
+let STREAM = (() => {
   let flag = null;
   try { flag = localStorage.getItem('palobox.flujo'); } catch {}
   return flag === '1' || (flag !== '0' && IOS);
 })();
+// Sin conexión no hay servidor que mande el flujo: el reproductor vuelve a ser local, sobre un solo audio armado
+// en el celular con lo descargado (deck, más abajo).
+export function goOffline() {
+  STREAM = false;
+}
 let stream = null; // { pos, origin, end, held }: qué traía la sala cuando se abrió (o se dio por bueno) el flujo que suena
 const streaming = () => STREAM && !!room && here;
-const dur = () => (streaming() ? 0 : audio.duration) || queue[pos]?.dur || 0;
+const dur = () => (deck ? deck.lens[pos] : 0) || (streaming() ? 0 : audio.duration) || queue[pos]?.dur || 0;
+
+// Sin conexión toda la cola es un solo audio: las canciones descargadas, ya limpias, unidas una tras otra. El
+// teléfono nunca carga un audio nuevo al pasar de canción (lo que iOS no siempre deja con la pantalla bloqueada),
+// y saltar es moverse dentro del mismo audio. deck guarda dónde empieza y cuánto dura cada pista en ese audio.
+let deck = null; // { key, url, starts, lens }
+let deckBusy = false;
+const deckKey = () => queue.map((t) => t.path).join('\n');
+const deckTime = () => Math.max(0, audio.currentTime - (deck?.starts[pos] ?? 0)); // segundo dentro de la pista actual
+async function deckOpen(at, play) {
+  const key = deckKey();
+  if (deck?.key === key) audio.currentTime = deck.starts[pos] + at;
+  else {
+    deckBusy = true;
+    let parts;
+    try { parts = await offline.blobs(queue.map((t) => t.path)); } catch (e) { deckBusy = false; return void toast(e.message, { kind: 'warn', sticky: true }); }
+    deckBusy = false;
+    if (deckKey() !== key) return; // la cola cambió mientras se leía: ya viene otra apertura
+    if (deck) URL.revokeObjectURL(deck.url);
+    const starts = [];
+    let total = 0;
+    for (const p of parts) { starts.push(total); total += p.secs; }
+    deck = { key, url: URL.createObjectURL(new Blob(parts.map((p) => p.blob), { type: 'audio/mpeg' })), starts, lens: parts.map((p) => p.secs) };
+    audio.src = deck.url;
+    const target = deck.starts[pos] + at;
+    if (target > 0) audio.addEventListener('loadedmetadata', () => (audio.currentTime = target), { once: true });
+  }
+  if (play) audio.play().catch(warnPlay);
+}
+// deckTick sigue al audio unido: cuando pasa solo a la pista siguiente, aquí solo hay que pintarla.
+function deckTick() {
+  const now = audio.currentTime;
+  let k = pos;
+  while (k + 1 < queue.length && now >= deck.starts[k + 1] - 0.02) k++;
+  while (k > 0 && now < deck.starts[k] - 0.02) k--;
+  if (k !== pos) {
+    if (repeat === 2 && k === pos + 1 && !audio.seeking) return void (audio.currentTime = deck.starts[pos]); // repetir esta canción
+    if (k === pos + 1) count();
+    pos = k;
+    counted = false;
+    manual = Math.max(0, manual - 1);
+    curPath = queue[k].path;
+    present(queue[k], 0);
+  }
+  const at = deckTime();
+  if (!audio.paused && at >= 30) count();
+  if (Date.now() - savedAt > 5000) save();
+  if (seeking) return;
+  for (const s of seeks) setSeek(s, deck.lens[pos] ? at / deck.lens[pos] : 0);
+  paintTimes(at, deck.lens[pos]);
+}
 const warnPlay = (e) => console.warn('El navegador no dejó reproducir:', e?.name, e?.message);
 let stuck = false; // un play() sin toque fue rechazado: se reintenta al volver a la app
 
@@ -77,7 +133,7 @@ function srcFor(t) {
 }
 async function prefetch() {
   const t = queue[pos + 1] ?? (repeat === 1 ? queue[0] : null);
-  if (STREAM || !t || !here || t.path === tried || t.path === ready?.path || t.path === cur?.path) return;
+  if (STREAM || offline.active || !t || !here || t.path === tried || t.path === ready?.path || t.path === cur?.path) return;
   tried = t.path;
   try {
     const r = await fetch(rawUrl('musica', t.path));
@@ -90,9 +146,9 @@ async function prefetch() {
 }
 // Posición en la pantalla de bloqueo y la notificación; sin esto Android puede dar la sesión por inactiva.
 function positionState() {
-  const total = streaming() ? queue[pos]?.dur : audio.duration; // el flujo no tiene duración: vale la de la pista
+  const total = deck ? deck.lens[pos] : streaming() ? queue[pos]?.dur : audio.duration; // el flujo no tiene duración: vale la de la pista
   if (!navigator.mediaSession?.setPositionState || !(total > 0 && total < Infinity)) return;
-  const at = streaming() ? roomTime() : audio.currentTime;
+  const at = deck ? deckTime() : streaming() ? roomTime() : audio.currentTime;
   try { navigator.mediaSession.setPositionState({ duration: total, position: Math.max(0, Math.min(at, total)), playbackRate: audio.playbackRate || 1 }); } catch {}
 }
 for (const ev of ['loadedmetadata', 'playing', 'pause', 'seeked', 'ratechange']) audio.addEventListener(ev, positionState);
@@ -121,13 +177,20 @@ function load(i, { play = true, at = 0 } = {}) {
   counted = false;
   resume = at;
   const t = queue[i];
-  if (STREAM) curPath = t.path; // aquí solo se pinta: el audio es el flujo de la sala (syncStream), no el archivo
+  if (offline.active) { // sin conexión: el audio unido de la cola, movido hasta esta pista
+    curPath = t.path;
+    deckOpen(at, play);
+  } else if (STREAM) curPath = t.path; // aquí solo se pinta: el audio es el flujo de la sala (syncStream), no el archivo
   else if (!room || curPath !== t.path) { // en una sala la pista que ya está cargada no se vuelve a pedir
     curPath = t.path;
     audio.src = srcFor(t);
     if (at) audio.addEventListener('loadedmetadata', () => (audio.currentTime = room ? roomTime() : at), { once: true });
   }
-  if (play && !STREAM) audio.play().catch((e) => { stuck = e.name === 'NotAllowedError'; warnPlay(e); }); // si el formato no sirve, lo informa onerror
+  if (play && !STREAM && !offline.active) audio.play().catch((e) => { stuck = e.name === 'NotAllowedError'; warnPlay(e); }); // si el formato no sirve, lo informa onerror
+  present(t, at);
+}
+// present pinta la pista en la barra, la pantalla completa y la pantalla de bloqueo.
+function present(t, at) {
   const sub = joinText(t.artist, t.album);
   for (const [titleEl, subEl, coverEl] of [['#now', '#now-sub', '#player-cover'], ['#np-title', '#np-sub', '#np-cover']]) {
     $(titleEl).textContent = t.title;
@@ -155,7 +218,9 @@ function load(i, { play = true, at = 0 } = {}) {
 
 // Sugerencias: cuando a la cola le quedan menos de 6 pistas, el servidor propone qué sigue y la música no se detiene.
 async function refill() {
-  if (room || filling || repeat || pos < 0 || queue.length - pos > 6) return; // en una sala las sugerencias las pone el servidor
+  // En una sala las sugerencias las pone el servidor; sin conexión se agregan al armar la cola (playAt), porque
+  // cambiarla después obliga a rearmar el audio unido.
+  if (offline.active || room || filling || repeat || pos < 0 || queue.length - pos > 6) return;
   filling = true;
   const e = epoch;
   let more = null;
@@ -178,6 +243,7 @@ async function refill() {
 // playAt reemplaza la cola por tracks y empieza en la pista i.
 export function playAt(tracks, i) {
   if (i < 0 || i >= tracks.length) return;
+  if (offline.active && !repeat && tracks.length - i < 6) tracks = [...tracks, ...offline.more(tracks)]; // que la música siga
   if (room) {
     const from = Math.max(0, i - 50); // la sala guarda hasta 500 pistas alrededor de la elegida
     if (here) begin(tracks[i]);
@@ -247,7 +313,7 @@ function prev() {
     if (pos > 0) load(pos - 1);
     return void startRoom({ playing: true, at: 0 });
   }
-  if (audio.currentTime > 3 || pos === 0) return (audio.currentTime = 0);
+  if ((deck ? deckTime() : audio.currentTime) > 3 || pos === 0) return void seekTo(0);
   manual = 0;
   load(pos - 1);
 }
@@ -292,7 +358,8 @@ export function syncToggles() {
 // Los botones de aleatorio, repetir y cola existen en la barra, en pantalla completa y en las vistas.
 document.addEventListener('click', (e) => {
   const act = e.target.closest?.('[data-act]')?.dataset.act;
-  if (act === 'jam') { $('#jam').showModal(); paintJam(); }
+  if (act === 'jam' && offline.active) toast(offline.NEEDS_NET);
+  else if (act === 'jam') { $('#jam').showModal(); paintJam(); }
   else if (act === 'shuffle' && STREAM && room && !room.open && here) streamShuffle();
   else if (act === 'repeat' && STREAM && room && !room.open) toast('Repetir no está disponible con la reproducción en segundo plano del iPhone: al acabarse la cola siguen sugerencias.');
   else if (room && (act === 'shuffle' || act === 'repeat')) toast('Aleatorio y repetir no están disponibles mientras la reproducción es compartida.');
@@ -332,6 +399,10 @@ function syncPlayButton() {
 audio.onplay = syncPlayButton;
 audio.onpause = () => { syncPlayButton(); save(); };
 audio.onended = () => {
+  if (deck) { // se acabó el audio unido: toda la cola
+    count();
+    return void (repeat === 1 && queue.length && load(0));
+  }
   if (STREAM) return streamLost(); // el flujo no termina con cada pista: si se acabó es que se cortó
   count();
   next(true);
@@ -339,6 +410,7 @@ audio.onended = () => {
 let retried = ''; // pista que ya se volvió a pedir tras un error de carga
 audio.addEventListener('playing', () => (retried = ''));
 audio.onerror = () => {
+  if (deck) return void toast('No se pudo reproducir la música descargada. Vuelve a descargarla cuando tengas conexión.', { kind: 'warn', sticky: true });
   if (STREAM) return streamLost();
   const t = queue[pos];
   if (!t) return;
@@ -373,6 +445,7 @@ function paintTimes(cur, dur) {
   $('#np-dur').textContent = $('#dur').textContent = clock(dur);
 }
 audio.ontimeupdate = () => {
+  if (deck) return deckTick();
   if (STREAM) return paintRemote(); // el avance del flujo se pinta con el reloj de la sala; este evento sí llega en segundo plano
   if (!audio.duration) return;
   if (!audio.paused && audio.currentTime >= 30) count();
@@ -406,6 +479,7 @@ function setVolume(v) {
 $('#volume').oninput = (e) => { setVolume(e.target.value / 100); save(); };
 
 function seekTo(at) {
+  if (deck) return void (audio.currentTime = deck.starts[pos] + Math.max(0, at));
   if (streaming()) return streamDo('seek', { at });
   if (room) return void jam.send('seek', { at });
   if (!STREAM) return void (audio.currentTime = at);
@@ -573,8 +647,8 @@ document.addEventListener('keydown', (e) => {
   if (pos < 0 || e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, textarea, select')) return;
   if (document.querySelector('dialog[open]:not(#np)')) return; // el visor de fotos y los menús usan las mismas teclas
   if (e.key === ' ' && !e.target.closest?.('button, a')) { e.preventDefault(); toggle(); }
-  else if (e.key === 'ArrowRight') e.shiftKey ? next() : seekTo((room ? roomTime() : audio.currentTime) + 5);
-  else if (e.key === 'ArrowLeft') e.shiftKey ? prev() : seekTo((room ? roomTime() : audio.currentTime) - 5);
+  else if (e.key === 'ArrowRight') e.shiftKey ? next() : seekTo((room ? roomTime() : deck ? deckTime() : audio.currentTime) + 5);
+  else if (e.key === 'ArrowLeft') e.shiftKey ? prev() : seekTo((room ? roomTime() : deck ? deckTime() : audio.currentTime) - 5);
 });
 
 // Cola «A continuación»
@@ -638,10 +712,12 @@ function save() {
   // La cola de una sala es del servidor y aquí se conserva la propia; en flujo continuo siempre hay sala, así
   // que se guarda la de la sala para retomarla al volver a abrir la app.
   if ((room && !STREAM) || pos < 0 || !user) return;
+  // Sin conexión, un cambio en la cola (agregar, quitar, barajar) obliga a rearmar el audio unido donde iba.
+  if (deck && !deckBusy && deck.key !== deckKey()) deckOpen(deckTime(), !audio.paused);
   const from = Math.max(0, pos - 50);
   try {
     localStorage.setItem('palobox.player', JSON.stringify({
-      user, queue: queue.slice(from, from + KEEP), pos: pos - from, at: STREAM ? resume : audio.currentTime || resume, shuffle, repeat, volume: audio.volume,
+      user, queue: queue.slice(from, from + KEEP), pos: pos - from, at: deck ? deckTime() : STREAM ? resume : audio.currentTime || resume, shuffle, repeat, volume: audio.volume,
     }));
   } catch {} // modo privado o cupo lleno: la app sigue sin recordar
 }
@@ -650,6 +726,7 @@ window.addEventListener('pagehide', save);
 // navegador no dejó arrancar la siguiente pista sin un toque, se intenta de nuevo.
 function wake() {
   if (document.visibilityState !== 'visible' || !user) return;
+  if (offline.active) return; // sin servidor no hay sala que poner al día
   if (!jam.alive()) jam.connect(applyJam); // la foto que llega llama a syncRoom
   else if (room) syncRoom();
   else if (stuck && audio.paused) audio.play().catch(warnPlay);
@@ -661,17 +738,25 @@ window.addEventListener('pageshow', wake);
 export function restore(name) {
   if (user === name) return;
   user = name;
-  jam.connect(applyJam);
+  if (!offline.active) jam.connect(applyJam);
   let s;
   try { s = JSON.parse(localStorage.getItem('palobox.player')); } catch {}
   if (!s || s.user !== name || !Array.isArray(s.queue) || !s.queue[s.pos]?.path) return;
   setVolume(s.volume ?? 1);
   document.body.classList.add('paused'); // la cola restaurada empieza en pausa: que no asome fuera de Música
   queue = s.queue;
+  let at = s.pos;
+  if (offline.active) { // sin conexión solo queda en la cola lo que está descargado
+    const cur = queue[at];
+    queue = queue.filter((t) => offline.has(t.path));
+    at = Math.max(0, queue.indexOf(cur));
+    if (!queue.length) return;
+    if (queue[at] !== cur) s.at = 0;
+  }
   order = queue.slice();
   shuffle = !!s.shuffle;
   repeat = [0, 1, 2].includes(s.repeat) ? s.repeat : 0;
-  load(s.pos, { play: false, at: s.at });
+  load(at, { play: false, at: s.at });
   ensureLib().catch(() => {}); // para pintar el me gusta de la pista restaurada
 }
 
@@ -683,6 +768,8 @@ export function reset() {
   cur = ready = null;
   tried = '';
   jam.close();
+  if (deck) URL.revokeObjectURL(deck.url);
+  deck = null;
   stream = null;
   room = null;
   devices = [];

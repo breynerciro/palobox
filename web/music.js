@@ -3,6 +3,7 @@ import { $, el, icon, json, joinText, plural, clock, lazyImg, toast, ask, menu }
 import { route, href, go, thumbUrl, render } from './nav.js';
 import { api } from './session.js';
 import { playAt, playNext, enqueue } from './player.js';
+import * as offline from './offline.js';
 
 const OFFLINE = 'Sin conexión con el servidor.';
 export const liked = new Set(); // rutas de las pistas con me gusta
@@ -14,6 +15,7 @@ export async function library() {
   const r = await api('/api/music');
   if (!r.ok) throw new Error('Intenta de nuevo en un momento.');
   lib = await r.json();
+  offline.remember(lib); // lo que la biblioteca dice de lo descargado, para verlo igual sin conexión
   if (!saving) { // con un me gusta en camino, esta respuesta puede ser anterior a él
     liked.clear();
     for (const p of lib.likes) liked.add(p);
@@ -92,7 +94,61 @@ function trackMenu(anchor, t, extra = []) {
     t.artistPath && here !== `artista/${t.artistPath}` && { icon: 'user', label: 'Ir al artista', run: () => go('musica', `artista/${t.artistPath}`) },
     here !== `album/${t.albumPath}` && { icon: 'disc', label: 'Ir al álbum', run: () => go('musica', `album/${t.albumPath}`) },
     ...extra,
+    canDownload() && (offline.has(t.path)
+      ? { icon: 'trash', label: 'Quitar de las descargas', run: async () => { await offline.remove([t.path]); toast(`«${t.title}» ya no está en este celular.`, { kind: 'ok' }); render(); } }
+      : { icon: 'download', label: 'Descargar', run: () => fetchOffline([t]) }),
   ]);
+}
+
+// Descargas para escuchar sin conexión (offline.js). Solo con conexión y en cuentas que pueden descargar.
+const canDownload = () => offline.enabled() && !offline.active;
+// fetchOffline baja las pistas al celular mostrando el avance; playlist: la lista que se descarga, para recordarla.
+async function fetchOffline(tracks, playlist) {
+  const missing = tracks.filter((t) => !offline.has(t.path)).length;
+  try {
+    await offline.download(tracks, (done, total) => total > 1 && toast(`Descargando ${done} de ${total}… Deja la app abierta.`, { sticky: true }));
+    if (playlist) offline.keepPlaylist(playlist, tracks);
+    offline.remember(lib ?? { albums: [], artists: [], playlists: [], likes: [], top: [] });
+    toast(missing ? `${plural(missing, 'canción lista', 'canciones listas')} para escuchar sin conexión.` : 'Ya estaba todo descargado.', { kind: 'ok' });
+  } catch (e) {
+    toast(e.name === 'QuotaExceededError' ? 'No hay espacio en este celular para descargar más.' : e.message || OFFLINE, { kind: 'warn', sticky: true });
+  }
+  render();
+}
+// downloadButton descarga (o quita) todas las pistas de un álbum o una playlist.
+export function downloadButton(tracks, playlist) {
+  if (!canDownload() || !tracks.length) return null;
+  const all = tracks.every((t) => offline.has(t.path));
+  const b = el('button', { className: 'icon-btn toggle' }, icon('download'));
+  b.setAttribute('aria-pressed', all);
+  b.setAttribute('aria-label', all ? 'Quitar de las descargas' : 'Descargar para escuchar sin conexión');
+  b.onclick = async () => {
+    if (!all) { b.disabled = true; return fetchOffline(tracks, playlist); }
+    if (!(await ask({ heading: '¿Quitar de las descargas?', text: `${plural(tracks.length, 'canción deja', 'canciones dejan')} de estar en este celular. Siguen en la biblioteca.`, ok: 'Quitar', danger: true }))) return;
+    await offline.remove(tracks.map((t) => t.path));
+    render();
+  };
+  return b;
+}
+// offlineBox resume lo descargado en Tu biblioteca y deja borrarlo todo.
+export function offlineBox() {
+  const n = offline.count();
+  if (!offline.enabled() || !n) return null;
+  const mb = Math.round(offline.bytes() / 1048576);
+  const row = el('div', { className: 'row static' }, el('span', { className: 'type', style: '--tc: var(--t-audio)' }, icon('download')),
+    el('div', { className: 'row-text' }, el('p', { textContent: `${plural(n, 'canción descargada', 'canciones descargadas')} · ${mb} MB` }),
+      el('p', { className: 'muted', textContent: offline.active ? 'Estás sin conexión: esto es lo que hay en este celular.' : 'Disponibles en este celular aunque no haya conexión.' })));
+  if (offline.active) return el('ul', { className: 'list offline-box' }, el('li', {}, row));
+  const del = el('button', { className: 'icon-btn' }, icon('trash'));
+  del.setAttribute('aria-label', 'Borrar todas las descargas');
+  del.onclick = async () => {
+    if (!(await ask({ heading: '¿Borrar todas las descargas?', text: `Se liberan ${mb} MB de este celular. La música sigue en la biblioteca.`, ok: 'Borrar', danger: true }))) return;
+    const user = offline.saved();
+    await offline.wipe();
+    if (user) await offline.login(user); // sigue siendo su celular: solo se van las canciones
+    render();
+  };
+  return el('ul', { className: 'list offline-box' }, el('li', { className: 'row-wrap' }, row, del));
 }
 
 // Piezas de las vistas

@@ -502,3 +502,9 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .ask-option span { display: grid; }
 .ask-option small { font-size: .82rem; }
 .ask-option small { font-weight: 400; }
+
+/* ---- Modo sin conexión (offline.js): solo la música descargada; lo que necesita servidor se esconde ---- */
+.offline #jam-link, .offline #mtabs-exit, .offline .side-foot, .offline #admin-link { display: none; }
+.offline .topbar-row::before { content: "Sin conexión"; order: -1; align-self: center; padding: 4px 10px; border-radius: 999px;
+  background: color-mix(in srgb, var(--t-video) 22%, var(--surface)); color: var(--text); font-size: .78rem; font-weight: 600; }
+.offline-box { margin-top: 12px; }

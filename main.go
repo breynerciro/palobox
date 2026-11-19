@@ -110,7 +110,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/music/artist", auth(a.music.Artist))
 	mux.HandleFunc("GET /api/music/search", auth(a.music.Search))
 	mux.HandleFunc("GET /api/music/radio", auth(a.music.Radio))
-	mux.HandleFunc("GET /api/music/offline", auth(a.music.Offline)) // audio listo para guardar en el celular (prueba: web/sinconexion.html)
+	mux.HandleFunc("GET /api/music/offline", auth(a.music.Offline)) // audio listo para guardar en el celular (web/offline.js)
 	mux.HandleFunc("GET /api/music/likes", auth(a.music.Likes))
 	mux.HandleFunc("PUT /api/music/likes", auth(a.music.LikePut))
 	mux.HandleFunc("DELETE /api/music/likes", auth(a.music.LikeDelete))

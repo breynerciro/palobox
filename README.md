@@ -10,6 +10,9 @@ propio servidor y con una interfaz web que se instala en el celular como app (PW
   de reproducción.
 - **Dispositivos y jam**: eliges en cuál de tus dispositivos suena y lo controlas desde otro, o abres
   un jam para que otras personas escuchen lo mismo a la vez y manejen la cola contigo.
+- **Sin conexión** (cuentas de solo música): descargas álbumes, playlists o canciones al celular y la app abre
+  y reproduce sin servidor, con las mismas pantallas armadas solo con lo descargado. Jam, elegir dispositivo,
+  descargar de Spotify y los cambios (me gusta, playlists) necesitan conexión.
 - **Descargas de Spotify** (opcional): pegas un enlace y un servicio aparte lo baja con
   [spotDL](https://github.com/spotDL/spotify-downloader). Ver [`spotdl/README.md`](spotdl/README.md).
 

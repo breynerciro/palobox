@@ -1,11 +1,23 @@
 // Sesión: peticiones autenticadas, entrada y salida.
-import { $, json, ask } from './lib.js';
+import { $, json, ask, toast } from './lib.js';
 import { render } from './nav.js';
-import { restore, reset } from './player.js';
+import { restore, reset, goOffline } from './player.js';
 import { forget } from './music.js';
+import * as offline from './offline.js';
 
+// Sin conexión (offline.js) las peticiones no van a la red: se responden con lo descargado en el celular.
 export async function api(path, opts) {
-  const r = await fetch(path, opts);
+  if (offline.active) return offline.handle(path, opts);
+  let r;
+  try {
+    r = await fetch(path, opts);
+  } catch (e) {
+    // La red se cayó con la app abierta: si hay música descargada, se sigue con ella.
+    if (!offline.saved() || offline.saved().name !== userName) throw e;
+    enterOffline();
+    setTimeout(render);
+    return offline.handle(path, opts);
+  }
   if (r.status === 401 && path !== '/api/login') {
     showLogin();
     throw new Error('Tu sesión venció. Entra de nuevo.');
@@ -48,10 +60,31 @@ $('#login-form').onsubmit = async (e) => {
 };
 
 $('#logout').onclick = async () => {
-  if (!(await ask({ heading: '¿Cerrar sesión?', ok: 'Cerrar sesión', danger: true }))) return;
-  await fetch('/api/logout', { method: 'POST' });
+  const n = offline.count();
+  const text = offline.active ? 'Estás sin conexión: al salir se borra la música descargada y no podrás entrar hasta volver a conectarte.'
+    : n ? 'También se borra de este celular la música descargada.' : '';
+  if (!(await ask({ heading: '¿Cerrar sesión?', text, ok: 'Cerrar sesión', danger: true }))) return;
+  await fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  await offline.wipe(); // las descargas son de quien inició sesión: no le quedan al siguiente
+  if (offline.active) return location.reload();
   showLogin();
 };
+
+// enterOffline pasa la app a funcionar con lo descargado y vigila cuándo vuelve la conexión.
+function enterOffline() {
+  if (offline.active) return;
+  offline.enter();
+  goOffline();
+  toast('Sin conexión: se muestra tu música descargada.', { kind: 'warn' });
+  const back = async () => {
+    if (document.visibilityState !== 'visible') return;
+    const r = await fetch('/api/version', { cache: 'no-store' }).catch(() => null);
+    if (r?.ok) location.reload(); // volvió el servidor: la app arranca de nuevo, ya con todo
+  };
+  setInterval(back, 20000);
+  document.addEventListener('visibilitychange', back);
+  window.addEventListener('online', back);
+}
 
 export let isAdmin = false;
 export let musicOnly = false; // cuenta de invitado: solo ve Música
@@ -114,8 +147,14 @@ export async function start() {
   const token = inviteToken();
   if (token) return showInvite(token);
   const r = await fetch('/api/me').catch(() => null);
-  if (!r?.ok) return showLogin();
-  const me = await r.json();
+  let me = offline.saved();
+  if (r?.ok) {
+    me = await r.json();
+    await offline.login(me);
+    // Quien puede descargar necesita que la app abra sin servidor; a los demás no se les instala nada.
+    if (offline.enabled() && 'serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+  } else if (r || !me) return showLogin(); // el servidor respondió que no hay sesión, o no hay red ni nada descargado
+  else enterOffline(); // sin red, pero con música descargada: entra quien la descargó
   isAdmin = me.admin;
   musicOnly = !!me.musicOnly;
   document.body.classList.toggle('music-only', musicOnly);

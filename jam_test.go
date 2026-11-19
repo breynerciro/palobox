@@ -217,6 +217,17 @@ func TestJamStream(t *testing.T) {
 		t.Fatalf("la sala debe ir en la segunda pista o más: %v", m["room"])
 	}
 
+	// Descarga para escuchar sin conexión: el mismo audio limpio, completo y solo con sesión.
+	if code, _, raw := ana.do("GET", "/api/music/offline?path=uno.mp3", nil); code != 200 || len(raw) != 40*417 || bytes.Contains(raw, []byte("Info")) || bytes.Contains(raw, []byte("ID3")) {
+		t.Fatalf("offline: %d, %d bytes", code, len(raw))
+	}
+	if code, _, _ := (client{t, ana.base, &http.Client{}}).do("GET", "/api/music/offline?path=uno.mp3", nil); code != 401 {
+		t.Fatalf("offline sin sesión: %d", code)
+	}
+	if code, _, _ := ana.do("GET", "/api/music/offline?path=../x.mp3", nil); code != 404 {
+		t.Fatalf("offline fuera de la biblioteca: %d", code)
+	}
+
 	// «cut»: el teléfono se salta su colchón y el envío vuelve a empezar en lo que la sala suena ahora, por la
 	// misma conexión; «state» solo devuelve la foto.
 	if m := cmd(map[string]any{"op": "state"}); m["room"] == nil {
@@ -239,5 +250,23 @@ func TestJamStream(t *testing.T) {
 	}
 	if m := cmd(map[string]any{"op": "pause"}); m["room"].(map[string]any)["pos"].(float64) != 1 {
 		t.Fatalf("«siguiente» en la petición del flujo debe aplicarse una sola vez: %v", m["room"])
+	}
+}
+
+// El service worker guarda una copia de la interfaz para abrir sin servidor: no puede faltarle ningún archivo.
+func TestServiceWorkerFiles(t *testing.T) {
+	sw, err := webFS.ReadFile("web/sw.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entries, _ := webFS.ReadDir("web")
+	for _, e := range entries {
+		name := e.Name()
+		if name == "sw.js" || name == "index.html" { // index.html es «/»
+			continue
+		}
+		if !bytes.Contains(sw, []byte("'/"+name+"'")) {
+			t.Errorf("web/sw.js no incluye /%s: sin conexión la app no abriría", name)
+		}
 	}
 }
