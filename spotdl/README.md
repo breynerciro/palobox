@@ -201,8 +201,12 @@ Lo que queda a decisión de quien instala:
 
 ## Desarrollo
 
+`server.py` (HTTP, trabajador y spotDL), `store.py` (cola en SQLite), `library.py` (biblioteca en
+disco y etiquetas MP3), `results.py` (salida de spotDL y reglas de resultado) y `spotdl_fast.py`
+(el spotDL que se ejecuta). Cada módulo tiene su `test_*.py`.
+
 ```sh
-python3 -m unittest -v        # pruebas del servicio, sin red
+python3 -m unittest -v        # todas las pruebas, sin red
 docker build -t palobox-spotdl . # imagen propia
 ```
 

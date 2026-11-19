@@ -11,7 +11,7 @@ RUN apk add --no-cache ffmpeg ca-certificates tzdata tini deno
 WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
-COPY server.py spotdl_fast.py ./
+COPY server.py store.py library.py results.py spotdl_fast.py ./
 
 # spotdl_fast.py es spotDL con caché de álbumes y artistas (ver el archivo).
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 TZ=America/Bogota DATA_DIR=/data PORT=8801 SPOTDL_BIN=/app/spotdl_fast.py \

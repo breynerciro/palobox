@@ -24,7 +24,7 @@ import re
 import sys
 import threading
 
-from server import norm  # la misma comparación que el filtro del servicio; no arrastra dependencias
+from library import norm  # la misma comparación que el filtro del servicio; no arrastra dependencias
 
 
 def cached(fn):
