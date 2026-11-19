@@ -23,7 +23,8 @@ import os
 import re
 import sys
 import threading
-import unicodedata
+
+from server import norm  # la misma comparación que el filtro del servicio; no arrastra dependencias
 
 
 def cached(fn):
@@ -68,17 +69,13 @@ def only_official(fn, error):
     return wrap
 
 
-def norm(text):
-    """Comparable: sin mayúsculas, tildes, espacios ni signos."""
-    plain = unicodedata.normalize("NFD", str(text or "")).encode("ascii", "ignore").decode()
-    return re.sub(r"[^a-z0-9]", "", plain.lower())
-
-
 def pick_official(entries, name, artists, duration):
     """De los resultados de una búsqueda en YouTube, el video oficial de la canción: canal verificado del
     propio artista (el nombre de uno está en el del canal, o al revés) y el título nombra la canción. Entre
     varios, el de duración más parecida. Así no entran reacciones ni covers de otros canales verificados."""
     base = norm(re.sub(r"\s*[\(\[].*?[\)\]]", "", name).split(" - ")[0]) or norm(name)  # sin «(Remaster)», «- En vivo»
+    if not base:  # un título vacío estaría «en» cualquier otro
+        return None
     who = [a for a in map(norm, artists) if a]
     good = []
     for e in entries or []:

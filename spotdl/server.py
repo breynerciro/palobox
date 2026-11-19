@@ -437,12 +437,13 @@ class Store:
             self.db.commit()
 
     def prune(self):
-        """Conserva solo los últimos terminados."""
+        """Conserva solo los últimos terminados de cada dueño: los de otros no le borran su aviso."""
         with self.lock:
             self.db.execute(
                 "DELETE FROM jobs WHERE status NOT IN ('queued', 'downloading') AND id NOT IN ("
-                "  SELECT id FROM jobs WHERE status NOT IN ('queued', 'downloading') "
-                "  ORDER BY created DESC, rowid DESC LIMIT ?)",
+                "  SELECT id FROM (SELECT id, ROW_NUMBER() OVER ("
+                "    PARTITION BY owner ORDER BY created DESC, rowid DESC) AS n "
+                "  FROM jobs WHERE status NOT IN ('queued', 'downloading')) WHERE n <= ?)",
                 (self.keep,),
             )
             self.db.commit()
@@ -550,7 +551,8 @@ def read_tags(path):
 
     total = (texts("TRCK") or [""])[0].partition("/")[2]
     return {
-        "artists": [a for t in texts("TPE1") for a in t.split("/")],
+        # spotDL une los artistas con «/», pero un nombre puede llevarla («AC/DC»): van ambos.
+        "artists": [a for t in texts("TPE1") for a in (t, *t.split("/"))],
         "title": (texts("TIT2") or [""])[0],
         "duration": audio.info.length,
         "total": int(total) if total.isdigit() else 0,
@@ -581,6 +583,23 @@ def playlist_tracks(songs, index, music_dir):
         if paths:
             out.append(os.path.relpath(sorted(paths)[0], music_dir).replace(os.sep, "/"))
     return out
+
+
+def drop_partial(music_dir, since):
+    """Borra los MP3 que dejó a medias un spotDL cortado (cancelar, tiempo máximo, apagar): convierte
+    directo a la ruta final y etiqueta después, y al reintentar los saltaría por existir. Solo toca
+    archivos más nuevos que el trabajo (since, en ms) y sin título en sus etiquetas."""
+    for root, _dirs, files in os.walk(music_dir):
+        for name in files:
+            path = os.path.join(root, name)
+            try:
+                if not name.lower().endswith(".mp3") or os.path.getmtime(path) * 1000 <= since:
+                    continue
+                if not read_tags(path)["title"]:
+                    log.warning("se borra un MP3 a medias: %s", path)
+                    os.remove(path)
+            except Exception as exc:  # ilegible o ya borrado: no se toca
+                log.warning("no se pudo revisar %s: %s", path, exc)
 
 
 def filter_plan(songs, index):
@@ -728,8 +747,20 @@ class Runner:
                 with self.cv:
                     self.cv.wait(timeout=5)
                 continue
-            if self.store.claim(job["id"]):
+            if not self.store.claim(job["id"]):
+                continue
+            try:
                 self.run_job(job)
+            except Exception:  # este es el único trabajador: un fallo no puede dejar la cola parada
+                log.exception("trabajo %s: falló sin control", job["id"])
+                with self.lock:
+                    proc = self.procs.pop(job["id"], None)
+                if proc:
+                    kill_group(proc)
+                try:
+                    self.settle(job["id"], [], True)
+                except Exception:
+                    log.exception("trabajo %s: no se pudo marcar como error", job["id"])
 
     def run_job(self, job):
         jid, url = job["id"], job["url"]
@@ -744,6 +775,7 @@ class Runner:
         todofile = os.path.join(self.s.state_dir, f"to-download-{jid}.spotdl")
         temps = (errfile, savefile, planfile, todofile)
         remove(temps)
+        drop_partial(self.s.music_dir, job["created"])
         cookie = ["--cookie-file", self.s.cookie_file] if self.s.cookie_file else []
         # Las credenciales de Spotify las lee spotDL de su config.json (Settings.write_spotify_config).
 
@@ -753,6 +785,7 @@ class Runner:
             feed.title, feed.total = job["title"], len(urls)
             self.store.progress(jid, feed)
         started = time.monotonic()  # el tiempo máximo cubre el plan y la descarga
+        missing = []
         try:
             query, skipped = urls or [url], 0
             if not urls:
@@ -770,6 +803,10 @@ class Runner:
                 try:
                     with open(planfile, encoding="utf-8") as f:
                         plan = json.load(f)
+                    # spotDL descarta en silencio (código 0) lo que no pudo resolver: lo que falte frente a
+                    # «Found N songs» cuenta como fallido y reintentable; sin URL, el reintento repite el enlace.
+                    missing = [{"url": "", "name": "", "retry": True}] * max(0, feed.total - len(plan))
+                    plan.sort(key=lambda s: s.get("list_position") or 0)  # spotDL lo arma en orden de llegada
                     if "/playlist/" in url:
                         self.store.set_songs(jid, [[[s.get("artist"), *(s.get("artists") or [])], s.get("name")] for s in plan])
                     todo, skip = filter_plan(plan, index_library(self.s.music_dir))
@@ -784,7 +821,7 @@ class Runner:
                     log.exception("trabajo %s: falló el filtro de duplicados; se baja el enlace entero", jid)
                     todo = None
                 if todo == []:
-                    return self.settle(jid, [], False, skipped)
+                    return self.settle(jid, missing, False, skipped)
 
             rc = self.spotdl(jid, [
                 "download", *query,
@@ -809,9 +846,10 @@ class Runner:
             if rc:
                 self.settle(jid, failed, True)
             else:
-                self.settle(jid, keep + failures_from(errfile, song_names(savefile)), False, skipped)
+                self.settle(jid, keep + missing + failures_from(errfile, song_names(savefile)), False, skipped)
         finally:
             remove(temps)
+            drop_partial(self.s.music_dir, job["created"])
 
     def spotdl(self, jid, args, feed, started):
         """Corre spotDL e informa el avance. Devuelve su código (o 1 si no arrancó o se pasó del
@@ -938,7 +976,8 @@ class Service:
     def start(self):
         for name in os.listdir(self.settings.state_dir):
             # Restos de ejecuciones cortadas; Store ya migró lo que necesitaba de ellos.
-            if (name.startswith("errors-") and name.endswith(".txt")) or (name.startswith("songs-") and name.endswith(".spotdl")):
+            if (name.startswith("errors-") and name.endswith(".txt")) or (
+                    name.startswith(("songs-", "plan-", "to-download-")) and name.endswith(".spotdl")):
                 try:
                     os.remove(os.path.join(self.settings.state_dir, name))
                 except OSError:
@@ -1024,6 +1063,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if path == "/health":
             if not shutil.which(self.service.settings.spotdl_bin):
                 return self.send_json(503, {"ok": False, "error": "spotDL no está instalado."})
+            if not self.service.runner.thread.is_alive():
+                return self.send_json(503, {"ok": False, "error": "El trabajador de descargas se detuvo."})
             return self.send_json(200, {"ok": True, "active": self.service.store.active_count(), **self.service.versions()})
         if path == "/jobs":
             who = self.caller()
@@ -1058,11 +1099,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_json(400, {"error": "El enlace no es de Spotify."})
 
         store = self.service.store
-        if job := store.find_active(url):
-            return self.send_json(200, job)
-        if err := self.over_limit(who[0]):
+        with store.lock:  # revisar y crear de una vez: un doble clic no crea dos trabajos
+            found = store.find_active(url)
+            err = "" if found else self.over_limit(who[0])
+            job = None if found or err else store.create(url, who[0])
+        if found:
+            return self.send_json(200, found)
+        if err:
             return self.send_json(429, {"error": err})
-        job = store.create(url, who[0])
         self.service.runner.wake()
         self.send_json(201, job)
 
@@ -1083,9 +1127,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_json(403, {"error": "Solo quien pidió esta descarga puede reintentarla."})
         if job["status"] != "error":
             return self.send_json(409, {"error": "Esta descarga ya no se puede reintentar."})
-        if err := self.over_limit(who[0]):
+        with store.lock:
+            err = self.over_limit(who[0])
+            ok = not err and store.requeue(jid)
+        if err:
             return self.send_json(429, {"error": err})
-        if not store.requeue(jid):
+        if not ok:
             return self.send_json(409, {"error": "Esta descarga ya no se puede reintentar."})
         self.service.runner.wake()
         self.send_json(200, store.get(jid))

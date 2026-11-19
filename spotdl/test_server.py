@@ -5,6 +5,7 @@ import dataclasses
 import json
 import sqlite3
 import os
+import sys
 import tempfile
 import threading
 import time
@@ -132,6 +133,19 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(len(quedan), 2)
         self.assertEqual(set(quedan), set(ids[-2:]))
 
+    def test_el_tope_de_terminados_es_por_dueno(self):
+        def terminado(owner, i):
+            jid = self.store.create(f"https://open.spotify.com/playlist/{i:022d}", owner)["id"]
+            self.store.claim(jid)
+            self.store.finish(jid, "finished", notice="aviso")
+            return jid
+
+        suyo = terminado("ana", 0)
+        for i in range(1, 6):  # más que keep_finished, todos de otra cuenta
+            terminado("pepe", i)
+        self.assertEqual([j["id"] for j in self.store.jobs("ana")], [suyo])
+        self.assertEqual(len(self.store.jobs("pepe")), 2)
+
     def test_errores_del_archivo(self):
         path = os.path.join(self.tmp.name, "errores.txt")
         self.assertEqual(server.failures_from(path), [])
@@ -238,6 +252,31 @@ class FiltroTest(unittest.TestCase):
         c = self.cancion(artista="Invitado")
         c["artists"] = ["Invitado", "Penyair"]
         self.assertEqual(self.filtrar([("Penyair/Invitado", "La Ley del Todo", "Nada", 180, 12)], c), "salta")
+
+    def test_lee_artistas_con_barra(self):
+        frame = lambda *t: mock.Mock(text=list(t))
+        audio = mock.Mock(tags={"TPE1": frame("AC/DC"), "TIT2": frame("Thunderstruck"), "TRCK": frame("1/10")})
+        audio.info.length = 292.0
+        mp3 = mock.Mock(MP3=mock.Mock(return_value=audio))
+        with mock.patch.dict(sys.modules, {"mutagen": mock.Mock(), "mutagen.mp3": mp3}):
+            tags = server.read_tags("x.mp3")
+        self.assertEqual(tags, {"artists": ["AC/DC", "AC", "DC"], "title": "Thunderstruck", "duration": 292.0, "total": 10})
+
+    def test_borra_solo_mp3_a_medias_del_trabajo(self):
+        disco = {"vieja.mp3": "", "a_medias.mp3": "", "buena.mp3": "Buena", "danada.mp3": None, "nota.txt": ""}
+        for nombre in disco:
+            open(os.path.join(self.music, nombre), "wb").close()
+        os.utime(os.path.join(self.music, "vieja.mp3"), (1, 1))  # anterior al trabajo: no es suya
+
+        def leer(path):
+            titulo = disco[os.path.basename(path)]
+            if titulo is None:
+                raise ValueError("dañado")
+            return {"title": titulo}
+
+        with mock.patch("server.read_tags", side_effect=leer):
+            server.drop_partial(self.music, 1000 * 1000)
+        self.assertEqual(sorted(os.listdir(self.music)), ["buena.mp3", "danada.mp3", "nota.txt", "vieja.mp3"])
 
     def test_mp3_ilegible_no_frena(self):
         biblioteca(self.music, [("Penyair", "La Ley del Todo", "Nada", 180, 12)])
@@ -420,6 +459,7 @@ if args[0] == 'save':
                                 'album_name': 'Tomá', 'duration': 200, 'tracks_count': 5} for u in cfg['tracks']]
     if '/track/' not in args[1]:
         print('Found %d songs in Tomá (Playlist)' % len(plan), flush=True)
+    plan = plan[:cfg.get('take')]  # spotDL descarta sin avisar lo que no pudo resolver
     json.dump(plan, open(args[args.index('--save-file') + 1], 'w'))
     sys.exit(cfg.get('save_rc', 0))
 qs = args[1:args.index('--output')]
@@ -468,6 +508,79 @@ if lines:
         fin = self.esperar(job["id"], ("finished",))
         self.assertEqual(fin["tracks"], ["Artista/Tomá/Canción 01.mp3", "Artista/Tomá/Canción 03.mp3"])
         self.assertIn("Quedó como playlist en Tu biblioteca.", fin["notice"])
+
+    def test_plan_en_el_orden_de_la_playlist(self):
+        plan = [{"url": u, "name": f"Canción {i}", "artist": "Artista", "list_position": i} for i, u in enumerate(self.TRACKS, 1)]
+        self.lista({}, plan=plan[::-1])
+        _, job = self.request("POST", "/jobs", {"url": self.PLAYLIST})
+        self.esperar(job["id"], ("finished",))
+        self.assertEqual([s[1] for s in self.service.store.songs(job["id"])], [f"Canción {i}" for i in range(1, 6)])
+
+    def test_plan_incompleto_cuenta_las_que_faltan(self):
+        self.lista({}, take=3)
+        _, job = self.request("POST", "/jobs", {"url": self.PLAYLIST})
+        fin = self.esperar(job["id"], ("error",), intentos=2)
+        self.assertEqual(fin["error"], "2 canciones no se pudieron descargar")
+        # Sin URL de las que faltan, el reintento repite el enlace entero (y vuelve a planear).
+        self.assertEqual([c["args"][0] for c in self.llamadas()], ["save", "download"] * 2)
+
+    def test_plan_vacio_no_es_exito(self):
+        self.lista({}, take=0)
+        _, job = self.request("POST", "/jobs", {"url": self.PLAYLIST})
+        fin = self.esperar(job["id"], ("error",), intentos=2)
+        self.assertEqual(fin["error"], "5 canciones no se pudieron descargar")
+        self.assertEqual([c["args"][0] for c in self.llamadas()], ["save", "save"])
+
+    def test_un_fallo_inesperado_no_detiene_la_cola(self):
+        self.service.settings = dataclasses.replace(self.settings, max_active=5)
+        real, fallas = self.service.store.progress, []
+
+        def progress(jid, feed):
+            if not fallas:
+                fallas.append(jid)
+                raise sqlite3.OperationalError("database or disk is full")
+            return real(jid, feed)
+
+        with mock.patch.object(self.service.store, "progress", side_effect=progress):
+            _, uno = self.request("POST", "/jobs", {"url": "https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX"})
+            _, dos = self.request("POST", "/jobs", {"url": "https://open.spotify.com/album/" + "2" * 22})
+            self.assertEqual(self.esperar(dos["id"], ("finished",))["status"], "finished")
+            self.esperar(uno["id"], ("finished",))  # se marcó como error y el reintento automático lo terminó
+        self.assertEqual(fallas, [uno["id"]])
+        self.assertEqual(self.service.runner.procs, {})
+        self.assertEqual(self.request("GET", "/health")[0], 200)
+        self.service.stop()
+        self.service.runner.thread.join(timeout=10)
+        self.assertEqual(self.request("GET", "/health")[0], 503)  # sin trabajador no está sano
+
+    def test_doble_clic_crea_un_solo_trabajo(self):
+        self.service.settings = dataclasses.replace(self.settings, max_active=5)
+        self.script("\ntime.sleep(60)\n")
+        real = self.service.store.find_active
+
+        def lenta(url):
+            job = real(url)
+            time.sleep(0.2)  # sin el candado, los dos pedidos ven la cola vacía
+            return job
+
+        url = "https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX"
+        got = []
+        with mock.patch.object(self.service.store, "find_active", side_effect=lenta):
+            hilos = [threading.Thread(target=lambda: got.append(self.request("POST", "/jobs", {"url": url})[1]["id"])) for _ in range(2)]
+            for h in hilos:
+                h.start()
+            for h in hilos:
+                h.join()
+        self.assertEqual(len(set(got)), 1)
+        self.assertEqual(len(self.service.store.jobs()), 1)
+        self.service.cancel(got[0])
+
+    def test_arranque_borra_temporales(self):
+        nombres = ["errors-a.txt", "songs-a.spotdl", "plan-a.spotdl", "to-download-a.spotdl", "jobs.sqlite"]
+        for n in nombres[:-1]:
+            open(os.path.join(self.settings.state_dir, n), "w").close()
+        self.reiniciar()
+        self.assertEqual([n for n in nombres if os.path.exists(os.path.join(self.settings.state_dir, n))], ["jobs.sqlite"])
 
     def test_fallo_transitorio_reintenta_solo_las_fallidas_y_luego_se_agota(self):
         t = self.TRACKS
@@ -874,6 +987,16 @@ class CacheTest(unittest.TestCase):
 
         with self.assertRaises(OSError):  # un fallo de la búsqueda no se disfraza
             spotdl_fast.second_chance(sin_red, lambda _song: "oficial")(Provider(), Song())
+
+    def test_titulo_sin_letras_latinas(self):
+        import spotdl_fast
+        bts = [{"id": "dyn", "title": "BTS (방탄소년단) 'Dynamite' Official MV", "channel": "HYBE LABELS", "channel_is_verified": True, "duration": 199},
+               {"id": "bom", "title": "BTS (방탄소년단) '봄날 (Spring Day)' Official MV", "channel": "HYBE LABELS", "channel_is_verified": True, "duration": 285}]
+        url = "https://www.youtube.com/watch?v="
+        # Antes «봄날» quedaba vacío y cualquier título lo «contenía»: se colaba Dynamite.
+        self.assertEqual(spotdl_fast.pick_official(bts, "봄날", ["HYBE LABELS"], 199), url + "bom")
+        self.assertIsNone(spotdl_fast.pick_official(bts[:1], "봄날", ["HYBE LABELS"], 199))
+        self.assertIsNone(spotdl_fast.pick_official(bts, "!!!", ["HYBE LABELS"], 199))  # sin nada comparable
 
 
 if __name__ == "__main__":
