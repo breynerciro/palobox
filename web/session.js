@@ -23,6 +23,7 @@ export async function api(path, opts) {
     return offline.handle(path, opts);
   }
   if (r.status === 401 && path !== '/api/login') {
+    await offline.wipe(); // el servidor ya no reconoce la sesión: ver start()
     showLogin();
     throw new Error('Tu sesión venció. Entra de nuevo.');
   }
@@ -87,6 +88,7 @@ function enterOffline() {
     if (audio.paused && await reachable()) location.reload();
   };
   setInterval(back, 20000);
+  audio.addEventListener('pause', back); // se esperaba a que dejara de sonar
   document.addEventListener('visibilitychange', back);
   window.addEventListener('online', back);
 }
@@ -177,7 +179,12 @@ export async function start() {
     await offline.login(me);
     // Quien puede descargar necesita que la app abra sin servidor; a los demás no se les instala nada.
     if (offline.enabled() && 'serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
-  } else if ((r && r.status < 500) || !me) return showLogin(); // el servidor dijo que no hay sesión, o no hay red ni cuenta en este celular
+  } else if ((r && r.status < 500) || !me) {
+    // El servidor dijo que no hay sesión, o no hay red ni cuenta vigente en este celular. Sin sesión no queda
+    // música descargada: la cuenta se eliminó, el administrador la cerró o pasó demasiado tiempo sin conectarse.
+    if (r?.status === 401 || !r) await offline.wipe();
+    return showLogin();
+  }
   else enterOffline(); // sin red: entra quien usó este celular, con lo que tenga descargado
   isAdmin = me.admin;
   musicOnly = !!me.musicOnly;

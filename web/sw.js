@@ -22,8 +22,16 @@ self.addEventListener('fetch', (e) => {
   }
   if (url.pathname.startsWith('/api/')) return;
   const key = e.request.mode === 'navigate' ? '/' : url.pathname;
-  e.respondWith(fetch(e.request).then((r) => {
-    if (r.ok) caches.open(SHELL).then((c) => c.put(key, r.clone()));
-    return r;
-  }).catch(() => caches.open(SHELL).then((c) => c.match(key)).then((r) => r ?? Response.error())));
+  e.respondWith((async () => {
+    const cache = await caches.open(SHELL);
+    const kept = await cache.match(key);
+    const net = fetch(e.request).then((r) => {
+      if (r.ok) cache.put(key, r.clone());
+      return r;
+    });
+    e.waitUntil(net.catch(() => {})); // aunque ya se haya respondido con la copia, la nueva se guarda
+    if (!kept) return net.catch(() => Response.error());
+    // Con señal mala la red ni falla ni contesta: a los 4 s se abre con la copia en vez de quedarse esperando.
+    return Promise.race([net, new Promise((_, no) => setTimeout(no, 4000))]).catch(() => kept);
+  })());
 });

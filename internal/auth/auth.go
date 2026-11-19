@@ -169,16 +169,25 @@ func (s *Service) open(w http.ResponseWriter, r *http.Request, id int64) error {
 	now := time.Now()
 	b := make([]byte, 32)
 	rand.Read(b)
-	tok, exp := hex.EncodeToString(b), now.Add(30*24*time.Hour)
+	tok, exp := hex.EncodeToString(b), now.Add(sessionTTL)
 	s.DB.Exec(`DELETE FROM sessions WHERE expires <= ?`, now.Unix())
 	s.DB.Exec(`UPDATE users SET seen = ? WHERE id = ?`, now.Unix(), id)
 	if _, err := s.DB.Exec(`INSERT INTO sessions(token, user_id, expires, created, seen, ip, agent) VALUES(?, ?, ?, ?, ?, ?, ?)`,
 		tok, id, exp.Unix(), now.Unix(), now.Unix(), clientIP(r), cut(r.UserAgent(), 256)); err != nil {
 		return err
 	}
+	setCookie(w, r, tok, exp)
+	return nil
+}
+
+// sessionTTL: una sesión dura este tiempo desde su último uso. Quien usa la app no vuelve a pedir la clave; una
+// sesión que el servidor ya no reconoce es entonces una cuenta eliminada, cerrada por el administrador o
+// abandonada, y el celular borra lo que tenía descargado (web/session.js).
+const sessionTTL = 30 * 24 * time.Hour
+
+func setCookie(w http.ResponseWriter, r *http.Request, tok string, exp time.Time) {
 	http.SetCookie(w, &http.Cookie{Name: "s", Value: tok, Path: "/", Expires: exp, HttpOnly: true,
 		SameSite: http.SameSiteLaxMode, Secure: r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https"})
-	return nil
 }
 
 // SetDisabled bloquea o desbloquea la entrada; al bloquear cierra las sesiones.
@@ -246,12 +255,12 @@ func cut(s string, n int) string {
 func (s *Service) Wrap(h httpx.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		var u httpx.User
-		var seen int64
+		var seen, expires int64
 		now := time.Now().Unix()
 		c, err := r.Cookie("s")
 		if err == nil {
-			err = s.DB.QueryRow(`SELECT u.id, u.name, u.music_only, MIN(u.seen, s.seen) FROM sessions s JOIN users u ON u.id = s.user_id
-				WHERE s.token = ? AND s.expires > ? AND u.disabled = 0`, c.Value, now).Scan(&u.ID, &u.Name, &u.MusicOnly, &seen)
+			err = s.DB.QueryRow(`SELECT u.id, u.name, u.music_only, MIN(u.seen, s.seen), s.expires FROM sessions s JOIN users u ON u.id = s.user_id
+				WHERE s.token = ? AND s.expires > ? AND u.disabled = 0`, c.Value, now).Scan(&u.ID, &u.Name, &u.MusicOnly, &seen, &expires)
 		}
 		if err != nil {
 			http.Error(w, "no autenticado", 401)
@@ -262,6 +271,10 @@ func (s *Service) Wrap(h httpx.Handler) http.HandlerFunc {
 		if now-seen > 60 {                    // último uso del usuario y de esta sesión, para el panel; una escritura por minuto como mucho
 			s.DB.Exec(`UPDATE users SET seen = ? WHERE id = ?`, now, u.ID)
 			s.DB.Exec(`UPDATE sessions SET seen = ? WHERE token = ?`, now, c.Value)
+		}
+		if exp := time.Now().Add(sessionTTL); exp.Unix()-expires > 24*3600 { // se renueva con el uso, una vez al día como mucho
+			s.DB.Exec(`UPDATE sessions SET expires = ? WHERE token = ?`, exp.Unix(), c.Value)
+			setCookie(w, r, c.Value, exp)
 		}
 		if err := h(w, r, u); err != nil {
 			httpx.Fail(w, err)

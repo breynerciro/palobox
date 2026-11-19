@@ -7,7 +7,10 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/cookiejar"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -250,6 +253,51 @@ func TestJamStream(t *testing.T) {
 	}
 	if m := cmd(map[string]any{"op": "pause"}); m["room"].(map[string]any)["pos"].(float64) != 1 {
 		t.Fatalf("«siguiente» en la petición del flujo debe aplicarse una sola vez: %v", m["room"])
+	}
+}
+
+// El modo sin conexión vive en el navegador: sus pruebas (webtest/) corren con node, si está instalado.
+func TestOfflineJS(t *testing.T) {
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("sin node: las pruebas de web/offline.js no corren")
+	}
+	files, _ := filepath.Glob("webtest/*.test.mjs") // por archivo: no todas las versiones de node aceptan una carpeta
+	if out, err := exec.Command(node, append([]string{"--test"}, files...)...).CombinedOutput(); err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+}
+
+// Una sesión se renueva con el uso: quien usa la app no vuelve a pedir la clave, y una sesión que el servidor
+// no reconoce significa cuenta eliminada o cerrada (el celular borra entonces lo descargado).
+func TestSessionRenews(t *testing.T) {
+	a, err := open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := a.auth.AddUser("ana", "clave-segura"); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(a.routes())
+	defer srv.Close()
+	jar, _ := cookiejar.New(nil)
+	c := client{t, srv.URL, &http.Client{Jar: jar}}
+	if c.login("ana", "clave-segura") != 200 {
+		t.Fatal("no entró")
+	}
+	soon := time.Now().Add(time.Hour).Unix() // le queda una hora
+	a.auth.DB.Exec(`UPDATE sessions SET expires = ?`, soon)
+	if code, _, _ := c.do("GET", "/api/me", nil); code != 200 {
+		t.Fatalf("me: %d", code)
+	}
+	var exp int64
+	a.auth.DB.QueryRow(`SELECT expires FROM sessions`).Scan(&exp)
+	if exp-soon < 29*24*3600 {
+		t.Errorf("la sesión no se renovó: vence en %d s", exp-time.Now().Unix())
+	}
+	a.auth.DB.Exec(`UPDATE sessions SET expires = 1`) // vencida de verdad: no revive
+	if code, _, _ := c.do("GET", "/api/me", nil); code != 401 {
+		t.Errorf("sesión vencida: %d, quería 401", code)
 	}
 }
 

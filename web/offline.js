@@ -12,18 +12,21 @@ const KEY = 'palobox.offline';
 const HZ = 48000; // todo lo descargado es MPEG-1 capa III a 48 kHz en estéreo (StreamHz en el servidor)
 const FRAME = 1152 / HZ; // segundos de cada cuadro MP3
 const VERSION = 2; // formato de lo guardado: si cambia, lo descargado antes no se puede unir con lo nuevo
-const blank = () => ({ v: VERSION, user: '', musicOnly: false, tracks: {}, albums: {}, artists: {}, playlists: {}, likes: [], top: [], pending: [] });
+const MAX_AWAY = 30 * 24 * 3600 * 1000; // sin pasar por el servidor en este tiempo (lo que dura una sesión), ya no se entra
+const blank = () => ({ v: VERSION, user: '', musicOnly: false, seen: 0, tracks: {}, albums: {}, artists: {}, playlists: {}, likes: [], top: [], pending: [] });
 let state = blank();
 try {
   const kept = JSON.parse(localStorage.getItem(KEY));
-  if (kept?.v === VERSION) state = { ...blank(), ...kept };
+  if (kept?.v === VERSION) state = { ...blank(), seen: Date.now(), ...kept }; // seen: lo guardado antes de que existiera cuenta desde hoy
   else if (kept) { // descargas de un formato anterior: se sueltan (no se pueden unir con las nuevas); la cuenta sigue
     state = { ...blank(), user: kept.user ?? '', musicOnly: !!kept.musicOnly };
     localStorage.setItem(KEY, JSON.stringify(state));
     caches.delete(AUDIO);
   }
 } catch {}
-const store = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); } catch {} };
+// store guarda el estado y dice si se pudo: el cupo de localStorage se puede llenar.
+const store = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); return true; } catch { return false; } };
+const held = new Map(); // ruta → Blob ya leído de la caché: rearmar el audio unido no vuelve a consultarla
 const forced = (() => { try { return localStorage.getItem('palobox.sinconexion') === '1'; } catch { return false; } })(); // para probar con otra cuenta
 
 export let active = false; // la app está funcionando sin servidor
@@ -35,7 +38,8 @@ export const count = () => Object.keys(state.tracks).length;
 export const bytes = () => Object.values(state.tracks).reduce((n, x) => n + x.bytes, 0);
 // saved: el usuario que puede entrar sin conexión en este celular: el último que inició sesión, si su cuenta
 // puede descargar. Entra aunque todavía no haya bajado nada; verá la biblioteca vacía.
-export const saved = () => (state.user && enabled() ? { name: state.user, admin: false, musicOnly: true } : null);
+// Como la cuenta no se puede comprobar sin servidor, solo vale un tiempo desde la última vez que sí se comprobó.
+export const saved = () => (state.user && enabled() && Date.now() - state.seen < MAX_AWAY ? { name: state.user, admin: false, musicOnly: true } : null);
 // tracks: todo lo descargado, ordenado por artista, álbum y número de pista (la playlist «Canciones descargadas»).
 export const tracks = () => all().sort((a, b) => (a.artistPath || '').localeCompare(b.artistPath || '', 'es') || (a.albumPath || '').localeCompare(b.albumPath || '', 'es') || a.num - b.num);
 export function enter() {
@@ -47,16 +51,18 @@ export async function login(me) {
   if (state.user && state.user !== me.name) await wipe();
   state.user = me.name;
   state.musicOnly = !!me.musicOnly;
+  state.seen = Date.now();
   store();
 }
 export async function wipe() {
   state = blank();
+  held.clear();
   store();
   try { await caches.delete(AUDIO); } catch {}
 }
 
 // countFrames cuenta los cuadros de un MP3 ya limpio: con eso se sabe su duración exacta dentro del audio unido.
-function countFrames(b) {
+export function countFrames(b) {
   const kbps = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
   let n = 0;
   for (let i = 0; i + 4 <= b.length;) {
@@ -97,7 +103,11 @@ export async function download(tracks, onProgress = () => {}) {
       }
       state.tracks[t.path] = { t: slim(t), frames, bytes: buf.byteLength, dur: frames * FRAME };
       state.pending = state.pending.filter((x) => x.path !== t.path);
-      store();
+      if (!store()) { // no cupo la anotación: sin ella el audio quedaría ocupando espacio sin poderse usar
+        delete state.tracks[t.path];
+        await c.delete(audioUrl(t.path));
+        throw new DOMException('No hay espacio para anotar la descarga.', 'QuotaExceededError');
+      }
     }
     onProgress(++done, tracks.length);
   }
@@ -107,6 +117,7 @@ export async function remove(paths) {
   const c = await caches.open(AUDIO);
   for (const p of paths) {
     delete state.tracks[p];
+    held.delete(p);
     await c.delete(audioUrl(p));
   }
   for (const id of Object.keys(state.playlists)) if (!state.playlists[id].paths.some(has)) delete state.playlists[id];
@@ -139,29 +150,83 @@ export function remember(lib) {
 // blobs entrega el audio guardado de cada ruta y lo que dura, para unirlo en un solo audio.
 export async function blobs(paths) {
   const c = await caches.open(AUDIO);
-  const out = [];
-  for (const p of paths) {
-    const r = await c.match(audioUrl(p));
-    if (!r) { // el sistema lo borró para liberar espacio
-      delete state.tracks[p];
-      store();
-      throw new Error('Una canción descargada ya no está en este celular. Vuelve a descargarla cuando tengas conexión.');
+  return Promise.all(paths.map(async (p) => {
+    if (!held.has(p)) {
+      const r = await c.match(audioUrl(p));
+      if (!r) { // el sistema lo borró para liberar espacio
+        delete state.tracks[p];
+        store();
+        throw new Error('Una canción descargada ya no está en este celular. Vuelve a descargarla cuando tengas conexión.');
+      }
+      held.set(p, await r.blob());
     }
-    out.push({ blob: await r.blob(), secs: state.tracks[p].dur });
+    return { blob: held.get(p), secs: state.tracks[p].dur };
+  }));
+}
+
+// Búsqueda con la misma tolerancia del servidor (internal/music/search.go): ortografía distinta que suena igual
+// y errores de tecleo en palabras largas. webtest/offline.test.mjs usa los mismos casos que search_test.go.
+const SOUNDS = { ch: 'ch', ph: 'f', qu: 'k', ce: 'se', ci: 'si', ll: 'i', c: 'k', q: 'k', z: 's', v: 'b', y: 'i', h: '' };
+function sound(s) {
+  let out = '';
+  let last = '';
+  for (const ch of fold(s).replace(/ch|ph|qu|ce|ci|ll|[cqzvyh]/g, (m) => SOUNDS[m])) {
+    const r = /[\p{L}\p{N}]/u.test(ch) ? ch : ' ';
+    if (r === last && !/\p{N}/u.test(r)) continue; // las letras dobles no cuentan
+    out += r;
+    last = r;
   }
   return out;
+}
+// approx: la menor distancia de edición entre p y cualquier pedazo de t (algoritmo de Sellers).
+function approx(p, t) {
+  const row = new Array(t.length + 1).fill(0);
+  for (let i = 1; i <= p.length; i++) {
+    let diag = row[0];
+    row[0] = i;
+    for (let j = 1; j <= t.length; j++) {
+      const cur = Math.min(row[j] + 1, row[j - 1] + 1, diag + (p[i - 1] === t[j - 1] ? 0 : 1));
+      diag = row[j];
+      row[j] = cur;
+    }
+  }
+  return Math.min(...row);
+}
+// matcher devuelve, para un texto, cuánto hubo que adivinar para encontrar todas las palabras (-1: no coincide).
+export function matcher(raw) {
+  const terms = fold(raw).split(/\s+/).filter(Boolean).map((w) => ({ plain: w, key: sound(w).replaceAll(' ', '') }));
+  return (s) => {
+    const plain = fold(s);
+    const key = sound(s);
+    let total = 0;
+    for (const t of terms) {
+      if (plain.includes(t.plain)) continue;
+      const d = approx(t.key, key);
+      if (d > (t.key.length >= 8 ? 2 : t.key.length >= 5 ? 1 : 0)) return -1;
+      total += d;
+    }
+    return total;
+  };
+}
+// best: lo que coincide, primero lo más parecido (y entre iguales, lo de menor rank), hasta n.
+function best(match, items, n, text, rank = () => 0) {
+  const hits = items.map((it) => ({ it, d: match(text(it)), r: rank(it) })).filter((h) => h.d >= 0).sort((a, b) => a.d - b.d || a.r - b.r);
+  return (n ? hits.slice(0, n) : hits).map((h) => h.it);
 }
 
 // Lo que respondería el servidor, armado solo con lo descargado.
 const fold = (s) => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase();
 const all = () => Object.values(state.tracks).map((x) => x.t);
 const byAlbum = (dir) => all().filter((t) => t.albumPath === dir).sort((a, b) => a.num - b.num || a.path.localeCompare(b.path));
-function album(dir) {
-  const ts = byAlbum(dir);
+function album(dir, ts = byAlbum(dir)) {
   const base = state.albums[dir] ?? { path: dir, name: ts[0].album, artist: ts[0].artistPath || ts[0].artist, artistPath: ts[0].artistPath, year: ts[0].year, added: 0, played: 0, plays: 0, saved: 0 };
   return { ...base, tracks: ts.length, dur: ts.reduce((n, t) => n + t.dur, 0) };
 }
-const albums = () => [...new Set(all().map((t) => t.albumPath))].map(album).sort((a, b) => fold(a.name).localeCompare(fold(b.name)));
+function albums() {
+  const groups = new Map(); // una sola pasada: esto corre en cada petición sin conexión
+  for (const t of all()) groups.get(t.albumPath)?.push(t) ?? groups.set(t.albumPath, [t]);
+  return [...groups].map(([dir, ts]) => album(dir, ts)).sort((a, b) => fold(a.name).localeCompare(fold(b.name)));
+}
 function artists(list = albums()) {
   const out = new Map();
   for (const a of list) {
@@ -212,13 +277,15 @@ export function handle(path, opts = {}) {
       return reply({ saved: state.artists[dir] || 0, path: dir, name: dir, albums: mine, tracks: all().filter((t) => t.artistPath === dir), popular: [] });
     }
     case '/api/music/search': {
-      const term = fold(q.get('q')).trim();
-      const hit = (s) => term && fold(s).includes(term);
+      const raw = q.get('q') ?? '';
+      if (raw.replace(/\s/g, '').length < 2) return reply({ tracks: [], albums: [], artists: [], playlists: [] });
+      const match = matcher(raw);
       return reply({
-        tracks: all().filter((t) => hit(`${t.title} ${t.artist} ${t.album}`)).slice(0, 30),
-        albums: list.filter((a) => hit(`${a.name} ${a.artist}`)).slice(0, 12),
-        artists: artists(list).filter((a) => hit(a.name)).slice(0, 8),
-        playlists: playlists().filter((p) => hit(p.name)),
+        // Lo que coincide en el título sale antes que lo que coincide solo en el artista o el álbum.
+        tracks: best(match, all().sort((a, b) => fold(a.title).localeCompare(fold(b.title))), 30, (t) => `${t.title} ${t.artist} ${t.album}`, (t) => (match(t.title) >= 0 ? 0 : 1)),
+        albums: best(match, list, 12, (a) => `${a.name} ${a.artist}`),
+        artists: best(match, artists(list), 8, (a) => a.name),
+        playlists: best(match, playlists(), 0, (p) => p.name),
       });
     }
     case '/api/music/likes': return reply(state.likes.filter(has).map((p) => state.tracks[p].t));
