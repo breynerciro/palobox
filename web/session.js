@@ -5,6 +5,9 @@ import { restore, reset, goOffline, audio } from './player.js';
 import { forget, resumeDownloads } from './music.js';
 import * as offline from './offline.js';
 
+// reachable: ¿el servidor contesta? Una sola pregunta para decidir entrar o salir del modo sin conexión.
+const reachable = () => fetch('/api/version', { cache: 'no-store', signal: AbortSignal.timeout(5000) }).then((r) => r.ok, () => false);
+
 // Sin conexión (offline.js) las peticiones no van a la red: se responden con lo descargado en el celular.
 export async function api(path, opts) {
   if (offline.active) return offline.handle(path, opts);
@@ -12,8 +15,9 @@ export async function api(path, opts) {
   try {
     r = await fetch(path, opts);
   } catch (e) {
-    // La red se cayó con la app abierta: si hay música descargada, se sigue con ella.
-    if (!offline.saved() || offline.saved().name !== userName) throw e;
+    // La red se cayó con la app abierta: se sigue con lo descargado. Una petición cancelada (el buscador al
+    // teclear) o un tropiezo suelto de la red no cuentan: se confirma que el servidor de verdad no contesta.
+    if (e.name === 'AbortError' || offline.saved()?.name !== userName || (navigator.onLine && await reachable())) throw e;
     enterOffline();
     setTimeout(render);
     return offline.handle(path, opts);
@@ -64,7 +68,9 @@ $('#logout').onclick = async () => {
   const text = offline.active ? 'Estás sin conexión: al salir se borra la música descargada y no podrás entrar hasta volver a conectarte.'
     : n ? 'También se borra de este celular la música descargada.' : '';
   if (!(await ask({ heading: '¿Cerrar sesión?', text, ok: 'Cerrar sesión', danger: true }))) return;
-  await fetch('/api/logout', { method: 'POST' }).catch(() => {});
+  // Sin red la sesión no se puede cerrar en el servidor: queda anotado y se cierra al volver la conexión (start).
+  const out = await fetch('/api/logout', { method: 'POST' }).catch(() => null);
+  try { if (!out?.ok) localStorage.setItem(LEAVING, '1'); } catch {}
   await offline.wipe(); // las descargas son de quien inició sesión: no le quedan al siguiente
   if (offline.active) return location.reload();
   showLogin();
@@ -78,9 +84,8 @@ function enterOffline() {
   toast('Modo offline: solo está tu música descargada.', { kind: 'warn' });
   const back = async () => {
     if (document.visibilityState !== 'visible') return;
-    const r = await fetch('/api/version', { cache: 'no-store' }).catch(() => null);
     // Volvió el servidor: la app arranca de nuevo, ya con todo. Si está sonando se espera a la pausa para no cortar.
-    if (r?.ok && audio.paused) location.reload();
+    if (audio.paused && await reachable()) location.reload();
   };
   setInterval(back, 20000);
   document.addEventListener('visibilitychange', back);
@@ -97,12 +102,12 @@ function watch() {
   window.addEventListener('offline', drop);
   setInterval(async () => {
     if (offline.active || document.visibilityState !== 'visible') return;
-    const r = await fetch('/api/version', { cache: 'no-store', signal: AbortSignal.timeout(5000) }).catch(() => null);
-    misses = r ? 0 : misses + 1;
+    misses = (await reachable()) ? 0 : misses + 1;
     if (misses >= 2) drop(); // dos seguidas: un tropiezo de la red móvil no cambia de modo
   }, 10000);
 }
 
+const LEAVING = 'palobox.salir'; // se cerró sesión sin conexión: falta cerrarla en el servidor
 export let isAdmin = false;
 export let musicOnly = false; // cuenta de invitado: solo ve Música
 export let userName = ''; // dueño de lo que se recuerda en este navegador (búsquedas recientes)
@@ -163,6 +168,9 @@ window.addEventListener('hashchange', () => inviteToken() && start()); // el enl
 export async function start() {
   const token = inviteToken();
   if (token) return showInvite(token);
+  try {
+    if (localStorage.getItem(LEAVING) && (await fetch('/api/logout', { method: 'POST', signal: AbortSignal.timeout(6000) })).ok) localStorage.removeItem(LEAVING);
+  } catch {}
   const r = await fetch('/api/me', { signal: AbortSignal.timeout(6000) }).catch(() => null); // sin servidor no se queda esperando
   let me = offline.saved();
   if (r?.ok) {
@@ -170,7 +178,7 @@ export async function start() {
     await offline.login(me);
     // Quien puede descargar necesita que la app abra sin servidor; a los demás no se les instala nada.
     if (offline.enabled() && 'serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
-  } else if (r || !me) return showLogin(); // el servidor respondió que no hay sesión, o no hay red ni nada descargado
+  } else if ((r && r.status < 500) || !me) return showLogin(); // el servidor dijo que no hay sesión, o no hay red ni cuenta en este celular
   else enterOffline(); // sin red: entra quien usó este celular, con lo que tenga descargado
   isAdmin = me.admin;
   musicOnly = !!me.musicOnly;

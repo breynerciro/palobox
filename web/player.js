@@ -60,7 +60,6 @@ let STREAM = (() => {
 // en el celular con lo descargado (deck, más abajo).
 export function goOffline() {
   // Si la red se cae con la app abierta, lo que sonaba sigue donde iba, ya desde lo descargado.
-  const now = queue[pos];
   const at = room ? roomTime() : audio.currentTime || resume;
   const play = here && (room ? room.playing : !audio.paused);
   STREAM = false;
@@ -71,6 +70,15 @@ export function goOffline() {
   here = true;
   document.body.classList.remove('in-room', 'own-stream');
   $('#jam').close();
+  keepDownloaded(at, play);
+}
+// purge: se quitaron descargas estando sin conexión; lo que ya no está en el celular sale de la cola.
+export function purge() {
+  if (offline.active && queue.some((t) => !offline.has(t.path))) keepDownloaded(deckTime(), !audio.paused);
+}
+// keepDownloaded deja en la cola solo lo descargado y sigue en la pista que sonaba, si quedó.
+function keepDownloaded(at, play) {
+  const now = queue[pos];
   if (!now) return;
   queue = queue.filter((t) => offline.has(t.path));
   order = order.filter((t) => offline.has(t.path));
@@ -79,6 +87,8 @@ export function goOffline() {
   if (queue.length) return load(Math.max(0, i), { play: play && i >= 0, at: i < 0 ? 0 : at });
   audio.pause(); // nada de la cola está descargado: el reproductor se guarda
   audio.removeAttribute('src');
+  if (deck) URL.revokeObjectURL(deck.url);
+  deck = null;
   pos = -1;
   $('#player').hidden = true;
   document.body.classList.remove('has-player');

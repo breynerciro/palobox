@@ -2,7 +2,7 @@
 import { $, el, icon, json, joinText, plural, size, clock, lazyImg, toast, ask, menu } from './lib.js';
 import { route, href, go, thumbUrl, render } from './nav.js';
 import { api } from './session.js';
-import { playAt, playNext, enqueue, audio } from './player.js';
+import { playAt, playNext, enqueue, audio, purge } from './player.js';
 import * as offline from './offline.js';
 
 const OFFLINE = 'Sin conexión con el servidor.';
@@ -96,7 +96,7 @@ function trackMenu(anchor, t, extra = []) {
     ...(extra || []),
     // Quitar una descarga se puede con o sin conexión; descargar, solo con conexión.
     offline.has(t.path) && (offline.enabled() || offline.active)
-      && { icon: 'trash', label: 'Quitar de las descargas', danger: true, run: async () => { await offline.remove([t.path]); toast(`«${t.title}» ya no está en este celular.`, { kind: 'ok' }); render(); } },
+      && { icon: 'trash', label: 'Quitar de las descargas', danger: true, run: async () => { await offline.remove([t.path]); purge(); toast(`«${t.title}» ya no está en este celular.`, { kind: 'ok' }); render(); } },
     canDownload() && !offline.has(t.path) && { icon: 'download', label: 'Descargar', run: () => fetchOffline([t]) },
   ]);
 }
@@ -167,6 +167,7 @@ export function downloadButton(tracks, playlist) {
     if (!(await ask({ heading: '¿Quitar de las descargas?', text: `${plural(tracks.length, 'canción deja', 'canciones dejan')} de estar en este celular. Siguen en la biblioteca.`, ok: 'Quitar', danger: true }))) return;
     if (playlist) offline.dropPlaylist(playlist.id);
     await offline.remove(tracks.map((t) => t.path));
+    purge();
     render();
   };
   return b;
@@ -179,6 +180,7 @@ export async function wipeDownloads() {
   const user = offline.saved();
   await offline.wipe();
   if (user) await offline.login(user); // sigue siendo su celular: solo se van las canciones
+  purge();
   render();
 }
 export function offlineBox() {
@@ -198,7 +200,7 @@ export function offlineBox() {
   }).catch(() => {});
   const row = el('div', { className: 'row static' }, el('span', { className: 'type', style: '--tc: var(--t-audio)' }, icon('download')),
     el('div', { className: 'row-text' }, el('p', { textContent: plural(n, 'canción descargada', 'canciones descargadas') }),
-      offline.active && el('p', { className: 'muted', textContent: 'Estás sin conexión: esto es lo que hay en este celular.' }), bar, sub));
+      bar, sub));
   const del = el('button', { className: 'icon-btn' }, icon('trash'));
   del.setAttribute('aria-label', 'Borrar todas las descargas');
   del.onclick = wipeDownloads;
