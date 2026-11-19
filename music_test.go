@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/cookiejar"
 	"net/http/httptest"
@@ -113,7 +114,7 @@ func TestIndiceYBusqueda(t *testing.T) {
 }
 
 func TestMeGustaEHistorial(t *testing.T) {
-	_, _, ana, luis := musicSetup(t)
+	a, _, ana, luis := musicSetup(t)
 	cai := "Ni%C3%B1a%20Pastori/Ca%C3%B1a%C3%ADlla/02%20-%20Cai.mp3"
 	for _, p := range []string{cai, "Juanes/Un%20d%C3%ADa%20normal/A%20Dios%20le%20pido.mp3", cai} { // repetir no duplica
 		if code, _, raw := ana.do("PUT", "/api/music/likes?path="+p, nil); code != 200 {
@@ -155,6 +156,30 @@ func TestMeGustaEHistorial(t *testing.T) {
 	ana.do("DELETE", "/api/music/likes?path="+cai, nil)
 	if _, m, _ = ana.do("GET", "/api/music", nil); len(m["likes"].([]any)) != 1 {
 		t.Fatalf("quitar me gusta: %v", m["likes"])
+	}
+
+	// Una playlist de Spotify recién descargada queda a quien la pidió, en orden y una sola vez por trabajo.
+	a.music.ImportPlaylist("ana", "trabajo1", "De Spotify", []string{"suelta.mp3", "Niña Pastori/Joyas/1. Amor de San Juan.flac", "no-existe.mp3"})
+	a.music.ImportPlaylist("ana", "trabajo1", "De Spotify", []string{"suelta.mp3"})
+	a.music.ImportPlaylist("ana", "trabajo2", "De Spotify", []string{"suelta.mp3", "Niña Pastori/Cañaílla/02 - Cai.mp3"}) // la misma, pedida otra vez: se completa
+	_, m, raw = ana.do("GET", "/api/music", nil)
+	var sp map[string]any
+	for _, x := range m["playlists"].([]any) {
+		if p := x.(map[string]any); p["name"] == "De Spotify" {
+			if sp != nil {
+				t.Fatalf("playlist de Spotify duplicada: %s", raw)
+			}
+			sp = p
+		}
+	}
+	if sp == nil {
+		t.Fatalf("falta la playlist de Spotify: %s", raw)
+	}
+	if _, m, raw = ana.do("GET", fmt.Sprintf("/api/music/playlists/%v", sp["id"]), nil); titles(m["tracks"]) != "suelta|Amor de San Juan|Cai" {
+		t.Fatalf("canciones de la playlist de Spotify: %s", raw)
+	}
+	if _, m, raw = luis.do("GET", "/api/music", nil); strings.Contains(string(raw), "De Spotify") {
+		t.Fatalf("la playlist es solo de quien la pidió: %s", raw)
 	}
 
 	// Historial: alimenta lo más escuchado, lo reciente y los populares del artista, por usuario.

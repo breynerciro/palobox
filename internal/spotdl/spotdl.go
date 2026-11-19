@@ -17,6 +17,8 @@ import (
 type Handler struct {
 	Module module.Module // sin URL = sección desactivada
 	Full   func() bool   // la biblioteca llegó a su tope de canciones: solo el administrador sigue descargando
+	// Playlist crea, a quien pidió la descarga, la playlist de Spotify que terminó de bajar (una vez por trabajo).
+	Playlist func(owner, job, name string, paths []string)
 }
 
 // room rechaza una descarga nueva cuando la biblioteca está llena. Se revisa al pedirla: una playlist grande
@@ -47,8 +49,9 @@ type Job struct {
 	Created  int64    `json:"created"`
 	Owner    string   `json:"owner"` // quién la pidió
 	Attempts int      `json:"attempts"`
-	Notice   string   `json:"notice"` // con status finished: el aviso que la interfaz muestra una vez
-	Mine     bool     `json:"mine"`   // lo calcula la app: puede cancelarla, quitarla o reintentarla
+	Notice   string   `json:"notice"`           // con status finished: el aviso que la interfaz muestra una vez
+	Mine     bool     `json:"mine"`             // lo calcula la app: puede cancelarla, quitarla o reintentarla
+	Tracks   []string `json:"tracks,omitempty"` // del servicio a la app: las canciones de una playlist terminada, en orden
 }
 
 // spotifyURL valida el enlace en la app y lo devuelve canónico (sin idioma ni parámetros).
@@ -79,6 +82,10 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request, u httpx.User) err
 	}
 	for i := range items {
 		items[i].Mine = items[i].Owner == u.Name || u.Admin
+		if j := items[i]; len(j.Tracks) > 0 && h.Playlist != nil && j.Status == "finished" && strings.Contains(j.URL, "/playlist/") {
+			h.Playlist(j.Owner, j.ID, j.Title, j.Tracks)
+		}
+		items[i].Tracks = nil // a la interfaz no le sirven
 	}
 	return httpx.WriteJSON(w, 200, map[string]any{"enabled": true, "items": items})
 }

@@ -60,7 +60,7 @@ func open(data string) (*app, error) {
 		photos:  &photos.Handler{DB: db, Data: data, Thumbs: thumbs},
 		uploads: uploads.New(db, data, thumbs),
 		music:   lib,
-		spotdl:  &spotdl.Handler{Full: lib.Full},
+		spotdl:  &spotdl.Handler{Full: lib.Full, Playlist: lib.ImportPlaylist},
 		jam:     &jam.Hub{Lookup: lib.ByPaths, More: lib.Random, Audio: lib.OpenStream},
 	}, nil
 }

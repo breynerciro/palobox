@@ -249,6 +249,8 @@ class Store:
         "attempts": "INTEGER NOT NULL DEFAULT 1",
         "failed": "TEXT NOT NULL DEFAULT '[]'",
         "notice": "TEXT NOT NULL DEFAULT ''",
+        "songs": "TEXT NOT NULL DEFAULT '[]'",  # playlist: sus canciones en orden, [[artistas], título]
+        "tracks": "TEXT NOT NULL DEFAULT '[]'",  # playlist terminada: la ruta de cada canción en la biblioteca
     }
 
     def __init__(self, path, keep_finished=30, max_attempts=3):
@@ -387,6 +389,16 @@ class Store:
             )
             self.db.commit()
 
+    def songs(self, jid):
+        with self.lock:
+            row = self.db.execute("SELECT songs FROM jobs WHERE id=?", (jid,)).fetchone()
+        return json.loads(row["songs"]) if row else []
+
+    def set_songs(self, jid, songs):
+        with self.lock:
+            self.db.execute("UPDATE jobs SET songs=? WHERE id=?", (json.dumps(songs, ensure_ascii=False), jid))
+            self.db.commit()
+
     def set_status(self, jid, status):
         with self.lock:
             self.db.execute(
@@ -395,14 +407,15 @@ class Store:
             )
             self.db.commit()
 
-    def finish(self, jid, status, error="", failed=(), notice="", title=""):
+    def finish(self, jid, status, error="", failed=(), notice="", title="", tracks=()):
         with self.lock:
             self.db.execute(
-                "UPDATE jobs SET status=?, error=?, failed=?, notice=?, "
+                "UPDATE jobs SET status=?, error=?, failed=?, notice=?, tracks=?, "
                 "title=CASE WHEN title='' THEN ? ELSE title END, "
                 "total=CASE WHEN total=0 AND done>0 THEN done ELSE total END "
                 "WHERE id=? AND status='downloading'",
-                (status, error, json.dumps(list(failed), ensure_ascii=False), notice, title, jid),
+                (status, error, json.dumps(list(failed), ensure_ascii=False), notice,
+                 json.dumps(list(tracks), ensure_ascii=False), title, jid),
             )
             self.db.commit()
             self.prune()
@@ -452,6 +465,8 @@ def job_json(row):
         "owner": row["owner"],
         "attempts": row["attempts"],
         "notice": row["notice"],
+        # Con una playlist terminada: sus canciones en orden, para que la app la cree a quien la pidió.
+        "tracks": json.loads(row["tracks"]) if row["status"] == "finished" else [],
     }
 
 
@@ -555,6 +570,17 @@ def index_library(music_dir):
             if ext.lower() == ".mp3":
                 index[(norm(parts[0]), norm(stem))].append(os.path.join(root, name))
     return index
+
+
+def playlist_tracks(songs, index, music_dir):
+    """Las rutas (relativas a la biblioteca) de las canciones de una playlist, en su orden; las que
+    no están en disco (fallaron) se omiten. songs: [[artistas], título]."""
+    out = []
+    for artists, title in songs:
+        paths = next((index[(norm(a), norm(title))] for a in artists if (norm(a), norm(title)) in index), None)
+        if paths:
+            out.append(os.path.relpath(sorted(paths)[0], music_dir).replace(os.sep, "/"))
+    return out
 
 
 def filter_plan(songs, index):
@@ -744,6 +770,8 @@ class Runner:
                 try:
                     with open(planfile, encoding="utf-8") as f:
                         plan = json.load(f)
+                    if "/playlist/" in url:
+                        self.store.set_songs(jid, [[[s.get("artist"), *(s.get("artists") or [])], s.get("name")] for s in plan])
                     todo, skip = filter_plan(plan, index_library(self.s.music_dir))
                     with open(todofile, "w", encoding="utf-8") as f:
                         json.dump(todo, f, ensure_ascii=False)
@@ -868,7 +896,15 @@ class Runner:
             return
         status, error, notice = outcome(job["title"], job["url"], failed, run_failed, job["attempts"], self.s.max_attempts, skipped)
         title = next((f["name"] for f in failed if f["name"]), "") if "/track/" in job["url"] else ""
-        self.store.finish(jid, status, error, failed, notice, title)
+        tracks = []
+        if status == "finished":
+            try:
+                tracks = playlist_tracks(self.store.songs(jid), index_library(self.s.music_dir), self.s.music_dir)
+            except Exception:  # la playlist es un extra: la descarga ya quedó
+                log.exception("trabajo %s: no se pudo armar la playlist", jid)
+            if tracks:
+                notice += " Quedó como playlist en Tu biblioteca."
+        self.store.finish(jid, status, error, failed, notice, title, tracks)
         if status == "error" and job["attempts"] == 1 and self.store.requeue(jid):
             status = "queued (reintento automático)"
         log.info("trabajo %s: %s, %d fallidas", jid, status, len(failed))

@@ -194,6 +194,12 @@ class FiltroTest(unittest.TestCase):
             todo, saltadas = server.filter_plan([cancion], server.index_library(self.music))
         return "salta" if saltadas else "baja"
 
+    def test_playlist_en_orden_con_lo_que_ya_estaba(self):
+        biblioteca(self.music, [("Penyair", "Nada", "Nada", 180, 1), ("Otra Banda", "Disco", "Canción Dos", 200, 9)])
+        songs = [[["Otra Banda", "Invitado"], "Canción dos"], [["Nadie"], "No bajó"], [["Invitado", "Penyair"], "Nada"]]
+        self.assertEqual(server.playlist_tracks(songs, server.index_library(self.music), self.music),
+                         ["Otra Banda/Disco/Canción Dos.mp3", "Penyair/Nada/Nada.mp3"])
+
     def test_sencillo_en_disco_y_llega_el_album(self):
         self.assertEqual(self.filtrar([("Penyair", "Nada", "Nada", 180, 1)], self.cancion(pistas=12)), "baja")
 
@@ -452,6 +458,17 @@ if lines:
         """Lo que se le pidió a spotDL en cada descarga (las URLs del .spotdl, si fue uno)."""
         return [c["todo"] or c["args"][1:c["args"].index("--output")] for c in self.llamadas() if c["args"][0] == "download"]
 
+    def test_playlist_terminada_trae_sus_canciones_en_orden(self):
+        for n in ("03", "01"):  # lo que quedó en disco (el spotDL de mentira no escribe archivos)
+            ruta = os.path.join(self.settings.music_dir, "Artista", "Tomá", f"Canción {n}.mp3")
+            os.makedirs(os.path.dirname(ruta), exist_ok=True)
+            open(ruta, "wb").close()
+        self.lista({})
+        _, job = self.request("POST", "/jobs", {"url": self.PLAYLIST})
+        fin = self.esperar(job["id"], ("finished",))
+        self.assertEqual(fin["tracks"], ["Artista/Tomá/Canción 01.mp3", "Artista/Tomá/Canción 03.mp3"])
+        self.assertIn("Quedó como playlist en Tu biblioteca.", fin["notice"])
+
     def test_fallo_transitorio_reintenta_solo_las_fallidas_y_luego_se_agota(self):
         t = self.TRACKS
         self.lista({t[0]: self.YTDLP, t[1]: self.YTDLP, t[2]: self.SIN_RESULTADOS})
@@ -485,7 +502,7 @@ if lines:
             _, job = self.request("POST", "/jobs", {"url": self.PLAYLIST})
             fin = self.esperar(job["id"], ("finished",))
         self.assertEqual(self.pedidas(), [[t[0], t[2], t[4]]])
-        self.assertEqual(fin["notice"], "«Tomá» ya está en tu biblioteca. 2 canciones ya estaban en la biblioteca.")
+        self.assertEqual(fin["notice"], "«Tomá» ya está en tu biblioteca. 2 canciones ya estaban en la biblioteca. Quedó como playlist en Tu biblioteca.")
         self.assertEqual(self.temporales(), [])
 
     def test_todo_ya_estaba_no_descarga(self):
@@ -497,7 +514,7 @@ if lines:
         self.assertEqual([c["args"][0] for c in self.llamadas()], ["save"])
         self.assertEqual((fin["status"], fin["error"]), ("finished", ""))
         self.assertEqual(self.service.store.failed(job["id"]), [])
-        self.assertEqual(fin["notice"], "«Tomá» ya está en tu biblioteca. 5 canciones ya estaban en la biblioteca.")
+        self.assertEqual(fin["notice"], "«Tomá» ya está en tu biblioteca. 5 canciones ya estaban en la biblioteca. Quedó como playlist en Tu biblioteca.")
         self.assertEqual(self.temporales(), [])
 
     def test_cancion_suelta_ya_estaba(self):

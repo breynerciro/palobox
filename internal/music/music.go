@@ -699,6 +699,45 @@ func (l *Library) touchPlaylist(id int64) {
 	l.DB.Exec(`UPDATE playlists SET updated = ? WHERE id = ?`, time.Now().UnixMilli(), id)
 }
 
+// ImportPlaylist deja a owner la playlist de Spotify que acaba de descargar (trabajo job), con sus canciones en
+// orden. Una sola vez por trabajo: si después la borra o la cambia, no vuelve. Si ya tiene una con ese nombre
+// (la pidió antes), le agrega al final las que falten en vez de duplicarla.
+func (l *Library) ImportPlaylist(owner, job, name string, paths []string) {
+	name = strings.TrimSpace(name)
+	if r := []rune(name); len(r) > 100 {
+		name = string(r[:100])
+	}
+	if name == "" || len(paths) == 0 {
+		return
+	}
+	res, err := l.DB.Exec(`INSERT OR IGNORE INTO spotdl_done(job) VALUES(?)`, job)
+	if err != nil {
+		log.Print("playlist de Spotify: ", err)
+		return
+	}
+	if n, _ := res.RowsAffected(); n == 0 {
+		return
+	}
+	var uid, id int64
+	if err := l.DB.QueryRow(`SELECT id FROM users WHERE name = ?`, owner).Scan(&uid); err != nil {
+		return // la cuenta ya no existe
+	}
+	now := time.Now().UnixMilli()
+	if l.DB.QueryRow(`SELECT id FROM playlists WHERE user_id = ? AND name = ?`, uid, name).Scan(&id) != nil {
+		res, err := l.DB.Exec(`INSERT INTO playlists(user_id, name, updated) VALUES(?, ?, ?)`, uid, name, now)
+		if err != nil {
+			log.Print("playlist de Spotify: ", err)
+			return
+		}
+		id, _ = res.LastInsertId()
+	}
+	for _, p := range paths {
+		l.DB.Exec(`INSERT OR IGNORE INTO playlist_tracks(playlist_id, path, pos)
+			VALUES(?, ?, (SELECT COALESCE(MAX(pos), -1) + 1 FROM playlist_tracks WHERE playlist_id = ?))`, id, p, id)
+	}
+	l.touchPlaylist(id)
+}
+
 func (l *Library) PlaylistCreate(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	name, err := playlistName(w, r)
 	if err != nil {
