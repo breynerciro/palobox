@@ -99,6 +99,23 @@ func (r *jamRoom) cur(now time.Time) float64 {
 }
 
 // after es la pista que suena cuando termina la i con el modo de repetir rep; -1 si la cola se acaba ahí.
+// find devuelve dónde está ahora la pista path que el cliente vio en el puesto i, o -1. La cola pudo recortarse
+// (extend) desde la foto del cliente, y un recorte solo la corre hacia atrás. Sin path vale el índice tal cual.
+func (r *jamRoom) find(i int, path string) int {
+	if path == "" || i >= 0 && i < len(r.queue) && r.queue[i].Path == path {
+		if i < 0 || i >= len(r.queue) {
+			return -1
+		}
+		return i
+	}
+	for k := min(i, len(r.queue)-1); k >= 0; k-- {
+		if r.queue[k].Path == path {
+			return k
+		}
+	}
+	return -1
+}
+
 func (r *jamRoom) after(i, rep int) int {
 	switch {
 	case rep == 2:
@@ -573,11 +590,12 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 				room.queue, room.manual = append(room.queue[:keep:keep], tracks...), max(0, min(in.Manual, len(tracks)))
 				room.qrev++
 			case "jump":
-				if in.Index < 0 || in.Index >= len(room.queue) {
-					break
+				i := room.find(in.Index, in.Path)
+				if i < 0 {
+					break // la cola cambió mientras tanto: la foto que vuelve lo muestra
 				}
-				room.manual = max(0, room.manual-(in.Index-room.pos))
-				room.set(in.Index, 0, true)
+				room.manual = max(0, room.manual-(i-room.pos))
+				room.set(i, 0, true)
 			case "next":
 				h.advance(room, false)
 			case "prev":

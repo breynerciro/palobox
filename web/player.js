@@ -556,8 +556,9 @@ export function jumpTo(i) {
     load(i);
     return void (!local && startRoom({ playing: true, at: 0 }));
   }
-  if (streaming()) return streamDo('jump', { index: i });
-  jam.send('jump', { index: i });
+  // La ruta va con el índice: si el servidor recortó la cola desde la última foto, la ubica en su puesto nuevo.
+  if (streaming()) return streamDo('jump', { index: i, path: queue[i]?.path });
+  jam.send('jump', { index: i, path: queue[i]?.path });
 }
 
 // Atajos de escritorio: espacio pausa, flechas adelantan 5 s, Mayús + flechas cambian de pista.
@@ -758,7 +759,7 @@ function streamDo(op, arg = {}) {
     if (p !== pos) load(p, { play: false, at });
   }
   const q = new URLSearchParams({ device: jam.deviceId, op, from, n: `${Date.now()}${Math.random()}` });
-  if (op === 'jump') q.set('index', arg.index);
+  if (op === 'jump') { q.set('index', arg.index); if (arg.path) q.set('path', arg.path); }
   if (op === 'seek') q.set('at', at);
   audio.src = `/api/jam/stream?${q}`;
   audio.play().then(() => (warned = false)).catch(streamBlocked);

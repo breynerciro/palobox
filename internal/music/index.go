@@ -157,14 +157,27 @@ func (l *Library) Sync() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "a",
 			"-show_entries", "format=duration:format_tags:stream_tags", "-of", "json", p).Output()
+		late := ctx.Err() == context.DeadlineExceeded
 		cancel()
 		<-l.Sem
+		// Se pasó del tiempo (equipo cargado o un archivo que cuelga a ffprobe): sin fila, para reintentarlo en los
+		// recorridos siguientes; a la tercera entra con lo de la ruta, para no gastar 15 s en cada recorrido. Si queda
+		// sin duración, el flujo continuo avanza igual al acabarse el archivo (jam/stream.go).
+		if late {
+			if l.late == nil {
+				l.late = map[string]int{}
+			}
+			if l.late[rel]++; l.late[rel] < 3 {
+				log.Print("índice de música: ", rel, ": ffprobe se pasó del tiempo; se reintenta")
+				return nil
+			}
+			log.Print("índice de música: ", rel, ": ffprobe se pasó del tiempo tres veces; entra con lo de la ruta")
+		}
+		delete(l.late, rel)
 		// No arrancó el proceso (falta de memoria o de procesos, algo pasajero y barato de repetir): sin fila, para
-		// que el siguiente recorrido lo intente de nuevo. Si ffprobe terminó con error o se pasó del tiempo (un
-		// archivo que lo cuelga lo haría en cada recorrido), la pista entra con lo de la ruta; si queda sin duración,
-		// el flujo continuo avanza igual al acabarse el archivo (jam/stream.go).
+		// que el siguiente recorrido lo intente de nuevo. Si ffprobe terminó con error, la pista entra con lo de la ruta.
 		var exit *exec.ExitError
-		if err != nil && !errors.As(err, &exit) && !errors.Is(err, exec.ErrNotFound) {
+		if !late && err != nil && !errors.As(err, &exit) && !errors.Is(err, exec.ErrNotFound) {
 			log.Print("índice de música: ", rel, ": ", err)
 			return nil
 		}

@@ -45,12 +45,11 @@ func WriteJSON(w http.ResponseWriter, code int, v any) error {
 
 // AcceptsGzip dice si el cliente acepta gzip; «gzip;q=0» es un rechazo explícito.
 func AcceptsGzip(r *http.Request) bool {
-	for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
-		name, params, _ := strings.Cut(part, ";")
-		if strings.TrimSpace(name) != "gzip" {
+	for _, part := range strings.Split(strings.ToLower(strings.ReplaceAll(r.Header.Get("Accept-Encoding"), " ", "")), ",") {
+		name, q, _ := strings.Cut(part, ";")
+		if name != "gzip" {
 			continue
 		}
-		q := strings.TrimSpace(params)
 		return !strings.HasPrefix(q, "q=0") || strings.Trim(q[3:], ".0") != ""
 	}
 	return false

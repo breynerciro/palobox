@@ -52,6 +52,8 @@ func TestAcceptsGzip(t *testing.T) {
 		"gzip; q=0.000":          false,
 		"identity, gzip;q=0.001": true,
 		"x-gzip":                 false,
+		"GZIP":                   true,
+		"gzip; Q = 0":            false,
 	} {
 		r, _ := http.NewRequest("GET", "/", nil)
 		r.Header.Set("Accept-Encoding", h)

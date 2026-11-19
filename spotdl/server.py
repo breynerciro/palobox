@@ -312,8 +312,10 @@ class Runner:
                         plan = json.load(f)
                     # spotDL descarta en silencio (código 0) lo que no pudo resolver: lo que falte frente a
                     # «Found N songs» cuenta como fallido y reintentable; sin URL, el reintento repite el enlace.
-                    # Una canción suelta no anuncia «Found N songs» (feed.total = 0): un plan vacío también es fallo.
-                    missing = [{"url": "", "name": "", "retry": True}] * max(0, max(feed.total, 1) - len(plan))
+                    # Una canción suelta no anuncia «Found N songs» (feed.total = 0): su plan vacío también es fallo.
+                    # Una lista vacía sí anuncia «Found 0 songs» y no tiene nada que bajar.
+                    expected = max(feed.total, 1) if "/track/" in url else feed.total
+                    missing = [{"url": "", "name": "", "retry": True}] * max(0, expected - len(plan))
                     titles = [s.get("name") for s in plan]
                     plan.sort(key=lambda s: s.get("list_position") or 0)  # spotDL lo arma en orden de llegada
                     if "/playlist/" in url:

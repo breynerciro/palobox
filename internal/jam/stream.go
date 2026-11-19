@@ -91,7 +91,8 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		case op == "prev" && from == room.pos:
 			room.manual = 0
 			room.set(max(room.pos-1, 0), 0, true)
-		case op == "jump" && index >= 0 && index < len(room.queue):
+		case op == "jump" && room.find(index, q.Get("path")) >= 0:
+			index = room.find(index, q.Get("path"))
 			room.manual = max(0, room.manual-(index-room.pos))
 			room.set(index, 0, true)
 		case op == "seek":
@@ -195,6 +196,17 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 			m.poke()
 		}
 	}
+	// missing cuenta pistas seguidas que no se pudieron abrir: con el disco de música desmontado todas fallarían, y
+	// saltar sin fin cargaría el servidor y a todos los miembros; se cierra el flujo como antes.
+	missing := 0
+	skip := func(i int, p string) bool {
+		if missing++; missing >= 3 {
+			return false
+		}
+		ended(i, p, true, 0)
+		first = true // la siguiente empieza desde su principio, no desde el colchón: el teléfono no tiene nada
+		return true
+	}
 	for !gone {
 		h.mu.Lock()
 		now := time.Now()
@@ -258,9 +270,12 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 				break
 			}
 			if !open(want, ti, 0) {
-				ended(ti, want.Path, true, 0) // ya no está en disco: se salta cuando la sala llegue a ella
+				if !skip(ti, want.Path) { // ya no está en disco: se salta cuando la sala llegue a ella
+					return nil
+				}
 				break
 			}
+			missing = 0
 			pump(tat) // …y el comienzo de la que sigue, por la misma conexión
 		case !fresh && src != nil && ti == idx && want.Path == path && tat-at > -streamSlip && tat-at < leadS+streamSlip:
 			if pump(tat-at) && dur <= 0 { // la pista sin duración se acabó: nadie más lo puede saber
@@ -268,7 +283,11 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 			}
 		default: // primera vez, o alguien saltó o adelantó: se empieza donde toca
 			if !open(want, ti, tat) {
-				ended(ti, want.Path, true, 0) // ya no está en disco: se pasa a la siguiente, por la espera del tick
+				if !skip(ti, want.Path) { // ya no está en disco: se pasa a la siguiente, por la espera del tick
+					return nil
+				}
+			} else {
+				missing = 0
 			}
 		}
 		fl.Flush()
