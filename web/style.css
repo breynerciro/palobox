@@ -323,10 +323,11 @@ code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .
 #player .icon-btn.play svg { width: 26px; height: 26px; }
 #player .icon-btn svg { width: 20px; height: 20px; }
 .seek { margin: 0; height: 24px; width: 100%; background: none; -webkit-appearance: none; appearance: none; cursor: pointer; --p: 0%; }
-.seek::-webkit-slider-runnable-track { height: 4px; border-radius: 999px; background: linear-gradient(90deg, var(--accent) var(--p), var(--line) var(--p)); }
-.seek::-moz-range-track { height: 4px; border-radius: 999px; background: linear-gradient(90deg, var(--accent) var(--p), var(--line) var(--p)); }
-.seek::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%; background: var(--text); }
-.seek::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; background: var(--text); }
+.seek::-webkit-slider-runnable-track { height: 3px; border-radius: 999px; background: linear-gradient(90deg, var(--accent) var(--p), var(--line) var(--p)); }
+.seek::-moz-range-track { height: 3px; border-radius: 999px; background: linear-gradient(90deg, var(--accent) var(--p), var(--line) var(--p)); }
+/* solo la línea, sin bola: la bola sigue ahí invisible para poder arrastrar */
+.seek::-webkit-slider-thumb { -webkit-appearance: none; width: 14px; height: 14px; margin-top: -5px; border-radius: 50%; opacity: 0; }
+.seek::-moz-range-thumb { width: 14px; height: 14px; border: 0; border-radius: 50%; opacity: 0; }
 /* Gestos de la barra mini (player.js): a los lados cambia de canción; hacia abajo la oculta, solo en la Nube.
    En Música el arrastre vertical sigue desplazando la página; en la Nube la barra se queda con él para poder ocultarla. */
 #player { touch-action: none; -webkit-user-select: none; user-select: none; }
