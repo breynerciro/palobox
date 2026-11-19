@@ -5,6 +5,7 @@
 package music
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"io/fs"
@@ -15,6 +16,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -479,36 +481,51 @@ func (l *Library) Artist(w http.ResponseWriter, r *http.Request, u httpx.User) e
 	return httpx.WriteJSON(w, 200, map[string]any{"saved": followed[dir], "path": dir, "name": dir, "albums": mine, "tracks": ts, "popular": popular})
 }
 
-var likeEscape = strings.NewReplacer(`\`, `\\`, `%`, `\%`, `_`, `\_`)
+// best deja lo que coincide con q, primero lo más exacto, hasta n (0 = todo); text dice dónde buscar.
+// A igual distancia gana el menor rank (nil = sin preferencia) y luego el orden de entrada.
+func best[T any](q query, items []T, n int, text func(T) string, rank func(T) int) []T {
+	type hit struct {
+		it   T
+		d, r int
+	}
+	hits := []hit{}
+	for _, it := range items {
+		if d, ok := q.match(text(it)); ok {
+			h := hit{it: it, d: d}
+			if rank != nil {
+				h.r = rank(it)
+			}
+			hits = append(hits, h)
+		}
+	}
+	slices.SortStableFunc(hits, func(a, b hit) int { return cmp.Or(a.d-b.d, a.r-b.r) })
+	if n > 0 && len(hits) > n {
+		hits = hits[:n]
+	}
+	out := make([]T, len(hits))
+	for i, h := range hits {
+		out[i] = h.it
+	}
+	return out
+}
 
-// musicSearch busca en el índice: cada palabra debe aparecer, sin importar tildes ni mayúsculas.
+// Search busca en el índice: cada palabra debe aparecer, sin importar tildes, mayúsculas ni ortografía
+// ("alkolirykos" encuentra "Alcolirykoz"), y tolera algún error de tecleo en palabras largas.
+// shortcut: recorre toda la biblioteca en Go en cada búsqueda; sobra con el tope de MUSIC_MAX, pero con
+// cientos de miles de pistas habría que guardar sound() en el índice.
 func (l *Library) Search(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	l.fresh()
 	out := map[string]any{"tracks": []track{}, "albums": []album{}, "artists": []artist{}, "playlists": []playlist{}}
-	words := strings.Fields(fold(r.URL.Query().Get("q")))
-	if len(strings.Join(words, "")) < 2 {
+	raw := fold(r.URL.Query().Get("q"))
+	if len(strings.Join(strings.Fields(raw), "")) < 2 {
 		return httpx.WriteJSON(w, 200, out)
 	}
-	has := func(s string) bool {
-		s = fold(s)
-		for _, w := range words {
-			if !strings.Contains(s, w) {
-				return false
-			}
-		}
-		return true
-	}
-	where, args := "", []any{}
-	for _, w := range words {
-		where += ` AND t.fold LIKE ? ESCAPE '\'`
-		args = append(args, "%"+likeEscape.Replace(w)+"%")
-	}
-	// fold empieza por el título: lo que coincide en el título sale antes que lo que coincide en el artista.
-	ts, err := l.tracks(`WHERE 1`+where+` ORDER BY instr(t.fold, ?), t.title LIMIT 30`, append(args, words[0])...)
+	q := newQuery(raw)
+	all, err := l.tracks(`ORDER BY t.title`)
 	if err != nil {
 		return err
 	}
-	all, err := l.albums(u)
+	albums, err := l.albums(u)
 	if err != nil {
 		return err
 	}
@@ -516,28 +533,21 @@ func (l *Library) Search(w http.ResponseWriter, r *http.Request, u httpx.User) e
 	if err != nil {
 		return err
 	}
-	albums, artists := []album{}, []artist{}
-	for _, al := range all {
-		if len(albums) < 12 && has(al.Name+" "+al.Artist) {
-			albums = append(albums, al)
-		}
-	}
-	for _, ar := range artistsOf(all, followed) {
-		if len(artists) < 8 && has(ar.Name) {
-			artists = append(artists, ar)
-		}
-	}
 	pls, err := l.playlists(u)
 	if err != nil {
 		return err
 	}
-	mine := []playlist{}
-	for _, p := range pls {
-		if has(p.Name) {
-			mine = append(mine, p)
+	// Lo que coincide en el título sale antes que lo que coincide solo en el artista o el álbum.
+	inTitle := func(t track) int {
+		if _, ok := q.match(t.Title); ok {
+			return 0
 		}
+		return 1
 	}
-	out["tracks"], out["albums"], out["artists"], out["playlists"] = ts, albums, artists, mine
+	out["tracks"] = best(q, all, 30, func(t track) string { return t.Title + " " + t.Artist + " " + t.Album }, inTitle)
+	out["albums"] = best(q, albums, 12, func(a album) string { return a.Name + " " + a.Artist }, nil)
+	out["artists"] = best(q, artistsOf(albums, followed), 8, func(a artist) string { return a.Name }, nil)
+	out["playlists"] = best(q, pls, 0, func(p playlist) string { return p.Name }, nil)
 	return httpx.WriteJSON(w, 200, out)
 }
 
