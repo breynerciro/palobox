@@ -364,6 +364,9 @@ body.has-player.paused:not(.music) #view { padding-bottom: calc(var(--tabs-h) + 
 .player-tab svg { width: 20px; height: 20px; }
 .player-open { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .player-text { display: grid; }
+/* Al deslizar para cambiar de canción solo se mueve el título: se recorta en su caja y pasa por debajo de la carátula. */
+.player-open { overflow: clip; overflow-clip-margin: 4px; }
+#player-cover { z-index: 1; }
 
 /* ---- Reproductor a pantalla completa ---- */
 #np { border: 0; margin: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; color: var(--text);

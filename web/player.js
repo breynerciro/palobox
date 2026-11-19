@@ -531,7 +531,7 @@ audio.addEventListener('playing', mediaActions);
 // Gestos de la barra mini: deslizar a los lados cambia de canción; hacia arriba abre la pantalla completa;
 // hacia abajo la oculta (solo en la Nube: en Música el reproductor es el centro de la sección).
 const bar = $('#player');
-const strip = bar.querySelector('.player-left'); // lo que acompaña al dedo al cambiar de canción
+const strip = bar.querySelector('.player-text'); // solo el título acompaña al dedo; carátula y botones se quedan
 const reduce = matchMedia('(prefers-reduced-motion: reduce)');
 let drag = null; // { id, x, y, t, mode: '' | 'x' | 'y' | 'up' }
 let swallowUntil = 0; // tras un arrastre, el click que le sigue no abre la pantalla completa
