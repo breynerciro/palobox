@@ -73,13 +73,18 @@ export function typeBadge(t) {
 // Avisos (éxito y errores; el progreso de subida tiene su propia píldora en uploads.js)
 
 let toastTimer;
-export function toast(text, { kind = '', sticky = false } = {}) {
+// action: { label, run } muestra un botón en el aviso (p. ej. «Actualizar»).
+export function toast(text, { kind = '', sticky = false, action = null } = {}) {
   clearTimeout(toastTimer);
   const t = $('#toast');
   t.hidden = false;
   t.className = kind;
   setIcon(t.querySelector('.toast-icon'), kind === 'ok' ? 'check' : kind === 'warn' ? 'alert' : 'upload');
   $('#toast-text').textContent = text;
+  const act = $('#toast-act');
+  act.hidden = !action;
+  act.textContent = action?.label ?? '';
+  act.onclick = action?.run ?? null;
   if (!sticky) toastTimer = setTimeout(() => (t.hidden = true), 5000);
 }
 $('#toast-close').onclick = () => ($('#toast').hidden = true);

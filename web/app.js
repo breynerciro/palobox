@@ -1,5 +1,5 @@
 // Punto de entrada: decide qué vista pintar según la ruta y mantiene la interfaz al día.
-import { $, el, empty } from './lib.js';
+import { $, el, empty, toast } from './lib.js';
 import { TABS, route, go, setRenderer, render } from './nav.js';
 import { audio, markPlaying, joinJam } from './player.js';
 import { isAdmin, musicOnly, start } from './session.js';
@@ -112,13 +112,18 @@ function skeleton(tab) {
 }
 
 // La app instalada en el celular no se recarga sola: al volver a primer plano, si el servidor
-// tiene otra versión de la interfaz, se recarga (salvo que esté sonando música o subiendo algo).
-let version;
+// tiene otra versión de la interfaz, se recarga. Si está sonando música no la corta: avisa y deja que el usuario
+// decida. Con una subida en curso espera a la próxima vez.
+let version, offered;
 async function checkVersion() {
   const v = await fetch('/api/version').then((r) => (r.ok ? r.text() : null)).catch(() => null);
   if (!v) return;
-  if (version && v !== version && audio.paused && !uploading) location.reload();
   version ??= v;
+  if (v === version || uploading) return;
+  if (audio.paused) return location.reload();
+  if (offered === v) return;
+  offered = v;
+  toast('Hay una versión nueva de PaloBox.', { sticky: true, action: { label: 'Actualizar', run: () => location.reload() } });
 }
 checkVersion();
 document.addEventListener('visibilitychange', () => document.visibilityState === 'visible' && checkVersion());
