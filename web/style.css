@@ -507,6 +507,11 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .offline #jam-link, .offline #mtabs-exit, .offline .side-foot, .offline #admin-link { display: none; }
 /* Me gusta y crear playlists también necesitan servidor: sin conexión la música descargada solo se escucha. */
 .offline .like, .offline #side-new { display: none; }
+/* Aviso fijo abajo, pegado a la barra de navegación, como una franja delgada: no mueve nada del encabezado. */
+#offline-bar { display: none; margin: 0 0 -8px; padding: 3px 0; text-align: center; font-size: .72rem; font-weight: 600; letter-spacing: .02em;
+  color: var(--muted); background: var(--surface-2); pointer-events: auto; }
+.offline #offline-bar { display: block; }
+.offline #view { margin-bottom: 22px; } /* lo último de la vista no queda bajo la franja */
 .cover.downloads { color: #fff; background: linear-gradient(145deg, #4fb6c6, #1f6f7d); }
 .offline-box { margin-top: 12px; }
 .offline-box .bar { margin: 6px 0 4px; }
