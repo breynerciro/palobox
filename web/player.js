@@ -171,10 +171,11 @@ function deckTick() {
     manual = Math.max(0, manual - 1);
     curPath = queue[k].path;
     present(queue[k], 0);
+    positionState(); // el audio unido no avisa el cambio de pista: sin esto la pantalla de bloqueo sigue con la anterior
   }
   const at = deckTime();
   if (!audio.paused && at >= 30) count();
-  if (Date.now() - savedAt > 5000) save();
+  if (Date.now() - savedAt > 5000) { save(); positionState(); } // y se corrige la deriva cada 5 s
   if (seeking) return;
   for (const s of seeks) setSeek(s, deck.lens[pos] ? at / deck.lens[pos] : 0);
   paintTimes(at, deck.lens[pos]);
