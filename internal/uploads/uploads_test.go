@@ -262,7 +262,7 @@ func TestSubidas(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 	h.finMu.Unlock()
 	wg.Wait()
-	if patch != 200 || post != 200 || postM["dup"] != true {
+	if patch != 200 || post != 200 || postM["done"] != true || postM["dup"] != false {
 		t.Fatalf("el POST debe esperar y ver la subida ya terminada: PATCH %d, POST %d %v", patch, post, postM)
 	}
 	if _, err := os.Stat(filepath.Join(data, "ana", "fotos", "2025", "03", "IMG_10.jpg")); err != nil {
@@ -270,5 +270,43 @@ func TestSubidas(t *testing.T) {
 	}
 	if _, err := os.Stat(h.tmp(id + ".json")); err == nil {
 		t.Fatal("el POST recreó una subida ya terminada")
+	}
+
+	// Se pierde la respuesta del PATCH que cerró un archivo y el cliente repite el POST: no se
+	// vuelven a pedir trozos ni aparece "nombre (1)".
+	meta = mustJSON(map[string]any{"kind": "file", "name": "perdida.bin", "size": len(body), "mtime": 7})
+	_, m, _ = ana.do("POST", "/api/uploads", meta)
+	id = m["id"].(string)
+	for i := range 5 {
+		ana.do("PATCH", fmt.Sprintf("/api/uploads/%s?chunk=%d", id, i), body[i<<20:min(len(body), (i+1)<<20)])
+	}
+	if _, m, raw := ana.do("POST", "/api/uploads", meta); m["done"] != true || m["missing"] != nil {
+		t.Fatalf("el reintento debe ver la subida terminada: %s", raw)
+	}
+	if _, err := os.Stat(filepath.Join(data, "ana", "archivos", "perdida (1).bin")); err == nil {
+		t.Fatal("el reintento guardó una copia")
+	}
+
+	// Dos imágenes distintas con el mismo nombre y tamaño se guardan las dos; un video con el
+	// mismo nombre y tamaño que otro ya guardado se toma por duplicado sin recibir datos.
+	for i, b := range [][]byte{[]byte("escaneo-A"), []byte("escaneo-B")} {
+		_, m, _ := ana.do("POST", "/api/uploads", mustJSON(map[string]any{"kind": "photo", "name": "scan.tif", "size": len(b), "mtime": 1741536000000 + i}))
+		id, ok := m["id"].(string)
+		if !ok {
+			t.Fatalf("imagen %d tomada por duplicado antes de subirla: %v", i, m)
+		}
+		if _, m, raw := ana.do("PATCH", "/api/uploads/"+id+"?chunk=0", b); m["done"] != true || m["dup"] != false {
+			t.Fatalf("imagen %d: %s", i, raw)
+		}
+	}
+	h.DB.QueryRow(`SELECT COUNT(*) FROM media WHERE name = 'scan.tif'`).Scan(&nmedia)
+	if nmedia != 2 {
+		t.Fatalf("deben quedar las dos imágenes: hay %d", nmedia)
+	}
+	video := []byte("video-de-ios")
+	_, m, _ = ana.do("POST", "/api/uploads", mustJSON(map[string]any{"kind": "photo", "name": "IMG_5.MOV", "size": len(video), "mtime": 1741536000000}))
+	ana.do("PATCH", "/api/uploads/"+m["id"].(string)+"?chunk=0", video)
+	if _, m, raw := ana.do("POST", "/api/uploads", mustJSON(map[string]any{"kind": "photo", "name": "IMG_5.MOV", "size": len(video), "mtime": 1741536999000})); m["dup"] != true {
+		t.Fatalf("el video con mismo nombre y tamaño debe ser duplicado: %s", raw)
 	}
 }

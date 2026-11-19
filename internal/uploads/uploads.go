@@ -47,7 +47,8 @@ type Handler struct {
 	finMu sync.Mutex // una foto a la vez pasa de "¿duplicado?" a quedar en el índice
 }
 
-// New prepara el receptor de subidas y borra las abandonadas hace más de una semana.
+// New prepara el receptor de subidas y borra las abandonadas y las marcas de terminado de hace
+// más de una semana.
 func New(db *sql.DB, data string, thumbs media.Thumbs) *Handler {
 	h := &Handler{DB: db, Data: data, Thumbs: thumbs, Chunk: 16 << 20}
 	if es, err := os.ReadDir(h.tmp("")); err == nil {
@@ -71,6 +72,12 @@ type upMeta struct {
 	Name  string `json:"name"`
 	Size  int64  `json:"size"`
 	Mtime int64  `json:"mtime"` // ms
+}
+
+// doneMark se guarda en id.done al cerrar una subida: dónde quedó (relativo a Data) y si era duplicado.
+type doneMark struct {
+	Path string `json:"path"`
+	Dup  bool   `json:"dup"`
 }
 
 var idRe = regexp.MustCompile(`^[0-9a-f]{32}$`)
@@ -108,14 +115,26 @@ func (h *Handler) Start(w http.ResponseWriter, r *http.Request, u httpx.User) er
 			return httpx.Error(400, "tipo de archivo no soportado")
 		}
 		// iOS reescribe marcas de hora al exportar videos, así que su huella cambia en cada
-		// subida: nombre + tamaño detecta esos duplicados antes de gastar datos.
+		// subida: nombre + tamaño detecta esos duplicados antes de gastar datos. Solo videos: dos
+		// imágenes sin comprimir (TIFF, DNG) pueden coincidir en ambos y ser distintas; esas se
+		// deduplican por SHA al cerrar.
 		var one int
-		if h.DB.QueryRow(`SELECT 1 FROM media WHERE user_id = ? AND name = ? AND size = ?`, u.ID, m.Name, m.Size).Scan(&one) == nil {
+		if mediaKind(m.Name) == "video" && h.DB.QueryRow(`SELECT 1 FROM media WHERE user_id = ? AND name = ? AND size = ?`, u.ID, m.Name, m.Size).Scan(&one) == nil {
 			return httpx.WriteJSON(w, 200, map[string]any{"done": true, "dup": true})
 		}
 	case "file":
 	default:
 		return httpx.Error(400, "tipo inválido")
+	}
+	// Ya cerrada (se perdió la respuesta del último PATCH y el cliente reintenta): se contesta igual
+	// que entonces en vez de pedir todo otra vez y guardar una copia "nombre (1)".
+	if b, err := os.ReadFile(h.tmp(id + ".done")); err == nil {
+		var d doneMark
+		if json.Unmarshal(b, &d) == nil {
+			if st, err := os.Stat(filepath.Join(h.Data, d.Path)); err == nil && st.Size() == m.Size {
+				return httpx.WriteJSON(w, 200, map[string]any{"done": true, "dup": d.Dup})
+			}
+		}
 	}
 	b, _ := json.Marshal(m)
 	if err := os.WriteFile(h.tmp(id+".json"), b, 0o644); err != nil {
@@ -256,9 +275,15 @@ func (h *Handler) finish(w http.ResponseWriter, u httpx.User, m upMeta, id strin
 		}
 		return httpx.WriteJSON(w, 200, map[string]any{"done": false})
 	}
-	dup, err := h.finalize(u, m, h.tmp(id+".part"))
+	dst, dup, err := h.finalize(u, m, h.tmp(id+".part"))
 	if err != nil {
 		return err
+	}
+	// Sin la marca, un reintento tras perder esta respuesta volvería a subir todo el archivo.
+	rel, _ := filepath.Rel(h.Data, dst)
+	b, _ := json.Marshal(doneMark{rel, dup})
+	if err := os.WriteFile(h.tmp(id+".done"), b, 0o644); err != nil {
+		log.Printf("subida %s: no se pudo dejar la marca de terminado: %v", id, err)
 	}
 	os.Remove(h.tmp(id + ".json"))
 	os.Remove(h.tmp(id + ".got"))
@@ -292,14 +317,15 @@ func (h *Handler) verify(part string, size int64, got map[int64]uint32) (bad []i
 	return bad, nil
 }
 
-func (h *Handler) finalize(u httpx.User, m upMeta, part string) (dup bool, err error) {
+// finalize guarda el .part y devuelve dónde quedó (si es duplicado, dónde ya estaba).
+func (h *Handler) finalize(u httpx.User, m upMeta, part string) (dst string, dup bool, err error) {
 	if m.Kind == "file" {
-		_, err := moveTo(part, httpx.Safe(httpx.UserDir(h.Data, u, "archivos"), filepath.Join(m.Dir, m.Name)))
-		return false, err
+		dst, err := moveTo(part, httpx.Safe(httpx.UserDir(h.Data, u, "archivos"), filepath.Join(m.Dir, m.Name)))
+		return dst, false, err
 	}
 	sha, err := hashFile(part)
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	// La fecha (vips/ffmpeg, hasta 15 s) solo lee el .part propio: va fuera del candado para
 	// que las subidas en paralelo no esperen en fila.
@@ -312,22 +338,22 @@ func (h *Handler) finalize(u httpx.User, m upMeta, part string) (dup bool, err e
 	// y eligen el mismo destino. Dentro solo quedan la consulta, el rename y el INSERT.
 	h.finMu.Lock()
 	defer h.finMu.Unlock()
-	var one int
-	if h.DB.QueryRow(`SELECT 1 FROM media WHERE user_id = ? AND sha = ?`, u.ID, sha).Scan(&one) == nil {
-		return true, os.Remove(part)
+	var old string
+	if h.DB.QueryRow(`SELECT path FROM media WHERE user_id = ? AND sha = ?`, u.ID, sha).Scan(&old) == nil {
+		return filepath.Join(h.Data, old), true, os.Remove(part)
 	}
-	dst, err := moveTo(part, filepath.Join(httpx.UserDir(h.Data, u, "fotos"), taken.Format("2006/01"), m.Name))
+	dst, err = moveTo(part, filepath.Join(httpx.UserDir(h.Data, u, "fotos"), taken.Format("2006/01"), m.Name))
 	if err != nil {
-		return false, err
+		return "", false, err
 	}
 	rel, _ := filepath.Rel(h.Data, dst)
 	if _, err := h.DB.Exec(`INSERT INTO media(user_id, sha, name, size, kind, taken, path) VALUES(?, ?, ?, ?, ?, ?, ?)`,
 		u.ID, sha, m.Name, m.Size, kind, taken.UnixMilli(), rel); err != nil {
 		os.Remove(dst) // sin fila en el índice el archivo quedaría huérfano
-		return false, err
+		return "", false, err
 	}
 	go h.Thumbs.Get(sha, dst, kind, "t") // si falla, se reintenta al pedir la miniatura
-	return false, nil
+	return dst, false, nil
 }
 
 func hashFile(p string) (string, error) {
