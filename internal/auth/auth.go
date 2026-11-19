@@ -23,7 +23,81 @@ type Service struct {
 	DB    *sql.DB
 	Admin string // usuario que ve el panel de administrador
 	mu    sync.Mutex
+	tries map[string]*tries // intentos de entrada por IP; lo protege mu
 }
+
+// tries lleva los fallos seguidos de una IP. busy: tiene un intento en curso (o pagando la espera del fallo).
+type tries struct {
+	busy bool
+	n    int
+	last time.Time
+}
+
+// penalty es lo que espera la respuesta tras el fallo n seguido: 1 s los tres primeros (un error de dedo no se
+// nota más que antes) y luego el doble cada vez, hasta 30 s. Con un solo intento a la vez por IP, un ataque
+// desde una IP queda en ~120 claves por hora.
+func penalty(n int) time.Duration {
+	if n <= 3 {
+		return time.Second
+	}
+	return min(time.Second<<(n-3), 30*time.Second)
+}
+
+// forget: tras este tiempo sin fallar, la IP empieza de cero y su entrada se puede borrar.
+const forget = 15 * time.Minute
+
+// begin reserva el turno de ip para un intento con clave. Si ya tiene uno en curso devuelve false: un
+// intento a la vez por IP, sin frenar a las demás ni a los aciertos entre sí.
+func (s *Service) begin(ip string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tries == nil {
+		s.tries = map[string]*tries{}
+	}
+	now := time.Now()
+	if len(s.tries) > 1000 { // limpieza: que el mapa no crezca sin fin con IP que ya no vuelven
+		for k, t := range s.tries {
+			if !t.busy && now.Sub(t.last) > forget {
+				delete(s.tries, k)
+			}
+		}
+	}
+	t := s.tries[ip]
+	if t == nil {
+		t = &tries{}
+		s.tries[ip] = t
+	}
+	if t.busy {
+		return false
+	}
+	if now.Sub(t.last) > forget {
+		t.n = 0
+	}
+	t.busy = true
+	return true
+}
+
+// end cierra el intento de ip. Un acierto olvida sus fallos; un fallo hace esperar la respuesta, con el turno
+// aún tomado, así que esa IP no puede seguir probando mientras tanto.
+func (s *Service) end(ip string, ok bool) {
+	s.mu.Lock()
+	if ok {
+		delete(s.tries, ip)
+		s.mu.Unlock()
+		return
+	}
+	t := s.tries[ip]
+	t.n++
+	wait := penalty(t.n)
+	s.mu.Unlock()
+	time.Sleep(wait)
+	s.mu.Lock()
+	t.busy, t.last = false, time.Now()
+	s.mu.Unlock()
+}
+
+// errBusy: la misma IP ya tiene un intento en curso.
+var errBusy = httpx.Error(429, "Espera un momento antes de volver a intentar.")
 
 var userRe = regexp.MustCompile(`^[a-z0-9_-]{1,32}$`)
 
@@ -101,14 +175,16 @@ func (s *Service) Invite(id int64) (token string, expires int64, err error) {
 
 var errInvite = httpx.Error(404, "Este enlace ya se usó o venció. Pídele uno nuevo al administrador.")
 
-// invited busca la invitación vigente de token. Un intento a la vez y el fallido cuesta 1 s, como en Login.
-func (s *Service) invited(token string) (id int64, name string, err error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+// invited busca la invitación vigente de token, con el mismo freno por IP que Login.
+func (s *Service) invited(r *http.Request, token string) (id int64, name string, err error) {
+	ip := clientIP(r)
+	if !s.begin(ip) {
+		return 0, "", errBusy
+	}
 	err = s.DB.QueryRow(`SELECT u.id, u.name FROM invites i JOIN users u ON u.id = i.user_id
 		WHERE i.hash = ? AND i.expires > ? AND u.disabled = 0`, inviteHash(token), time.Now().Unix()).Scan(&id, &name)
+	s.end(ip, err == nil)
 	if err != nil {
-		time.Sleep(time.Second)
 		return 0, "", errInvite
 	}
 	return id, name, nil
@@ -116,7 +192,7 @@ func (s *Service) invited(token string) (id int64, name string, err error) {
 
 // InviteInfo dice para qué usuario es un enlace, antes de pedirle la contraseña.
 func (s *Service) InviteInfo(w http.ResponseWriter, r *http.Request) {
-	_, name, err := s.invited(r.URL.Query().Get("token"))
+	_, name, err := s.invited(r, r.URL.Query().Get("token"))
 	if err != nil {
 		httpx.Fail(w, err)
 		return
@@ -136,7 +212,7 @@ func (s *Service) Accept(w http.ResponseWriter, r *http.Request) {
 		httpx.Fail(w, httpx.Error(400, err.Error()))
 		return
 	}
-	id, name, err := s.invited(in.Token)
+	id, name, err := s.invited(r, in.Token)
 	if err != nil {
 		httpx.Fail(w, err)
 		return
@@ -231,15 +307,23 @@ func (s *Service) DeleteUser(id int64) error {
 	return tx.Commit()
 }
 
-// clientIP es la IP de quien entra. Detrás de tailscale serve o un proxy llega en X-Forwarded-For;
-// el puerto solo escucha en 127.0.0.1, así que ese encabezado lo pone el proxy y solo se usa para mostrar.
+// clientIP es la IP de quien entra: frena los intentos de clave y se muestra en el panel. Las cabeceras del
+// proxy solo valen si la conexión viene de él; si no, cualquiera inventaría una IP por intento.
 func clientIP(r *http.Request) string {
-	if f := r.Header.Get("X-Forwarded-For"); f != "" {
-		return strings.TrimSpace(strings.Split(f, ",")[0])
-	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {
-		return r.RemoteAddr
+		host = r.RemoteAddr
+	}
+	// Suposición (compose.yml): el puerto solo se publica en 127.0.0.1 del host y Docker entrega esas conexiones desde
+	// la puerta de enlace de su red (privada), así que loopback o privada = tailscale serve, cloudflared u otro contenedor.
+	if ip := net.ParseIP(host); ip == nil || !(ip.IsLoopback() || ip.IsPrivate()) {
+		return host
+	}
+	if f := strings.TrimSpace(r.Header.Get("CF-Connecting-IP")); f != "" {
+		return f
+	}
+	if f := r.Header.Get("X-Forwarded-For"); f != "" { // el último lo agregó nuestro proxy; los anteriores los manda el cliente
+		return strings.TrimSpace(f[strings.LastIndex(f, ",")+1:])
 	}
 	return host
 }
@@ -291,16 +375,16 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	var id int64
 	var pass []byte
 	var off bool
-	// Un intento a la vez, y el fallido cuesta 1 s con el candado tomado: frena la fuerza
-	// bruta aunque lleguen en paralelo.
-	s.mu.Lock()
+	// Freno a la fuerza bruta por IP: un intento a la vez y cada fallo hace esperar más (ver penalty).
+	ip := clientIP(r)
+	if !s.begin(ip) {
+		httpx.Fail(w, errBusy)
+		return
+	}
 	err := s.DB.QueryRow(`SELECT id, pass, disabled FROM users WHERE name = ?`, in.Name).Scan(&id, &pass, &off)
 	ok := err == nil && bcrypt.CompareHashAndPassword(pass, []byte(in.Pass)) == nil
-	if !ok {
-		time.Sleep(time.Second)
-	}
-	s.mu.Unlock()
-	now, ip, agent := time.Now(), clientIP(r), cut(r.UserAgent(), 256)
+	s.end(ip, ok)
+	now, agent := time.Now(), cut(r.UserAgent(), 256)
 	// Registro de entradas para el panel; se guardan las últimas 1000.
 	s.DB.Exec(`INSERT INTO logins(at, name, ok, ip, agent) VALUES(?, ?, ?, ?, ?)`, now.Unix(), cut(in.Name, 64), ok && !off, ip, agent)
 	s.DB.Exec(`DELETE FROM logins WHERE rowid <= (SELECT MAX(rowid) - 1000 FROM logins)`)
