@@ -209,10 +209,15 @@ function searchView() {
   return query.length < 2 ? suggestView() : resultsView(query);
 }
 
-// Con el campo vacío: búsquedas recientes y sugerencias de la biblioteca. Las descargas se ven en Tu biblioteca.
+// Con el campo vacío: búsquedas recientes y el índice de artistas. Las descargas se ven en Tu biblioteca.
 async function suggestView() {
   const d = await ensureLib().catch(() => null);
   const recents = recentSearches();
+  // Para explorar sin escribir: los artistas con varias canciones, en orden alfabético. Inicio ya muestra lo
+  // reciente; los artistas de una o dos canciones se encuentran escribiendo.
+  let browse = (d?.artists || []).filter((a) => a.tracks >= 3);
+  if (browse.length < 6) browse = d?.artists || []; // biblioteca pequeña: todos
+  browse = [...browse].sort((a, b) => a.name.localeCompare(b.name, 'es'));
   const recentRow = (q) => {
     const b = el('button', { className: 'row' }, el('span', { className: 'type', style: '--tc: var(--muted)' }, icon('search')),
       el('div', { className: 'row-text' }, el('p', { className: 'ellipsis', textContent: q })));
@@ -225,7 +230,8 @@ async function suggestView() {
   };
   return frag(
     recents.length > 0 && frag(heading('Búsquedas recientes'), el('ul', { className: 'list' }, recents.map(recentRow))),
-    d?.albums.length ? shelves(d) : empty('search', 'Busca en tu música', 'Artistas, álbumes, canciones o tus playlists. Pega un enlace de Spotify para descargar lo que falta.'));
+    browse.length ? frag(heading('Explora por artista', browse.length), el('div', { className: 'cards compact' }, browse.map((a) => card(item.artist(a), songs(a.tracks)))))
+      : empty('search', 'Busca en tu música', 'Artistas, álbumes, canciones o tus playlists. Pega un enlace de Spotify para descargar lo que falta.'));
 }
 
 async function resultsView(q) {
