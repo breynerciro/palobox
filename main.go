@@ -49,16 +49,20 @@ func open(data string) (*app, error) {
 	if err != nil {
 		return nil, err
 	}
-	sem := make(chan struct{}, 2) // procesos pesados simultáneos (ffmpeg, vips): el servidor tiene 2 núcleos
-	thumbs := media.Thumbs{Dir: filepath.Join(data, ".palobox", "thumbs"), Sem: sem}
+	// Procesos pesados simultáneos (ffmpeg, vips), con cupos separados: carátulas e índice de la música (55
+	// cuentas) no pueden hacer esperar las fotos de la familia. Medido: con un cupo compartido, 30 personas
+	// abriendo álbumes llevaron la vista grande de una foto de 0,5 a 1,3 s.
+	sem, cloudSem := make(chan struct{}, 2), make(chan struct{}, 2)
+	dir := filepath.Join(data, ".palobox", "thumbs")
+	thumbs, cloudThumbs := media.Thumbs{Dir: dir, Sem: sem}, media.Thumbs{Dir: dir, Sem: cloudSem}
 	au := &auth.Service{DB: db}
 	lib := &music.Library{DB: db, Data: data, Sem: sem, Thumbs: thumbs}
 	return &app{
 		auth:    au,
 		admin:   &admin.Handler{DB: db, Data: data, Auth: au, Music: lib},
 		files:   &files.Handler{Data: data},
-		photos:  &photos.Handler{DB: db, Data: data, Thumbs: thumbs},
-		uploads: uploads.New(db, data, thumbs),
+		photos:  &photos.Handler{DB: db, Data: data, Thumbs: cloudThumbs},
+		uploads: uploads.New(db, data, cloudThumbs),
 		music:   lib,
 		spotdl:  &spotdl.Handler{Full: lib.Full, Playlist: lib.ImportPlaylist},
 		jam:     &jam.Hub{Lookup: lib.ByPaths, More: lib.Random, Audio: lib.OpenStream},

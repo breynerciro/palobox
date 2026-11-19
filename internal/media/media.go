@@ -17,7 +17,7 @@ import (
 // Thumbs genera y guarda miniaturas en Dir.
 type Thumbs struct {
 	Dir string
-	Sem chan struct{} // cupo de procesos pesados, compartido con el índice de música
+	Sem chan struct{} // cupo de procesos pesados; la música y la nube tienen cada una el suyo (main.go)
 }
 
 var errNoThumb = fs.ErrNotExist
