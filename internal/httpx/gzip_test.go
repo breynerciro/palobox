@@ -41,3 +41,22 @@ func TestGzip(t *testing.T) {
 		}
 	}
 }
+
+func TestAcceptsGzip(t *testing.T) {
+	for h, want := range map[string]bool{
+		"":                       false,
+		"gzip":                   true,
+		"gzip, deflate, br":      true,
+		"br;q=1.0, gzip;q=0.8":   true,
+		"gzip;q=0, identity":     false,
+		"gzip; q=0.000":          false,
+		"identity, gzip;q=0.001": true,
+		"x-gzip":                 false,
+	} {
+		r, _ := http.NewRequest("GET", "/", nil)
+		r.Header.Set("Accept-Encoding", h)
+		if got := AcceptsGzip(r); got != want {
+			t.Errorf("%q: %v, quería %v", h, got, want)
+		}
+	}
+}

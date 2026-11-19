@@ -295,6 +295,14 @@ if lines:
         self.assertEqual(fin["error"], "5 canciones no se pudieron descargar")
         self.assertEqual([c["args"][0] for c in self.llamadas()], ["save", "save"])
 
+    def test_cancion_suelta_sin_plan_no_es_exito(self):
+        # Una canción suelta no anuncia «Found N songs»: sin esa cuenta, el plan vacío también es fallo.
+        self.lista({}, take=0)
+        _, job = self.request("POST", "/jobs", {"url": "https://open.spotify.com/track/" + "4" * 22})
+        fin = self.esperar(job["id"], ("error",), intentos=2)
+        self.assertEqual([c["args"][0] for c in self.llamadas()], ["save", "save"])
+        self.assertNotIn("ya está", fin.get("notice") or "")
+
     def test_un_fallo_inesperado_no_detiene_la_cola(self):
         self.service.settings = dataclasses.replace(self.settings, max_active=5)
         real, fallas = self.service.store.progress, []

@@ -54,9 +54,18 @@ func TestLoginThrottlePerIP(t *testing.T) {
 	if c := <-bad; c != 401 {
 		t.Fatalf("clave mala: %d", c)
 	}
-	// Pasada la espera, A vuelve a poder entrar y el acierto olvida sus fallos.
-	if c := login(s, "203.0.113.1:1000", "clave-segura"); c != 200 || s.tries["203.0.113.1"] != nil {
+	// Pasada la espera, A vuelve a poder entrar y el acierto olvida los fallos de esa cuenta.
+	if c := login(s, "203.0.113.1:1000", "clave-segura"); c != 200 || len(s.tries["203.0.113.1"].fails) != 0 {
 		t.Fatalf("A tras la espera: %d", c)
+	}
+	// Un acierto en la cuenta propia no borra los fallos contra otra: alternarlas no desarma el freno.
+	if !s.begin("203.0.113.9") {
+		t.Fatal("turno")
+	}
+	s.tries["203.0.113.9"].fails = map[string]int{"admin": 5}
+	s.end("203.0.113.9", "ana", true)
+	if f := s.tries["203.0.113.9"].fails; f["admin"] != 5 || s.tries["203.0.113.9"].busy {
+		t.Fatalf("fallos contra admin tras entrar como ana: %v", f)
 	}
 }
 

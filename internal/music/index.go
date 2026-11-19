@@ -157,13 +157,14 @@ func (l *Library) Sync() {
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		out, err := exec.CommandContext(ctx, "ffprobe", "-v", "error", "-select_streams", "a",
 			"-show_entries", "format=duration:format_tags:stream_tags", "-of", "json", p).Output()
-		late := ctx.Err() != nil
 		cancel()
 		<-l.Sem
-		// Se acabó el tiempo o no arrancó el proceso: sin fila, para que el siguiente recorrido lo intente de nuevo.
-		// Si ffprobe terminó con error por su cuenta (o no está instalado), la pista entra con lo de la ruta.
+		// No arrancó el proceso (falta de memoria o de procesos, algo pasajero y barato de repetir): sin fila, para
+		// que el siguiente recorrido lo intente de nuevo. Si ffprobe terminó con error o se pasó del tiempo (un
+		// archivo que lo cuelga lo haría en cada recorrido), la pista entra con lo de la ruta; si queda sin duración,
+		// el flujo continuo avanza igual al acabarse el archivo (jam/stream.go).
 		var exit *exec.ExitError
-		if late || err != nil && !errors.As(err, &exit) && !errors.Is(err, exec.ErrNotFound) {
+		if err != nil && !errors.As(err, &exit) && !errors.Is(err, exec.ErrNotFound) {
 			log.Print("índice de música: ", rel, ": ", err)
 			return nil
 		}

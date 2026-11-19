@@ -43,12 +43,25 @@ func WriteJSON(w http.ResponseWriter, code int, v any) error {
 	return json.NewEncoder(w).Encode(v)
 }
 
+// AcceptsGzip dice si el cliente acepta gzip; «gzip;q=0» es un rechazo explícito.
+func AcceptsGzip(r *http.Request) bool {
+	for _, part := range strings.Split(r.Header.Get("Accept-Encoding"), ",") {
+		name, params, _ := strings.Cut(part, ";")
+		if strings.TrimSpace(name) != "gzip" {
+			continue
+		}
+		q := strings.TrimSpace(params)
+		return !strings.HasPrefix(q, "q=0") || strings.Trim(q[3:], ".0") != ""
+	}
+	return false
+}
+
 // Gzip comprime las respuestas JSON de h si el cliente lo acepta: /api/music pasa de MB a cientos de KB.
 // Solo para rutas que responden JSON: el envoltorio no es http.Flusher, que el audio y los eventos necesitan.
 func Gzip(h http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Add("Vary", "Accept-Encoding")
-		if !strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		if !AcceptsGzip(r) {
 			h(w, r)
 			return
 		}

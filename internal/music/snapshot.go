@@ -17,7 +17,6 @@ import (
 	"slices"
 	"sort"
 	"strconv"
-	"strings"
 
 	"palobox/internal/httpx"
 	"palobox/internal/natsort"
@@ -108,7 +107,7 @@ func (l *Library) Catalog(w http.ResponseWriter, r *http.Request, u httpx.User) 
 	h.Set("Content-Type", "application/json")
 	h.Set("Cache-Control", "private, max-age=31536000, immutable")
 	h.Set("Vary", "Accept-Encoding")
-	if strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+	if httpx.AcceptsGzip(r) {
 		h.Set("Content-Encoding", "gzip")
 		h.Set("Content-Length", strconv.Itoa(len(s.catalog)))
 		_, err = w.Write(s.catalog)
@@ -237,10 +236,14 @@ func (l *Library) Random(n int, not string) ([]Track, error) {
 		return nil, err
 	}
 	out := []Track{}
-	for _, i := range rand.Perm(len(s.tracks)) {
-		if len(out) == n {
-			break
+	// Índices al azar sin repetir, en vez de barajar toda la biblioteca para quedarse con n.
+	seen := map[int]bool{}
+	for len(out) < n && len(seen) < len(s.tracks) {
+		i := rand.IntN(len(s.tracks))
+		if seen[i] {
+			continue
 		}
+		seen[i] = true
 		if s.tracks[i].Path != not {
 			out = append(out, s.tracks[i])
 		}

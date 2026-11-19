@@ -28,9 +28,9 @@ type Service struct {
 
 // tries lleva los fallos seguidos de una IP. busy: tiene un intento en curso (o pagando la espera del fallo).
 type tries struct {
-	busy bool
-	n    int
-	last time.Time
+	busy  bool
+	fails map[string]int // fallos por cuenta (las invitaciones van en ""); la espera usa la suma
+	last  time.Time
 }
 
 // penalty es lo que espera la respuesta tras el fallo n seguido: 1 s los tres primeros (un error de dedo no se
@@ -71,24 +71,33 @@ func (s *Service) begin(ip string) bool {
 		return false
 	}
 	if now.Sub(t.last) > forget {
-		t.n = 0
+		t.fails = nil
 	}
 	t.busy = true
 	return true
 }
 
-// end cierra el intento de ip. Un acierto olvida sus fallos; un fallo hace esperar la respuesta, con el turno
-// aún tomado, así que esa IP no puede seguir probando mientras tanto.
-func (s *Service) end(ip string, ok bool) {
+// end cierra el intento de ip contra la cuenta who. Un fallo hace esperar la respuesta, con el turno aún tomado,
+// así que esa IP no puede seguir probando mientras tanto. Un acierto olvida solo los fallos de esa cuenta: quien
+// tiene cuenta propia no puede alternarla con intentos contra otra para no pasar nunca de 1 s.
+func (s *Service) end(ip, who string, ok bool) {
 	s.mu.Lock()
+	t := s.tries[ip]
 	if ok {
-		delete(s.tries, ip)
+		delete(t.fails, who)
+		t.busy = false
 		s.mu.Unlock()
 		return
 	}
-	t := s.tries[ip]
-	t.n++
-	wait := penalty(t.n)
+	if t.fails == nil {
+		t.fails = map[string]int{}
+	}
+	t.fails[who]++
+	n := 0
+	for _, f := range t.fails {
+		n += f
+	}
+	wait := penalty(n)
 	s.mu.Unlock()
 	time.Sleep(wait)
 	s.mu.Lock()
@@ -190,7 +199,7 @@ func (s *Service) invited(r *http.Request, token string) (id int64, name string,
 	}
 	err = s.DB.QueryRow(`SELECT u.id, u.name FROM invites i JOIN users u ON u.id = i.user_id
 		WHERE i.hash = ? AND i.expires > ? AND u.disabled = 0`, inviteHash(token), time.Now().Unix()).Scan(&id, &name)
-	s.end(ip, err == nil)
+	s.end(ip, "", err == nil)
 	if err != nil {
 		return 0, "", errInvite
 	}
@@ -407,7 +416,7 @@ func (s *Service) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	err := s.DB.QueryRow(`SELECT id, pass, disabled FROM users WHERE name = ?`, in.Name).Scan(&id, &pass, &off)
 	ok := err == nil && bcrypt.CompareHashAndPassword(pass, []byte(in.Pass)) == nil
-	s.end(ip, ok)
+	s.end(ip, in.Name, ok)
 	now, agent := time.Now(), cut(r.UserAgent(), 256)
 	// Registro de entradas para el panel; se guardan las últimas 1000.
 	s.DB.Exec(`INSERT INTO logins(at, name, ok, ip, agent) VALUES(?, ?, ?, ?, ?)`, now.Unix(), cut(in.Name, 64), ok && !off, ip, agent)

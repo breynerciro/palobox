@@ -279,6 +279,8 @@ class Runner:
         todofile = os.path.join(self.s.state_dir, f"to-download-{jid}.spotdl")
         temps = (errfile, savefile, planfile, todofile)
         remove(temps)
+        # shortcut: tras un corte de luz solo se conocen las canciones de una playlist (set_songs); de un álbum o
+        # una canción suelta, el MP3 a medias queda. Guardar el plan de todo trabajo si eso llega a pasar.
         drop_partial(self.s.music_dir, job["created"], [t for _, t in self.store.songs(jid)])  # de una corrida anterior
         cookie = ["--cookie-file", self.s.cookie_file] if self.s.cookie_file else []
         # Las credenciales de Spotify las lee spotDL de su config.json (Settings.write_spotify_config).
@@ -290,6 +292,7 @@ class Runner:
             self.store.progress(jid, feed)
         started = time.monotonic()  # el tiempo máximo cubre el plan y la descarga
         missing = []
+        titles = [t for _, t in self.store.songs(jid)]  # para drop_partial; con el plan se sabe para todo tipo de enlace
         try:
             query, skipped = urls or [url], 0
             if not urls:
@@ -309,7 +312,9 @@ class Runner:
                         plan = json.load(f)
                     # spotDL descarta en silencio (código 0) lo que no pudo resolver: lo que falte frente a
                     # «Found N songs» cuenta como fallido y reintentable; sin URL, el reintento repite el enlace.
-                    missing = [{"url": "", "name": "", "retry": True}] * max(0, feed.total - len(plan))
+                    # Una canción suelta no anuncia «Found N songs» (feed.total = 0): un plan vacío también es fallo.
+                    missing = [{"url": "", "name": "", "retry": True}] * max(0, max(feed.total, 1) - len(plan))
+                    titles = [s.get("name") for s in plan]
                     plan.sort(key=lambda s: s.get("list_position") or 0)  # spotDL lo arma en orden de llegada
                     if "/playlist/" in url:
                         self.store.set_songs(jid, [[[s.get("artist"), *(s.get("artists") or [])], s.get("name")] for s in plan])
@@ -353,7 +358,7 @@ class Runner:
                 self.settle(jid, keep + missing + failures_from(errfile, song_names(savefile)), False, skipped)
         finally:
             remove(temps)
-            drop_partial(self.s.music_dir, job["created"], [t for _, t in self.store.songs(jid)])
+            drop_partial(self.s.music_dir, job["created"], titles)
 
     def spotdl(self, jid, args, feed, started):
         """Corre spotDL e informa el avance. Devuelve su código (o 1 si no arrancó o se pasó del

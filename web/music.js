@@ -21,7 +21,8 @@ export async function library() {
     if (cat?.v !== d.catalog) {
       const c = await api(`/api/music/catalog?v=${encodeURIComponent(d.catalog)}`); // la versión va en la URL: sale de la caché del navegador
       if (!c.ok) throw new Error('Intenta de nuevo en un momento.');
-      cat = { v: d.catalog, ...await c.json() };
+      // La versión de la URL final: si el índice cambió entretanto, el servidor redirige a otra más nueva.
+      cat = { v: new URL(c.url, location.href).searchParams.get('v') ?? d.catalog, ...await c.json() };
     }
     d = withCatalog(d, cat);
   }
