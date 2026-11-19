@@ -1,5 +1,5 @@
 // Sesión: peticiones autenticadas, entrada y salida.
-import { $, json, ask } from './lib.js';
+import { $, json, ask, toast } from './lib.js';
 import { render } from './nav.js';
 import { restore, reset, goOffline, goOnline } from './player.js';
 import { forget, resumeDownloads } from './music.js';
@@ -82,6 +82,14 @@ function enterOffline() {
   if (offline.active) return;
   offline.enter();
   goOffline();
+  // Sin servidor toda cuenta queda como de solo música; al volver, start() le devuelve su acceso con /api/me.
+  if (!musicOnly && !$('#app').hidden) {
+    $('#viewer').close();
+    toast('Sin conexión: tienes tu música descargada. Fotos y Archivos vuelven cuando te conectes.', { kind: 'warn' });
+  }
+  musicOnly = true;
+  isAdmin = false;
+  document.body.classList.add('music-only');
   // Volvió el servidor: la app vuelve al modo normal en el acto, sin recargar; lo que suena no se corta (goOnline).
   let busy = false;
   const back = async () => {

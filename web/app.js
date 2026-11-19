@@ -36,8 +36,8 @@ async function renderView() {
     history.replaceState(null, '', '#/musica');
     joinJam(invite[1]);
   }
-  // Una cuenta de solo Música no tiene Fotos ni Archivos (el servidor tampoco se los entrega).
-  if (musicOnly && ['fotos', 'archivos'].includes(route().tab)) history.replaceState(null, '', '#/musica');
+  // Una cuenta de solo Música (o cualquiera sin conexión) no tiene Fotos ni Archivos (el servidor tampoco se los entrega).
+  if ((musicOnly && ['fotos', 'archivos'].includes(route().tab)) || (!isAdmin && route().tab === 'admin')) history.replaceState(null, '', '#/musica');
   const { tab, path } = route();
   const id = ++renderId;
   for (const a of document.querySelectorAll('#tabs a')) {

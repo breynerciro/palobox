@@ -2,6 +2,7 @@
 import { $, sleep, json, plural, toast } from './lib.js';
 import { route, render } from './nav.js';
 import { api } from './session.js';
+import * as offline from './offline.js';
 
 // Máximo 8 peticiones a la vez entre todos los archivos: varios trozos de un video pesado viajan
 // en paralelo y mientras el servidor cierra un archivo los demás siguen enviando. La app solo se
@@ -96,6 +97,12 @@ async function upload(files, kind, dir) {
           if (await uploadOne(f, kind, dir, (p) => { sent[i] = p * f.size; paint(); })) dups++;
           break;
         } catch (e) {
+          if (offline.active) { // se cayó la red: la subida espera y sigue donde iba (el servidor sabe qué trozos faltan)
+            paint('Sin conexión: la subida sigue cuando vuelva la red…');
+            while (offline.active) await sleep(3000);
+            tries--;
+            continue;
+          }
           if (tries === 3) { failed.push(f.name); break; }
           paint(`Conexión inestable, reintentando ${f.name}…`);
           await sleep(2000); // al reintentar, el servidor dice qué trozos faltan

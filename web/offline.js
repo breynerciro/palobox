@@ -1,4 +1,5 @@
-// Modo sin conexión (cuentas de solo música): descargar música al celular y usar la app sin servidor.
+// Modo sin conexión (todas las cuentas): descargar música al celular y usar la app sin servidor. Sin conexión toda
+// cuenta queda como de solo música: Fotos, Archivos y Administración necesitan el servidor.
 //
 // - El audio se guarda ya «limpio» (/api/music/offline: solo cuadros MP3, sin etiquetas) en la caché del
 //   navegador. Así varias canciones se unen una tras otra en un solo audio (player.js), que es lo que deja pasar
@@ -13,13 +14,13 @@ const HZ = 48000; // todo lo descargado es MPEG-1 capa III a 48 kHz en estéreo 
 const FRAME = 1152 / HZ; // segundos de cada cuadro MP3
 const VERSION = 2; // formato de lo guardado: si cambia, lo descargado antes no se puede unir con lo nuevo
 const MAX_AWAY = 30 * 24 * 3600 * 1000; // sin pasar por el servidor en este tiempo (lo que dura una sesión), ya no se entra
-const blank = () => ({ v: VERSION, user: '', musicOnly: false, seen: 0, tracks: {}, albums: {}, artists: {}, playlists: {}, likes: [], top: [], recent: [], pending: [] });
+const blank = () => ({ v: VERSION, user: '', seen: 0, tracks: {}, albums: {}, artists: {}, playlists: {}, likes: [], top: [], recent: [], pending: [] });
 let state = blank();
 try {
   const kept = JSON.parse(localStorage.getItem(KEY));
   if (kept?.v === VERSION) state = { ...blank(), seen: Date.now(), ...kept }; // seen: lo guardado antes de que existiera cuenta desde hoy
   else if (kept) { // descargas de un formato anterior: se sueltan (no se pueden unir con las nuevas); la cuenta sigue
-    state = { ...blank(), user: kept.user ?? '', musicOnly: !!kept.musicOnly };
+    state = { ...blank(), user: kept.user ?? '' };
     localStorage.setItem(KEY, JSON.stringify(state));
     caches.delete(AUDIO);
   }
@@ -27,17 +28,16 @@ try {
 // store guarda el estado y dice si se pudo: el cupo de localStorage se puede llenar.
 const store = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); return true; } catch { return false; } };
 const held = new Map(); // ruta → Blob ya leído de la caché: rearmar el audio unido no vuelve a consultarla
-const forced = (() => { try { return localStorage.getItem('palobox.sinconexion') === '1'; } catch { return false; } })(); // para probar con otra cuenta
 
 export let active = false; // la app está funcionando sin servidor
 export const audioUrl = (path) => `/api/music/offline?path=${encodeURIComponent(path)}`;
 const thumb = (dir) => `/api/media/thumb?lib=musica&path=${encodeURIComponent(dir)}`;
-export const enabled = () => state.musicOnly || forced; // quién puede descargar
+export const enabled = () => !!state.user; // quién puede descargar: cualquiera que inició sesión en este celular
 export const has = (path) => !!state.tracks[path];
 export const count = () => Object.keys(state.tracks).length;
 export const bytes = () => Object.values(state.tracks).reduce((n, x) => n + x.bytes, 0);
-// saved: el usuario que puede entrar sin conexión en este celular: el último que inició sesión, si su cuenta
-// puede descargar. Entra aunque todavía no haya bajado nada; verá la biblioteca vacía.
+// saved: el usuario que puede entrar sin conexión en este celular: el último que inició sesión, como cuenta de
+// solo música. Entra aunque todavía no haya bajado nada; verá la biblioteca vacía.
 // Como la cuenta no se puede comprobar sin servidor, solo vale un tiempo desde la última vez que sí se comprobó.
 export const saved = () => (state.user && enabled() && Date.now() - state.seen < MAX_AWAY ? { name: state.user, admin: false, musicOnly: true } : null);
 // tracks: todo lo descargado, ordenado por artista, álbum y número de pista (la playlist «Canciones descargadas»).
@@ -54,7 +54,6 @@ export function leave() {
 export async function login(me) {
   if (state.user && state.user !== me.name) await wipe();
   state.user = me.name;
-  state.musicOnly = !!me.musicOnly;
   state.seen = Date.now();
   store();
 }
