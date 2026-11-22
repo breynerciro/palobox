@@ -5,6 +5,7 @@ package music
 // shortcut: reproducción directa, sin transcodificar: cada dispositivo reproduce solo los formatos que soporta.
 
 import (
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"encoding/hex"
@@ -32,6 +33,11 @@ type Library struct {
 	idxAt   time.Time      // último recorrido completo; lo protege idxMu
 	changed bool           // el recorrido en curso tocó la tabla tracks; lo protege idxMu
 	late    map[string]int // veces que ffprobe se pasó del tiempo con cada pista; lo protege idxMu
+
+	// Ask pregunta a Gemini (gemini.Client.Ask); nil = sin IA: no se clasifican artistas nuevos ni hay playlists por descripción.
+	Ask       func(ctx context.Context, hard bool, system, prompt string, schema map[string]any, out any) error
+	classMu   sync.Mutex // una clasificación de géneros a la vez
+	classWait time.Time  // tras un fallo de Gemini no se reintenta antes de esta hora; lo protege classMu
 
 	snapshot atomic.Pointer[snapshot] // lo del índice que no depende del usuario (snapshot.go)
 	snapMu   sync.Mutex               // una construcción de la instantánea a la vez

@@ -17,6 +17,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 
 	"palobox/internal/httpx"
 	"palobox/internal/natsort"
@@ -24,9 +25,10 @@ import (
 
 // snapshot es inmutable: un cambio publica otra y las peticiones en curso siguen con la que tomaron.
 type snapshot struct {
-	tracks   []track // por título, con su texto de búsqueda
-	fresh    []track // las 40 más nuevas
-	albums   []album // por nombre, sin datos del usuario
+	genre    map[string]string // artista (carpeta, sin tildes ni mayúsculas) → «familia/género» (genres.go)
+	tracks   []track           // por título, con su texto de búsqueda
+	fresh    []track           // las 40 más nuevas
+	albums   []album           // por nombre, sin datos del usuario
 	artists  []artist
 	albumAt  map[string]int // carpeta -> posición en albums
 	artistAt map[string]int
@@ -38,6 +40,9 @@ func (l *Library) build() (*snapshot, error) {
 	s := &snapshot{albumAt: map[string]int{}, artistAt: map[string]int{}}
 	var err error
 	if s.tracks, err = l.tracks(`ORDER BY t.title`); err != nil {
+		return nil, err
+	}
+	if s.genre, err = l.genres(); err != nil {
 		return nil, err
 	}
 	for i := range s.tracks {
@@ -229,24 +234,41 @@ func (l *Library) library(u httpx.User) (*snapshot, []album, []artist, error) {
 	return s, albums, artists, nil
 }
 
-// Random devuelve hasta n pistas al azar de toda la biblioteca, menos not.
-func (l *Library) Random(n int, not string) ([]Track, error) {
+// Random devuelve hasta n pistas para seguir después de seed (una ruta): primero al azar entre las de su
+// género (hasta la mitad), luego entre las de su familia, y de toda la biblioteca solo si no alcanzan. Sin
+// seed, o si su artista no tiene género, todas salen al azar. Reparte: dos por artista mientras haya de dónde.
+func (l *Library) Random(n int, seed string) ([]Track, error) {
 	s, err := l.snap()
 	if err != nil {
 		return nil, err
 	}
-	out := []Track{}
-	// Índices al azar sin repetir, en vez de barajar toda la biblioteca para quedarse con n.
-	seen := map[int]bool{}
-	for len(out) < n && len(seen) < len(s.tracks) {
-		i := rand.IntN(len(s.tracks))
-		if seen[i] {
-			continue
-		}
-		seen[i] = true
-		if s.tracks[i].Path != not {
-			out = append(out, s.tracks[i])
+	return s.similar(n, seed, nil), nil
+}
+
+// similar es Random sobre las pistas que cumplen keep (nil = todas).
+func (s *snapshot) similar(n int, seed string, keep func(t *track) bool) []Track {
+	out, used, perArtist := []Track{}, map[int]bool{}, map[string]int{}
+	perm := rand.Perm(len(s.tracks))
+	fill := func(max int, ok func(genre string) bool) {
+		for _, each := range []int{2, len(perm)} { // sin el tope, un artista con muchas canciones llena la cola
+			for _, i := range perm {
+				if len(out) >= max {
+					return
+				}
+				t := s.tracks[i]
+				if !used[i] && t.Path != seed && perArtist[t.ArtistPath] < each && ok(s.genreOf(t.Path)) && (keep == nil || keep(&t)) {
+					used[i] = true
+					perArtist[t.ArtistPath]++
+					out = append(out, t)
+				}
+			}
 		}
 	}
-	return out, nil
+	if g := s.genreOf(seed); g != "" {
+		family, _, _ := strings.Cut(g, "/")
+		fill(n/2, func(x string) bool { return x == g })
+		fill(n, func(x string) bool { return strings.HasPrefix(x, family+"/") })
+	}
+	fill(n, func(string) bool { return true })
+	return out
 }

@@ -34,6 +34,7 @@ if [ -f .env ]; then $SSH "$HOST" "cat > $DIR/.env" < .env; fi
 # También las carpetas que monta spotDL: si faltan, Docker las crearía como root.
 $SSH "$HOST" "set -e; cd $DIR && mkdir -p secrets && chmod 700 secrets
   [ -s secrets/spotdl.token ] || (umask 022; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \\n' > secrets/spotdl.token)
+  [ -e secrets/gemini.key ] || (umask 022; : > secrets/gemini.key) # compose exige el archivo; vacío = sin Gemini
   mkdir -p $DATA/media/musica $DATA/.palobox/spotdl"
 # --wait espera al healthcheck de compose.yml; el límite evita quedarse colgado si la app se reinicia en bucle.
 if ! $SSH "$HOST" "cd $DIR && docker compose up -d --remove-orphans --wait --wait-timeout 180"; then

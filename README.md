@@ -33,6 +33,7 @@ sudo chown -R 1000:1000 /srv/data
 # 2. Token compartido entre la app y el servicio de descargas.
 mkdir -p secrets && chmod 700 secrets
 openssl rand -hex 32 > secrets/spotdl.token
+touch secrets/gemini.key   # vacío = sin Gemini; ver «Géneros y playlists por descripción»
 
 # 3. Configuración (opcional): administrador, carpeta de datos y zona horaria.
 cp .env.example .env
@@ -72,6 +73,20 @@ docker compose up -d --build palobox
 
 Y quita `SPOTDL_URL` de `compose.yml`: la sección desaparece de la interfaz.
 
+### Géneros y playlists por descripción
+
+Con una llave de la API de Gemini (gratis en [aistudio.google.com](https://aistudio.google.com)) en `secrets/gemini.key`:
+
+- **Sugerencias por género.** Cuando la cola se acaba siguen canciones del mismo género y luego de la misma
+  familia. El género va por artista: `internal/music/genres.json` trae los clasificados a mano, Gemini clasifica
+  una sola vez a cada artista nuevo, y el administrador corrige cualquiera en **Administración → Música**.
+- **Playlists por descripción.** «Merengue de los 90 para una fiesta»: lo que se entiende por palabras (género,
+  década, artista) se resuelve sin Gemini; el resto lo traduce y lo escoge Gemini. Cinco al día por cuenta.
+
+A Gemini solo le llegan nombres de artistas, álbumes y canciones, y la descripción que escribe el usuario; en el
+plan gratuito Google puede usarlos para mejorar sus modelos. Sin la llave (archivo vacío) las sugerencias siguen
+funcionando con los géneros ya conocidos y lo demás se oculta.
+
 ## Configuración
 
 Variables de `.env`, todas opcionales:
@@ -82,6 +97,7 @@ Variables de `.env`, todas opcionales:
 | `DATA_PATH` | `/srv/data` | carpeta del servidor donde viven los datos |
 | `TZ` | `America/Bogota` | zona horaria |
 | `MUSIC_MAX` | `8000` | tope de canciones: al llegar, solo el administrador descarga más (`0` = sin tope) |
+| `GEMINI_PER_DAY` | `300` | solicitudes a Gemini al día entre todas las cuentas (`0` = sin tope) |
 | `DEPLOY_HOST` | — | `usuario@servidor` para `./deploy.sh` |
 
 Dentro de la carpeta de datos:
@@ -99,6 +115,8 @@ Puedes copiar música directamente a `media/musica/`; la app la indexa sola.
 ```sh
 go test ./...                              # app (algunas pruebas usan ffmpeg y vips)
 cd spotdl && python3 -m unittest           # servicio de descargas, sin red
+./e2e.sh                                   # punta a punta en el servidor, sobre una copia temporal: antes de desplegar
+CARGA=1 ./e2e.sh                           # además, carga con 55/110/220 usuarios: p95, p99 y consumo
 ```
 
 `./deploy.sh usuario@servidor` compila las imágenes en tu equipo y las envía por SSH, para

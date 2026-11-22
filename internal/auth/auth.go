@@ -328,7 +328,7 @@ func (s *Service) DeleteUser(id int64) error {
 	for _, q := range []string{
 		`DELETE FROM playlist_tracks WHERE playlist_id IN (SELECT id FROM playlists WHERE user_id = ?)`,
 		`DELETE FROM playlists WHERE user_id = ?`, `DELETE FROM likes WHERE user_id = ?`, `DELETE FROM plays WHERE user_id = ?`,
-		`DELETE FROM saved WHERE user_id = ?`, `DELETE FROM media WHERE user_id = ?`, `DELETE FROM sessions WHERE user_id = ?`,
+		`DELETE FROM saved WHERE user_id = ?`, `DELETE FROM skips WHERE user_id = ?`, `DELETE FROM ai_uses WHERE user_id = ?`, `DELETE FROM media WHERE user_id = ?`, `DELETE FROM sessions WHERE user_id = ?`,
 		`DELETE FROM invites WHERE user_id = ?`,
 		`DELETE FROM users WHERE id = ?`,
 	} {

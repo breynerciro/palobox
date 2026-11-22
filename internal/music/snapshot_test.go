@@ -208,3 +208,51 @@ func TestInstantaneaSigueAlIndice(t *testing.T) {
 		t.Fatalf("Inicio no volvió a como estaba:\n%s\n%s", s, lib)
 	}
 }
+
+// Las sugerencias siguen el género de la semilla: la mitad de su género, el resto de su familia, y nada de
+// otra familia mientras alcancen. Sin género conocido salen al azar.
+func TestRandomSigueElGenero(t *testing.T) {
+	l, _ := sintetica(t, 600) // un artista por pista
+	s, _ := l.snap()
+	s.genre = map[string]string{}
+	var seed, sinGenero string
+	for i, tr := range s.tracks {
+		switch {
+		case i < 30:
+			s.genre[fold(tr.ArtistPath)] = "tropical/merengue"
+			seed = tr.Path
+		case i < 100:
+			s.genre[fold(tr.ArtistPath)] = "tropical/salsa"
+		case i < 200:
+			s.genre[fold(tr.ArtistPath)] = "rap/hip-hop"
+		default:
+			sinGenero = tr.Path
+		}
+	}
+	out, err := l.Random(40, seed)
+	if err != nil || len(out) != 40 {
+		t.Fatalf("Random: %d pistas, %v", len(out), err)
+	}
+	for i, tr := range out {
+		if g := s.genreOf(tr.Path); tr.Path == seed || !strings.HasPrefix(g, "tropical/") || (i < 20 && g != "tropical/merengue") {
+			t.Fatalf("pista %d: %s (%q)", i, tr.Path, g)
+		}
+	}
+	if out, _ := l.Random(40, sinGenero); len(out) != 40 {
+		t.Fatalf("sin género: %d pistas", len(out))
+	}
+}
+
+// Sugerencias con la biblioteca objetivo (15.000 pistas) y géneros repartidos: lo que cuesta cada «radio».
+func BenchmarkRandom(b *testing.B) {
+	l, _ := sintetica(b, 15000)
+	s, _ := l.snap()
+	for i, tr := range s.tracks {
+		s.genre[fold(tr.ArtistPath)] = Genres[i%len(Genres)]
+	}
+	seed := s.tracks[0].Path
+	b.ResetTimer()
+	for b.Loop() {
+		l.Random(40, seed)
+	}
+}

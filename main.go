@@ -19,6 +19,7 @@ import (
 	"palobox/internal/admin"
 	"palobox/internal/auth"
 	"palobox/internal/files"
+	"palobox/internal/gemini"
 	"palobox/internal/httpx"
 	"palobox/internal/jam"
 	"palobox/internal/media"
@@ -88,7 +89,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/invite", a.auth.InviteInfo)
 	mux.HandleFunc("POST /api/invite", a.auth.Accept)
 	mux.HandleFunc("GET /api/me", auth(func(w http.ResponseWriter, r *http.Request, u httpx.User) error {
-		return httpx.WriteJSON(w, 200, map[string]any{"name": u.Name, "admin": u.Admin, "musicOnly": u.MusicOnly})
+		return httpx.WriteJSON(w, 200, map[string]any{"name": u.Name, "admin": u.Admin, "musicOnly": u.MusicOnly, "ai": a.music.Ask != nil})
 	}))
 	mux.HandleFunc("GET /api/admin", zip(auth(a.admin.Stats)))
 	mux.HandleFunc("POST /api/admin/users", auth(a.admin.CreateUser))
@@ -99,6 +100,8 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/admin/users/{name}/sessions", auth(a.admin.CloseUserSessions))
 	mux.HandleFunc("DELETE /api/admin/sessions/{id}", auth(a.admin.CloseSession))
 	mux.HandleFunc("POST /api/admin/music/reindex", auth(a.admin.Reindex))
+	mux.HandleFunc("GET /api/admin/genres", zip(auth(a.admin.Genres)))
+	mux.HandleFunc("PUT /api/admin/genres", auth(a.admin.SetGenre))
 	mux.HandleFunc("GET /api/admin/spotdl", auth(a.spotdl.Health))
 	mux.HandleFunc("POST /api/uploads", cloud(a.uploads.Start))
 	mux.HandleFunc("PATCH /api/uploads/{id}", cloud(a.uploads.Part))
@@ -121,9 +124,11 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("PUT /api/music/likes", auth(a.music.LikePut))
 	mux.HandleFunc("DELETE /api/music/likes", auth(a.music.LikeDelete))
 	mux.HandleFunc("POST /api/music/plays", auth(a.music.Played))
+	mux.HandleFunc("POST /api/music/skips", auth(a.music.Skipped))
 	mux.HandleFunc("PUT /api/music/saved", auth(a.music.SavePut))
 	mux.HandleFunc("DELETE /api/music/saved", auth(a.music.SaveDelete))
 	mux.HandleFunc("POST /api/music/playlists", auth(a.music.PlaylistCreate))
+	mux.HandleFunc("POST /api/music/playlists/ai", zip(auth(a.music.PlaylistAI)))
 	mux.HandleFunc("GET /api/music/playlists/{id}", zip(auth(a.music.PlaylistGet)))
 	mux.HandleFunc("PATCH /api/music/playlists/{id}", auth(a.music.PlaylistRename))
 	mux.HandleFunc("DELETE /api/music/playlists/{id}", auth(a.music.PlaylistDelete))
@@ -183,6 +188,9 @@ func main() {
 		log.Fatal(err)
 	}
 	a.spotdl.Module = module.Load("SPOTDL", "El servicio de descargas de Spotify")
+	if g := gemini.Load(); g != nil { // sin llave: no se clasifican artistas nuevos ni hay playlists por descripción
+		a.music.Ask = g.Ask
+	}
 	a.music.Max = 8000 // tope de canciones para las descargas de quienes no son el administrador
 	if v := os.Getenv("MUSIC_MAX"); v != "" {
 		if _, err := fmt.Sscan(v, &a.music.Max); err != nil {

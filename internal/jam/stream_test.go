@@ -117,7 +117,7 @@ func TestStreamNoDuration(t *testing.T) {
 // flujo en curso no reabre la pista que estaba mandando.
 func TestStreamTrimFullQueue(t *testing.T) {
 	n := 0
-	h := &Hub{More: func(k int, not string) ([]music.Track, error) {
+	h := &Hub{More: func(k int, seed string) ([]music.Track, error) {
 		var out []music.Track
 		for range k {
 			n++

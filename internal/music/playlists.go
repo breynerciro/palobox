@@ -43,15 +43,24 @@ func (l *Library) playlists(u httpx.User) ([]playlist, error) {
 }
 
 func playlistName(w http.ResponseWriter, r *http.Request) (string, error) {
-	var in struct{ Name string }
+	name, _, err := playlistInput(w, r)
+	return name, err
+}
+
+// playlistInput lee el nombre y, al crear, las canciones con las que nace (las de una playlist por descripción).
+func playlistInput(w http.ResponseWriter, r *http.Request) (string, []string, error) {
+	var in struct {
+		Name  string
+		Paths []string
+	}
 	if err := httpx.ReadJSON(w, r, &in); err != nil {
-		return "", err
+		return "", nil, err
 	}
 	name := strings.TrimSpace(in.Name)
-	if name == "" || len(name) > 100 {
-		return "", httpx.Error(400, "Escribe un nombre de hasta 100 caracteres.")
+	if name == "" || len(name) > 100 || len(in.Paths) > 500 {
+		return "", nil, httpx.Error(400, "Escribe un nombre de hasta 100 caracteres.")
 	}
-	return name, nil
+	return name, in.Paths, nil
 }
 
 // ownPlaylist devuelve el id de la playlist de la ruta solo si es de este usuario; si no, 404.
@@ -85,7 +94,9 @@ func (l *Library) ImportPlaylist(owner, job, name string, paths []string) {
 	}
 	if err := l.importPlaylist(owner, job, name, paths); err != nil {
 		log.Print("playlist de Spotify: ", err)
+		return
 	}
+	l.inherit(paths)
 }
 
 // importPlaylist hace la marca del trabajo y la playlist en una sola transacción: si algo falla a la mitad no
@@ -132,15 +143,28 @@ func (l *Library) importPlaylist(owner, job, name string, paths []string) error 
 }
 
 func (l *Library) PlaylistCreate(w http.ResponseWriter, r *http.Request, u httpx.User) error {
-	name, err := playlistName(w, r)
+	name, paths, err := playlistInput(w, r)
 	if err != nil {
 		return err
 	}
-	res, err := l.DB.Exec(`INSERT INTO playlists(user_id, name, updated) VALUES(?, ?, ?)`, u.ID, name, time.Now().UnixMilli())
+	tx, err := l.DB.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	res, err := tx.Exec(`INSERT INTO playlists(user_id, name, updated) VALUES(?, ?, ?)`, u.ID, name, time.Now().UnixMilli())
 	if err != nil {
 		return err
 	}
 	id, _ := res.LastInsertId()
+	for i, p := range paths { // solo entran pistas del índice: lo demás se ignora
+		if _, err := tx.Exec(`INSERT OR IGNORE INTO playlist_tracks(playlist_id, path, pos) SELECT ?, path, ? FROM tracks WHERE path = ?`, id, i, p); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
 	return httpx.WriteJSON(w, 200, map[string]any{"id": id, "name": name})
 }
 

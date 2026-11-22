@@ -199,6 +199,7 @@ func (l *Library) Sync() {
 		l.changed = true
 	}
 	l.dedupe()
+	go l.classify() // artistas nuevos sin género; no hace esperar al recorrido
 	l.idxAt = time.Now()
 	l.scanned.Store(l.idxAt.Unix())
 }

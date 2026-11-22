@@ -256,15 +256,22 @@ async function refill() {
   if (local || room || filling || repeat || pos < 0 || queue.length - pos > 6) return;
   filling = true;
   const e = epoch;
-  let more = null;
-  try {
-    const r = await api(`/api/music/radio?path=${encodeURIComponent(queue[pos].path)}`);
-    if (r.ok) more = await r.json();
-  } catch {} // sin conexión: la cola termina como antes
+  let add = [];
+  // El servidor propone parecidas a la que suena; sin semilla salen al azar, por si todas ya están en la cola.
+  // La semilla es lo último que alguien puso a mano, no la sugerencia que suena: así la cola no se va alejando
+  // del género con el que empezó. Se toma antes de esperar: la cola puede cambiar entre un intento y otro.
+  const playing = (queue.findLast((t) => !t.auto) || queue[pos]).path;
+  for (const seed of [playing, '']) {
+    try {
+      const r = await api(`/api/music/radio?path=${encodeURIComponent(seed)}`);
+      const more = r.ok ? await r.json() : [];
+      const have = new Set(queue.map((t) => t.path)); // después de esperar: la cola pudo crecer
+      add = more.filter((t) => !have.has(t.path)).slice(0, 20).map((t) => ({ ...t, auto: true }));
+    } catch {} // sin conexión: la cola termina como antes
+    if (add.length) break;
+  }
   filling = false;
   if (e !== epoch) return refill();
-  const have = new Set(queue.map((t) => t.path));
-  const add = (more || []).filter((t) => !have.has(t.path)).slice(0, 20).map((t) => ({ ...t, auto: true }));
   if (!add.length) return;
   queue.push(...add);
   order.push(...add);
@@ -316,7 +323,14 @@ function addAt(t, nextUp) {
 export const playNext = (t) => addAt(t, true);
 export const enqueue = (t) => addAt(t, false);
 
+// Pasar a otra canción antes de que cuente como escucha (30 s) queda registrado, con si era una sugerencia:
+// es la medida de qué tan bien aciertan las sugerencias.
+function skipped() {
+  const t = queue[pos];
+  if (t && !counted && !local) api('/api/music/skips', json('POST', { path: t.path, auto: !!t.auto })).catch(() => {});
+}
 export function next() {
+  skipped();
   if (streaming()) return streamDo('next');
   if (room) return void jam.send('next', { pos }); // suena en otro dispositivo: este es el control remoto
   let n = pos + 1;

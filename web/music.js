@@ -2,7 +2,7 @@
 import { $, el, icon, json, joinText, plural, size, clock, lazyImg, toast, ask, menu } from './lib.js';
 import { withCatalog } from './catalog.js';
 import { route, href, go, thumbUrl, render } from './nav.js';
-import { api } from './session.js';
+import { api, hasAI, takeWarm } from './session.js';
 import { playAt, playNext, enqueue, audio, purge } from './player.js';
 import * as offline from './offline.js';
 
@@ -12,17 +12,31 @@ let lib = null; // última respuesta de /api/music, ya con álbumes y artistas d
 let cat = null; // { v, albums, artists }: el catálogo ya leído, para no volver a leer MB de JSON si no cambió
 let saving = 0; // me gusta enviados que el servidor aún no confirma
 
+const CAT_KEY = 'palobox.catalog'; // última versión del catálogo que este navegador bajó
+// catalog baja el catálogo de la versión v; la versión va en la URL: si ya se tiene, sale de la caché del navegador.
+async function catalog(v) {
+  const c = await api(`/api/music/catalog?v=${encodeURIComponent(v)}`);
+  if (!c.ok) throw new Error('Intenta de nuevo en un momento.');
+  // La versión de la URL final: si el índice cambió entretanto, el servidor redirige a otra más nueva.
+  const got = { v: new URL(c.url, location.href).searchParams.get('v') ?? v, ...await c.json() };
+  try { localStorage.setItem(CAT_KEY, got.v); } catch {}
+  return got;
+}
 // library trae álbumes, artistas, playlists y me gusta, y con eso repinta la barra lateral.
 export async function library() {
-  const r = await api('/api/music?catalog=1');
+  // El catálogo se pide a la vez que lo del usuario, con la última versión conocida: si no cambió sale de la caché
+  // sin tocar la red, y si cambió el servidor redirige a la nueva. Esperar a /api/music para saber cuál pedir
+  // costaba una ida y vuelta más antes de pintar.
+  let known = null;
+  try { known = localStorage.getItem(CAT_KEY); } catch {}
+  const early = !cat && known && !offline.active ? catalog(known).catch(() => null) : null;
+  const r = await takeWarm() ?? await api('/api/music?catalog=1');
   if (!r.ok) throw new Error('Intenta de nuevo en un momento.');
   let d = await r.json();
   if (d.catalog) { // sin conexión (offline.js) la respuesta ya viene completa
     if (cat?.v !== d.catalog) {
-      const c = await api(`/api/music/catalog?v=${encodeURIComponent(d.catalog)}`); // la versión va en la URL: sale de la caché del navegador
-      if (!c.ok) throw new Error('Intenta de nuevo en un momento.');
-      // La versión de la URL final: si el índice cambió entretanto, el servidor redirige a otra más nueva.
-      cat = { v: new URL(c.url, location.href).searchParams.get('v') ?? d.catalog, ...await c.json() };
+      const c = await early;
+      cat = c?.v === d.catalog ? c : await catalog(d.catalog);
     }
     d = withCatalog(d, cat);
   }
@@ -36,7 +50,10 @@ export async function library() {
   paintSide();
   return lib;
 }
-export const ensureLib = () => (lib ? Promise.resolve(lib) : library());
+let first = null; // la primera carga en curso: quienes la piden a la vez (Inicio y la barra lateral al abrir) comparten una
+export const ensureLib = () => (lib ? Promise.resolve(lib) : (first ??= library().finally(() => { first = null; })));
+// freshLib es para Inicio: lo más reciente, pero sin repetir la petición que ya va en camino al abrir la app.
+export const freshLib = () => (lib ? library() : ensureLib());
 // forget suelta lo del usuario al salir: el siguiente no ve su biblioteca ni sus me gusta.
 export function forget() {
   lib = cat = null;
@@ -88,7 +105,32 @@ async function addTo(p, t) {
   library().catch(() => {});
   if (route().path === `playlist/${p.id}`) render();
 }
-$('#side-new').onclick = () => createPlaylist();
+// describePlaylist pide una descripción («merengue de los 90»), muestra lo que propone el servidor y, si el
+// usuario la acepta, la guarda con el nombre que deje.
+async function describePlaylist() {
+  const prompt = await ask({ heading: 'Playlist por descripción', text: 'Cuenta qué quieres oír: un género, una época, un artista o un momento. Por ejemplo: «merengue de los 90 para una fiesta».', input: '', label: 'Descripción', ok: 'Proponer' });
+  if (!prompt) return;
+  toast('Armando tu playlist…');
+  const r = await api('/api/music/playlists/ai', json('POST', { prompt })).catch(() => null);
+  if (!r?.ok) return toast(r ? await r.text() : OFFLINE, { kind: 'warn' });
+  const p = await r.json();
+  const sample = p.tracks.slice(0, 6).map((t) => `${t.title} — ${t.artist}`).join(' · ');
+  const name = await ask({ heading: `${plural(p.tracks.length, 'canción', 'canciones')} para tu playlist`, text: `${sample}${p.tracks.length > 6 ? '…' : ''}`, input: p.name, ok: 'Guardar', cancel: 'Descartar' });
+  if (!name) return;
+  const c = await api('/api/music/playlists', json('POST', { name, paths: p.tracks.map((t) => t.path) })).catch(() => null);
+  if (!c?.ok) return toast(c ? await c.text() : OFFLINE, { kind: 'warn' });
+  await library().catch(() => {});
+  go('musica', `playlist/${(await c.json()).id}`);
+}
+// newPlaylist es el botón de crear: con IA en el servidor deja elegir entre una vacía y una por descripción.
+export function newPlaylist(anchor) {
+  if (!hasAI || offline.active) return createPlaylist();
+  menu(anchor, 'Crear playlist', [
+    { icon: 'plus', label: 'Playlist vacía', run: () => createPlaylist() },
+    { icon: 'edit', label: 'Describe lo que quieres oír', run: describePlaylist },
+  ]);
+}
+$('#side-new').onclick = (e) => newPlaylist(e.currentTarget);
 
 // pickPlaylist abre el menú para agregar la pista a una playlist (o crear una con ella).
 export async function pickPlaylist(anchor, t) {

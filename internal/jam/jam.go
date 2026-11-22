@@ -31,8 +31,8 @@ const (
 )
 
 type Hub struct {
-	Lookup func(paths []string) ([]music.Track, error)    // pistas del índice, en el orden pedido
-	More   func(n int, not string) ([]music.Track, error) // sugerencias cuando se acaba la cola
+	Lookup func(paths []string) ([]music.Track, error)     // pistas del índice, en el orden pedido
+	More   func(n int, seed string) ([]music.Track, error) // sugerencias parecidas a seed cuando se acaba la cola
 	// Audio abre una pista desde el segundo at para el flujo continuo (stream.go) y dice sus bytes por segundo.
 	Audio func(path string, dur, at float64) (io.ReadCloser, float64, error)
 	Lead  time.Duration // colchón del flujo continuo; 0 = streamLead (las pruebas lo acortan)
@@ -70,9 +70,10 @@ type jamRoom struct {
 	members []*user
 	queue   []music.Track
 	qrev    int
-	shift   int // pistas ya escuchadas que extend recortó del principio: cada flujo corre su índice lo mismo
-	manual  int // pistas agregadas justo después de la actual: «agregar a la cola» va detrás de ellas
-	repeat  int // 0 apagado, 1 toda la cola, 2 solo la pista actual; solo en la sala propia del flujo continuo
+	shift   int             // pistas ya escuchadas que extend recortó del principio: cada flujo corre su índice lo mismo
+	manual  int             // pistas agregadas justo después de la actual: «agregar a la cola» va detrás de ellas
+	sugg    map[string]bool // pistas que puso extend: no sirven de semilla para las siguientes sugerencias
+	repeat  int             // 0 apagado, 1 toda la cola, 2 solo la pista actual; solo en la sala propia del flujo continuo
 	pos     int
 	playing bool
 	at      float64   // posición en segundos en el momento stamp
@@ -418,12 +419,32 @@ func (h *Hub) extend(r *jamRoom) {
 		for _, t := range r.queue {
 			have[t.Path] = true
 		}
-		if more, err := h.More(20, r.queue[r.pos].Path); err == nil {
+		// La semilla es lo último que alguien puso, no una sugerencia: así la cola no se va alejando del género con
+		// el que empezó. shortcut: sugg solo crece (una ruta por sugerencia); se vacía sola cuando la sala se cierra.
+		last := r.queue[r.pos].Path
+		for i := len(r.queue) - 1; i >= 0; i-- {
+			if !r.sugg[r.queue[i].Path] {
+				last = r.queue[i].Path
+				break
+			}
+		}
+		if r.sugg == nil {
+			r.sugg = map[string]bool{}
+		}
+		// Sin semilla salen al azar: es la salida cuando todo lo parecido ya está en la cola.
+		for _, seed := range []string{last, ""} {
+			more, _ := h.More(40, seed)
+			added := 0
 			for _, t := range more {
-				if !have[t.Path] && len(r.queue) < maxQueue {
+				if added < 20 && !have[t.Path] && len(r.queue) < maxQueue {
 					r.queue = append(r.queue, t)
+					r.sugg[t.Path] = true
 					r.qrev++
+					added++
 				}
+			}
+			if added > 0 {
+				break
 			}
 		}
 	}

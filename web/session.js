@@ -152,8 +152,17 @@ function watch() {
 }
 
 const LEAVING = 'palobox.salir'; // se cerró sesión sin conexión: falta cerrarla en el servidor
+let warm = null; // { at, res }: /api/music pedido al abrir la app (start)
+// takeWarm entrega, una sola vez y si es reciente, la biblioteca que start() ya pidió; si no sirve, null.
+export async function takeWarm() {
+  const w = warm;
+  warm = null;
+  const r = w && Date.now() - w.at < 10000 ? await w.res : null;
+  return r?.ok ? r : null;
+}
 export let isAdmin = false;
 export let musicOnly = false; // cuenta de invitado: solo ve Música
+export let hasAI = false; // el servidor tiene Gemini: se pueden crear playlists por descripción
 export let userName = ''; // dueño de lo que se recuerda en este navegador (búsquedas recientes)
 
 // Invitación: el administrador crea la cuenta sin contraseña y comparte un enlace de un solo uso; quien lo abre
@@ -216,6 +225,9 @@ export async function start() {
   try {
     if (localStorage.getItem(LEAVING) && (await fetch('/api/logout', { method: 'POST', signal: AbortSignal.timeout(6000) })).ok) localStorage.removeItem(LEAVING);
   } catch {}
+  // La biblioteca se pide a la vez que la sesión: con datos móviles cada ida y vuelta al servidor se nota, y así
+  // Inicio no espera una más. Si no hay sesión la respuesta se descarta.
+  warm = { at: Date.now(), res: fetch('/api/music?catalog=1').catch(() => null) };
   const r = await fetch('/api/me', { signal: AbortSignal.timeout(6000) }).catch(() => null); // sin servidor no se queda esperando
   let me = offline.saved();
   if (r?.ok) {
@@ -232,6 +244,7 @@ export async function start() {
   else enterOffline(); // sin red: entra quien usó este celular, con lo que tenga descargado
   isAdmin = me.admin;
   musicOnly = !!me.musicOnly;
+  hasAI = !!me.ai;
   document.body.classList.toggle('music-only', musicOnly);
   userName = me.name;
   restore(me.name);

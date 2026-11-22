@@ -14,7 +14,10 @@ services:
       MUSIC_MAX: ${MUSIC_MAX:-8000} # tope de canciones: al llegar, solo el administrador descarga más (0 = sin tope)
       SPOTDL_URL: http://spotdl:8801 # descargas de Spotify; sin el servicio, la sección queda oculta
       SPOTDL_TOKEN_FILE: /run/secrets/spotdl_token # sin token la sección también queda oculta
-    secrets: [spotdl_token]
+      # Gemini clasifica el género de los artistas nuevos y arma playlists por descripción; sin la llave, ambas cosas se apagan.
+      GEMINI_KEY_FILE: /run/secrets/gemini_key
+      GEMINI_PER_DAY: ${GEMINI_PER_DAY:-300} # solicitudes al día entre todas las cuentas
+    secrets: [spotdl_token, gemini_key]
     # deploy.sh espera este chequeo (up --wait) antes de borrar la imagen anterior.
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/version"]
@@ -31,6 +34,8 @@ services:
     build: ./spotdl
     restart: unless-stopped
     user: "1000:1000" # mismos dueños que la app y Samba
+    # DNS fijo: si Tailscale cambia el DNS del servidor, el contenedor viejo deja de resolver YouTube.
+    dns: [1.1.1.1, 8.8.8.8]
     # Solo la biblioteca y su propio estado: no ve la base de la app ni los archivos de los usuarios.
     volumes:
       - ${DATA_PATH:-/srv/data}/media/musica:/data/media/musica
@@ -70,6 +75,9 @@ services:
 secrets:
   spotdl_token:
     file: ./secrets/spotdl.token
+  # Llave de la API de Gemini (aistudio.google.com); se copia a mano al servidor. Si no existe, deploy.sh deja el archivo vacío.
+  gemini_key:
+    file: ./secrets/gemini.key
   # Token del túnel (panel de Cloudflare); se copia a mano al servidor, ver README.
   cloudflared_token:
     file: ./secrets/cloudflared.token

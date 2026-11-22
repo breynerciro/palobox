@@ -256,7 +256,7 @@ func (l *Library) Artist(w http.ResponseWriter, r *http.Request, u httpx.User) e
 	return httpx.WriteJSON(w, 200, map[string]any{"saved": followed[dir], "path": dir, "name": dir, "albums": mine, "tracks": ts, "popular": popular})
 }
 
-// Radio sugiere qué sigue cuando se acaba la cola: pistas al azar de toda la biblioteca menos ?path=.
+// Radio sugiere qué sigue cuando se acaba la cola: pistas parecidas a ?path= (ver Random); sin él, al azar.
 func (l *Library) Radio(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	l.fresh()
 	ts, err := l.Random(40, r.URL.Query().Get("path"))
@@ -303,6 +303,25 @@ func (l *Library) Played(w http.ResponseWriter, r *http.Request, u httpx.User) e
 		return err
 	}
 	_, err = l.DB.Exec(`INSERT INTO plays(user_id, path, at) VALUES(?, ?, ?)`, u.ID, rel, time.Now().UnixMilli())
+	return err
+}
+
+// Skipped registra que el usuario pasó a otra canción antes de los 30 s (auto: era una sugerencia, no algo que
+// él puso). Es la señal para medir si las sugerencias aciertan.
+// shortcut: por ahora solo se guarda; cuando haya historial, que Random evite lo que más se salta.
+func (l *Library) Skipped(w http.ResponseWriter, r *http.Request, u httpx.User) error {
+	var in struct {
+		Path string
+		Auto bool
+	}
+	if err := httpx.ReadJSON(w, r, &in); err != nil {
+		return err
+	}
+	rel, err := l.musicRel(in.Path)
+	if err != nil {
+		return err
+	}
+	_, err = l.DB.Exec(`INSERT INTO skips(user_id, path, at, auto) VALUES(?, ?, ?, ?)`, u.ID, rel, time.Now().UnixMilli(), in.Auto)
 	return err
 }
 

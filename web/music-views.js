@@ -4,7 +4,7 @@ import { href, go, render, route } from './nav.js';
 import { api, userName } from './session.js';
 import * as offline from './offline.js';
 import { playAt, isShuffle } from './player.js';
-import { library, ensureLib, liked, createPlaylist, cover, item, card, libRow, trackList, libItems, saveButton, downloadButton, offlineBox, downloadsCover, wipeDownloads } from './music.js';
+import { library, ensureLib, freshLib, liked, newPlaylist, cover, item, card, libRow, trackList, libItems, saveButton, downloadButton, offlineBox, downloadsCover, wipeDownloads } from './music.js';
 
 const OFFLINE = 'Sin conexión con el servidor.';
 const frag = (...kids) => { const f = document.createDocumentFragment(); f.append(...kids.flat().filter(Boolean)); return f; };
@@ -66,7 +66,7 @@ function scroller(row) {
 }
 
 async function homeView() {
-  const d = await library();
+  const d = await freshLib();
   if (!d.albums.length && offline.active) {
     return empty('download', 'No hay música descargada', 'Cuando tengas conexión, toca el botón de descarga en un álbum o una playlist.');
   }
@@ -80,16 +80,22 @@ async function homeView() {
   const heardBig = big.filter((a) => a.plays).sort((a, b) => b.plays - a.plays).slice(0, 3);
   const pool = heardBig.length ? heardBig : big;
   const pick = pool[Math.floor(Math.random() * pool.length)];
-  const [random, artist] = await Promise.all([
+  // Esas dos filas no detienen la pantalla: Inicio se pinta ya con lo de la biblioteca y ellas entran al llegar
+  // (con datos móviles, esperarlas era una ida y vuelta más con la pantalla vacía).
+  const rows = el('div', { style: 'display: contents' }, shelves(d)); // sin caja propia: las filas se acomodan como antes
+  Promise.all([
     getJSON('/api/music/radio').catch(() => null),
     pick ? getJSON(`/api/music/artist?path=${encodeURIComponent(pick.path)}`).catch(() => null) : null,
-  ]);
+  ]).then(([random, artist]) => {
+    // Se rearma completo para que ninguna canción salga en dos filas. Si el usuario ya se fue de Inicio, nada.
+    if (rows.isConnected && (random?.length || artist)) rows.replaceChildren(shelves(d, { random: random || [], artist }));
+  });
   // Accesos rápidos: playlists, me gusta y álbumes de verdad (varias canciones) que tocaste hace poco.
   const heard = d.albums.filter((a) => a.played && a.tracks > 1);
   const quick = [liked.size > 0 && item.liked(), ...[...d.playlists.map(item.playlist), ...heard.map(item.album)].sort((a, b) => b.when - a.when)].filter(Boolean).slice(0, 8);
   return frag(
     quick.length > 0 && el('div', { className: 'quick' }, quick.map((it) => el('a', { className: 'quick-tile', href: it.href }, it.art(true), el('span', { textContent: it.name })))),
-    shelves(d, { random: random || [], artist }));
+    rows);
 }
 
 // lead deja solo el artista principal: spotDL escribe a los invitados con barras («A/B/C»).
@@ -300,7 +306,11 @@ export function jobRow(j, repaint) {
   const again = j.attempts > 1; // un reintento: solo las canciones que fallaron
   const title = j.title || 'Descarga de Spotify';
   const pct = j.progress == null ? null : Math.round(j.progress * 100);
-  const state = j.status === 'downloading' ? joinText(j.total ? `${again ? 'Reintentando' : 'Descargando'} ${j.done} de ${j.total}` : again ? 'Reintentando' : 'Descargando', j.current)
+  // Antes de bajar, el servicio busca cada canción en YouTube (minutos en una playlist) y aún no hay nombre ni avance.
+  // shortcut: también sale los segundos que tarda la primera canción en bajar; si molesta, que el servicio marque la fase.
+  const searching = j.status === 'downloading' && !again && !j.done && !j.current;
+  const state = searching ? (j.total > 1 ? `Buscando ${j.total} canciones en YouTube` : 'Buscando en YouTube')
+    : j.status === 'downloading' ? joinText(j.total ? `${again ? 'Reintentando' : 'Descargando'} ${j.done} de ${j.total}` : again ? 'Reintentando' : 'Descargando', j.current)
     : j.status === 'queued' ? (again ? 'Reintento en cola' : 'En cola') : j.error;
   const row = el('div', { className: 'row static' }, typeBadge('audio'),
     el('div', { className: 'row-text' }, el('p', { textContent: title }),
@@ -391,7 +401,7 @@ async function libraryView() {
     paint();
   };
   const add = el('button', { className: 'btn secondary' }, icon('plus'), 'Crear playlist');
-  add.onclick = () => createPlaylist();
+  add.onclick = () => newPlaylist(add);
   // Los filtros repintan la lista sin volver a pedir la biblioteca.
   function paint() {
     for (const b of chips) b.setAttribute('aria-pressed', filter === b.dataset.k);
