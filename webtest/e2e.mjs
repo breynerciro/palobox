@@ -81,6 +81,21 @@ try {
     return `biblioteca ${Math.round(lib.bytes / 1024)} KB`;
   });
 
+  await step('Inicio: las filas que llegan después no rearman las que ya estaban', async () => {
+    // Rearmarlas reinicia la aparición de cada carátula: se ve como un parpadeo de toda la pantalla.
+    // Las sugerencias se demoran a propósito y se entra a Inicio de nuevo: así las primeras filas se ven solas.
+    await js(`const real = window.fetch; window.fetch = (u, o) => (String(u).includes('/api/music/radio') ? new Promise((r) => setTimeout(r, 2000)).then(() => real(u, o)) : real(u, o)); location.hash = '#/musica/buscar';`);
+    await sleep(500);
+    await js(`location.hash = '#/musica'`);
+    await until(`document.querySelector('#view .card') && ![...document.querySelectorAll('#view h2')].some((h) => h.textContent.includes('Descubre'))`, 'las primeras filas');
+    const n = await js(`const cs = document.querySelectorAll('#view .card'); for (const c of cs) c.dataset.first = '1'; return cs.length;`);
+    await until(`[...document.querySelectorAll('#view h2')].some((h) => h.textContent.includes('Descubre'))`, 'la fila «Descubre en tu biblioteca»');
+    const r = await js(`return { kept: document.querySelectorAll('#view .card[data-first]').length, total: document.querySelectorAll('#view .card').length }`);
+    must(r.kept === n, `de ${n} tarjetas iniciales quedaron ${r.kept}: se rearmaron`);
+    must(r.total > n, 'no entraron filas nuevas');
+    return `${n} tarjetas intactas, ${r.total - n} nuevas`;
+  });
+
   await step('géneros en el panel de administrador', async () => {
     const g = await api('/api/admin/genres');
     must(g.status === 200 && g.data.genres.length > 20, `géneros ${g.status}`);
@@ -147,6 +162,8 @@ try {
     playlistId = (await js(`return location.hash`)).split('playlist/')[1];
     const p = await api('/api/music/playlists/' + playlistId);
     must(p.status === 200 && p.data.tracks.length >= 5, `playlist guardada: ${p.status}, ${p.data?.tracks?.length} canciones`);
+    // La biblioteca real sigue creciendo mientras corre la prueba: se vuelve a leer qué género tiene cada artista.
+    genres = Object.fromEntries((await api('/api/admin/genres')).data.artists.map((a) => [a.name, a.genre]));
     const off = p.data.tracks.filter((t) => genres[t.artistPath] !== 'tropical/salsa' || t.year < 1990 || t.year > 1999);
     must(off.length === 0, `fuera del pedido: ${off.slice(0, 3).map((t) => `${t.title} (${t.artistPath}, ${t.year})`).join('; ')}`);
     return `«${name}», ${p.data.tracks.length} canciones de salsa de los 90`;

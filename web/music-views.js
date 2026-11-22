@@ -82,20 +82,16 @@ async function homeView() {
   const pick = pool[Math.floor(Math.random() * pool.length)];
   // Esas dos filas no detienen la pantalla: Inicio se pinta ya con lo de la biblioteca y ellas entran al llegar
   // (con datos móviles, esperarlas era una ida y vuelta más con la pantalla vacía).
-  const rows = el('div', { style: 'display: contents' }, shelves(d)); // sin caja propia: las filas se acomodan como antes
-  Promise.all([
+  const extra = Promise.all([
     getJSON('/api/music/radio').catch(() => null),
     pick ? getJSON(`/api/music/artist?path=${encodeURIComponent(pick.path)}`).catch(() => null) : null,
-  ]).then(([random, artist]) => {
-    // Se rearma completo para que ninguna canción salga en dos filas. Si el usuario ya se fue de Inicio, nada.
-    if (rows.isConnected && (random?.length || artist)) rows.replaceChildren(shelves(d, { random: random || [], artist }));
-  });
+  ]).then(([random, artist]) => ({ random: random || [], artist }));
   // Accesos rápidos: playlists, me gusta y álbumes de verdad (varias canciones) que tocaste hace poco.
   const heard = d.albums.filter((a) => a.played && a.tracks > 1);
   const quick = [liked.size > 0 && item.liked(), ...[...d.playlists.map(item.playlist), ...heard.map(item.album)].sort((a, b) => b.when - a.when)].filter(Boolean).slice(0, 8);
   return frag(
     quick.length > 0 && el('div', { className: 'quick' }, quick.map((it) => el('a', { className: 'quick-tile', href: it.href }, it.art(true), el('span', { textContent: it.name })))),
-    rows);
+    shelves(d, extra));
 }
 
 // lead deja solo el artista principal: spotDL escribe a los invitados con barras («A/B/C»).
@@ -110,8 +106,9 @@ function songCard(t, list, sub = lead(t.artist)) {
 }
 // shelves arma Inicio sin repetir: cada canción y cada álbum aparece una sola vez. Casi todo llega de playlists de
 // Spotify (una canción por álbum), así que las filas son de canciones; un álbum con varias se muestra como álbum.
-// extra: lo que se pidió aparte (canciones al azar y un artista); sin él quedan las filas de la biblioteca.
-function shelves(d, { random = [], artist = null } = {}) {
+// extra: promesa de { random, artist }, lo que se pide aparte (canciones al azar y un artista). Sus dos filas entran
+// en su sitio cuando llega, sin tocar las que ya están: rearmarlas hacía parpadear todas las carátulas.
+function shelves(d, extra) {
   const seen = new Set();
   const isSingle = single(d);
   const albums = new Map(d.albums.map((a) => [a.path, a]));
@@ -141,11 +138,17 @@ function shelves(d, { random = [], artist = null } = {}) {
     out.push(frag(heading('Agregado recientemente'), scroller(el('div', { className: 'shelf' },
       addedFresh.map((x) => (x.albumPath !== undefined ? songCard(x, list) : card(item.album(x), lead(x.artist))))))));
   }
-  if (artist) {
-    const more = fresh([...artist.popular, ...artist.tracks.filter((t) => !artist.popular.some((p) => p.path === t.path))]);
-    out.push(songs(`Más de ${artist.name}`, more, el('a', { className: 'section-link', href: href('musica', `artista/${artist.path}`), textContent: 'Ver artista' })));
-  }
-  out.push(songs('Descubre en tu biblioteca', fresh(random)));
+  const late = el('div', { style: 'display: contents' }); // sin caja propia: sus filas se acomodan como las demás
+  out.push(late);
+  extra?.then(({ random, artist }) => {
+    const rows = [];
+    if (artist) {
+      const more = fresh([...artist.popular, ...artist.tracks.filter((t) => !artist.popular.some((p) => p.path === t.path))]);
+      rows.push(songs(`Más de ${artist.name}`, more, el('a', { className: 'section-link', href: href('musica', `artista/${artist.path}`), textContent: 'Ver artista' })));
+    }
+    rows.push(songs('Descubre en tu biblioteca', fresh(random)));
+    late.replaceChildren(frag(rows)); // si el usuario ya se fue de Inicio, esto queda en una vista descartada
+  });
   // Artistas con varias canciones: los de una sola ya salen en las filas de canciones.
   out.push(shelf('Tus artistas', d.artists.filter((a) => a.tracks >= 3).sort((a, b) => b.plays - a.plays || b.tracks - a.tracks).slice(0, 12).map((a) => card(item.artist(a)))));
   return frag(out);
