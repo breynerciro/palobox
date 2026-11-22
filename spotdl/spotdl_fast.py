@@ -44,6 +44,20 @@ def cached(fn):
     return wrap
 
 
+def shared(fn, names):
+    """Envuelve un método de spotapi.BaseClient que averigua algo (la sesión, un token): al terminar deja esos
+    valores también en la clase. Cada consulta a Spotify crea un cliente nuevo, y así nace con lo que ya averiguó
+    el anterior en vez de volver a abrir sesión. El propio cliente renueva lo que vence o lo que Spotify rechaza."""
+
+    def wrap(self, *args, **kwargs):
+        out = fn(self, *args, **kwargs)
+        for name in names:
+            setattr(type(self), name, getattr(self, name))
+        return out
+
+    return wrap
+
+
 def official(data):
     """El video es del artista: canal verificado, o canal «Artista - Topic» de YouTube Music."""
     return data.get("channel_is_verified") is True or str(data.get("channel") or "").endswith(" - Topic")
@@ -134,8 +148,20 @@ if __name__ == "__main__":
     from spotdl import console_entry_point
     from spotdl.providers.audio.base import AudioProvider, AudioProviderError
 
+    from spotapi.client import BaseClient
+
     Spotify.album = cached(Spotify.album)
     Spotify.artist = cached(Spotify.artist)
+    # Cada consulta a Spotify crea un cliente nuevo, y ese cliente baja el reproductor web entero (unos 77
+    # archivos de JavaScript) solo para leer de ahí el identificador de la consulta, que es el mismo para todas
+    # las del proceso. Recordarlo por nombre de consulta deja cada una en lo suyo (medido: de 79 peticiones a 4).
+    # Si Spotify publica otro reproductor a mitad de un trabajo largo, lo que falle se reintenta en un proceso nuevo.
+    BaseClient.part_hash = cached(BaseClient.part_hash)
+    # Lo mismo con la sesión: sin esto cada consulta abría la página de Spotify y pedía dos tokens antes de preguntar.
+    token = ("access_token", "client_id", "access_token_expires_at_ms")
+    BaseClient._get_auth_vars = shared(BaseClient._get_auth_vars, token)
+    BaseClient.get_session = shared(BaseClient.get_session, ("js_pack", "server_cfg", "client_version", "device_id", *token))
+    BaseClient.get_client_token = shared(BaseClient.get_client_token, ("client_token",))
     if os.environ.get("SPOTDL_OFFICIAL", "1") != "0":
         AudioProvider.get_download_metadata = only_official(AudioProvider.get_download_metadata, AudioProviderError)
         AudioProvider.search = second_chance(AudioProvider.search, youtube_official)

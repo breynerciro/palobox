@@ -34,6 +34,30 @@ class CacheTest(unittest.TestCase):
         fast(None, "a", limit=50)  # con más argumentos no se guarda
         self.assertEqual([c[0] for c in calls], ["a", "b", "a"])
 
+    def test_la_sesion_pasa_al_cliente_siguiente(self):
+        """Cada consulta a Spotify crea un cliente; lo que uno averigua (sesión, tokens) le queda al siguiente."""
+        sesiones = []
+
+        class Cliente:
+            token = None
+
+            def abrir(self):
+                sesiones.append(1)
+                self.token = f"token-{len(sesiones)}"
+
+            def consultar(self):
+                if self.token is None:
+                    self.abrir()
+                return self.token
+
+        Cliente.abrir = spotdl_fast.shared(Cliente.abrir, ("token",))
+        self.assertEqual([Cliente().consultar() for _ in range(3)], ["token-1"] * 3)
+        self.assertEqual(len(sesiones), 1)  # tres clientes, una sola sesión
+        viejo = Cliente()
+        viejo.token = None  # venció: ese cliente la renueva y los siguientes reciben la nueva
+        self.assertEqual(viejo.consultar(), "token-2")
+        self.assertEqual(Cliente().consultar(), "token-2")
+
     def test_solo_fuentes_oficiales(self):
         self.assertTrue(spotdl_fast.official({"channel": "Carin Leon", "channel_is_verified": True}))
         self.assertTrue(spotdl_fast.official({"channel": "Noiseferatu - Topic"}))  # audio oficial de YouTube Music
