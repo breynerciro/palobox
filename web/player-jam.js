@@ -11,7 +11,7 @@ export async function joinJam(code) {
 // playOn elige en cuál de mis dispositivos suena; con add lo suma a los que ya suenan (o lo quita si ya sonaba).
 function playOn(d, add = false) {
   const { room, pos } = state();
-  if (room) return void jam.send('here', { target: d.id, add });
+  if (room) return void jam.send('here', { target: d.id, user: d.user, add });
   if (d.me) return; // sin sala ya suena aquí
   if (pos < 0) return toast('Pon a sonar algo primero y luego elige el dispositivo.');
   startRoom({ target: d.id, add });
@@ -32,11 +32,11 @@ export function paintJam() {
     b.onclick = run;
     return b;
   };
-  const out = [title('Reproducir en')];
+  const out = [title(room?.open ? 'Reproducir en (todos los del jam)' : 'Reproducir en')];
   out.push(el('ul', { className: 'list' }, devices.map((d) => {
     const on = room ? d.active : d.me;
     const b = el('button', { className: 'row' }, el('span', { className: 'type', style: `--tc: var(--t-${on ? 'audio' : 'doc'})` }, icon('cast')),
-      el('div', { className: 'row-text' }, el('p', { textContent: d.name }), el('p', { className: 'muted', textContent: joinText(d.me && 'Este dispositivo', on && 'Suena aquí') })),
+      el('div', { className: 'row-text' }, el('p', { textContent: d.name }), el('p', { className: 'muted', textContent: joinText(d.me && 'Este dispositivo', d.user, on && 'Suena aquí') })),
       on && icon('check'));
     if (on) b.setAttribute('aria-current', 'true');
     b.onclick = () => playOn(d);

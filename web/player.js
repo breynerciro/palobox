@@ -693,7 +693,7 @@ export function reset() {
 // applyJam recibe cada foto del servidor: mis dispositivos y, si hay sala, su estado.
 function applyJam(s) {
   offset = s.now - Date.now();
-  devices = s.devices.map((d) => ({ ...d, me: d.id === s.me }));
+  devices = s.devices.map((d) => ({ ...d, me: !d.user && d.id === s.me })); // en un jam vienen también los de los demás (user)
   const was = room;
   room = s.room;
   here = !room || devices.some((d) => d.me && d.active);

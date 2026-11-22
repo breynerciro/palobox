@@ -140,6 +140,7 @@ type deviceView struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Active bool   `json:"active"`
+	User   string `json:"user,omitempty"` // en un jam, dueño del dispositivo si es de otra persona
 }
 type memberView struct {
 	Name   string `json:"name"`
@@ -185,10 +186,20 @@ func (h *Hub) snapshot(u *user, device string, have int) view {
 	now := time.Now()
 	v := view{Seq: h.seq, Now: now.UnixMilli(), Me: device, Devices: []deviceView{}}
 	for _, c := range u.conns {
-		v.Devices = append(v.Devices, deviceView{c.id, c.name, u.active[c.id]})
+		v.Devices = append(v.Devices, deviceView{c.id, c.name, u.active[c.id], ""})
+	}
+	if r := u.room; r != nil && r.open { // en un jam se eligen también los dispositivos de los demás
+		for _, m := range r.members {
+			if m != u {
+				for _, c := range m.conns {
+					v.Devices = append(v.Devices, deviceView{c.id, c.name, m.active[c.id], m.name})
+				}
+			}
+		}
 	}
 	sort.Slice(v.Devices, func(i, j int) bool {
-		return v.Devices[i].Name+v.Devices[i].ID < v.Devices[j].Name+v.Devices[j].ID
+		a, b := v.Devices[i], v.Devices[j]
+		return a.User+"\x00"+a.Name+a.ID < b.User+"\x00"+b.Name+b.ID
 	})
 	if r := u.room; r != nil {
 		rv := &roomView{Code: r.code, Open: r.open, Pos: r.pos, Playing: r.playing, At: r.cur(now), Stamp: now.UnixMilli(), Qrev: r.qrev, Manual: r.manual}
@@ -203,7 +214,7 @@ func (h *Hub) snapshot(u *user, device string, have int) view {
 			mv := memberView{Name: m.name, Online: len(m.conns) > 0}
 			var names []string
 			for _, d := range v.Devices { // ya ordenados; para otro miembro se recorren los suyos
-				if m == u && d.Active {
+				if m == u && d.Active && d.User == "" {
 					names = append(names, d.Name)
 				}
 			}
@@ -475,6 +486,7 @@ func (h *Hub) advance(r *jamRoom, ended bool) {
 func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 	var in struct {
 		Device, Op, Code, Target, Path string
+		User                           string // dueño de Target en un jam; vacío si es mío
 		Paths                          []string
 		Pos, Index, Qrev, Repeat       int
 		Manual                         int
@@ -567,10 +579,24 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 					room.repeat = max(0, min(in.Repeat, 2))
 				}
 			case "here":
-				if u.conns[in.Target] == nil {
+				owner := u
+				if in.User != "" && in.User != u.name && room.open {
+					owner = nil
+					for _, m := range room.members {
+						if m.name == in.User {
+							owner = m
+						}
+					}
+				}
+				if owner == nil || owner.conns[in.Target] == nil {
 					return view{}, httpx.Error(409, "Ese dispositivo ya no está conectado.")
 				}
-				u.listen(in.Target, in.Add)
+				if !in.Add && room.open { // «solo ahí»: se calla en los dispositivos de todos los del jam
+					for _, m := range room.members {
+						m.active = map[string]bool{}
+					}
+				}
+				owner.listen(in.Target, in.Add)
 			case "queue": // alguien puso a sonar otra lista
 				if len(tracks) == 0 {
 					return view{}, httpx.Error(404, "Esa música ya no está en la biblioteca.")

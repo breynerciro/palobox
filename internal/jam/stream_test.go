@@ -185,3 +185,38 @@ func TestCutMark(t *testing.T) {
 		t.Fatalf("lo nuevo empieza en el byte %d (%.3f s) y «cut» dijo %.3f s", start, float64(start)/1000, *v.Cut)
 	}
 }
+
+// En un jam cualquiera elige dónde suena entre los dispositivos de todos: solo en uno, o sumando otro.
+func TestJamPicksDevices(t *testing.T) {
+	h := &Hub{Lookup: func(p []string) ([]music.Track, error) { return []music.Track{{Path: p[0], Dur: 60}}, nil }}
+	cmd := func(user, body string) view {
+		w := httptest.NewRecorder()
+		if err := h.Cmd(w, httptest.NewRequest("POST", "/api/jam", strings.NewReader(body)), httpx.User{Name: user}); err != nil {
+			t.Fatal(err)
+		}
+		var v view
+		json.Unmarshal(w.Body.Bytes(), &v)
+		return v
+	}
+	h.mu.Lock()
+	for user, dev := range map[string]string{"ana": "anatelefono", "beto": "betoparlante"} {
+		h.get(user).conns[dev] = &conn{id: dev, name: dev, wake: make(chan struct{}, 1)}
+	}
+	h.mu.Unlock()
+	v := cmd("ana", `{"device":"anatelefono","op":"start","paths":["a.mp3"],"open":true}`)
+	cmd("beto", `{"device":"betoparlante","op":"join","code":"`+v.Room.Code+`"}`)
+	sounding := func(v view) (on []string) {
+		for _, d := range v.Devices {
+			if d.Active {
+				on = append(on, d.User+"/"+d.ID)
+			}
+		}
+		return
+	}
+	if got := sounding(cmd("ana", `{"device":"anatelefono","op":"here","target":"betoparlante","user":"beto"}`)); !slices.Equal(got, []string{"beto/betoparlante"}) {
+		t.Fatalf("«solo en el parlante de beto» dejó sonando %v", got)
+	}
+	if got := sounding(cmd("ana", `{"device":"anatelefono","op":"here","target":"anatelefono","add":true}`)); !slices.Equal(got, []string{"/anatelefono", "beto/betoparlante"}) {
+		t.Fatalf("sumar el teléfono de ana dejó sonando %v", got)
+	}
+}
