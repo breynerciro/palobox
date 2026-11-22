@@ -152,27 +152,30 @@ en `error` reintentables (las URLs salen de `errors-{id}.txt` si existe). `queue
 | `MAX_ACTIVE` | `5` | trabajos en cola a la vez |
 | `MAX_PER_USER` | `2` | trabajos en cola a la vez por usuario |
 | `JOB_TIMEOUT` | `43200` | segundos por trabajo |
-| `SPOTDL_OFFICIAL` | `1` | `1`: una canción solo se baja de un canal verificado o «Artista - Topic»; `0`: de cualquier video que coincida (como hace spotDL) |
+| `SPOTDL_OFFICIAL` | `1` | `1`: una canción se baja de un canal verificado o «Artista - Topic», y solo si no existe, del video que mejor coincida; `0`: siempre de ese (como hace spotDL) |
 | `SPOTDL_BIN` | `spotdl` | binario (los tests usan uno falso) |
 | `SPOTIFY_CLIENT_ID` / `SPOTIFY_CLIENT_SECRET` | — | credenciales propias de Spotify; se pasan a spotDL por su `config.json` (0600), nunca por la línea de comandos. spotDL 4.6 no las usa salvo con su API oficial, que aquí no se activa (ver «Velocidad») |
 | `SPOTDL_COOKIE_FILE` | — | `cookies.txt` de YouTube si aparecen bloqueos |
 
-## Solo fuentes oficiales
+## Primero la fuente oficial
 
 spotDL busca el audio oficial en YouTube Music y, si no lo encuentra, se queda con el video que mejor
 coincida en título y duración; así entró un karaoke («Tono bajo», de un canal cualquiera) en lugar de la
 canción. `spotdl_fast.py` revisa el canal antes de bajar: pasa si está verificado o si es un canal
-«Artista - Topic». Si no, la canción queda como «no disponible» y no se reintenta.
+«Artista - Topic».
 
 Probado contra 30 canciones al azar de la biblioteca: 24 venían de canales verificados, 4 de canales
-«Topic» y 2 (el mismo video con letra subido por un fan) se habrían rechazado.
+«Topic» y 2 (el mismo video con letra subido por un fan) no eran oficiales.
 
-- La marca de verificado la da yt-dlp (`channel_is_verified`). Si YouTube o yt-dlp dejan de entregarla, todo
-  lo que no sea «Topic» fallaría como «no disponible»: se apaga con `SPOTDL_OFFICIAL=0`.
+- La marca de verificado la da yt-dlp (`channel_is_verified`). Si YouTube o yt-dlp dejan de entregarla, casi
+  todo pasaría por el camino de «sin fuente oficial»; con `SPOTDL_OFFICIAL=0` se apaga el filtro entero.
 - **Segunda oportunidad**: si el video elegido no es oficial (o spotDL no encontró nada), se busca la canción
   en YouTube y se toma, entre los videos de un canal verificado del propio artista cuyo título la nombre, el
   de duración más parecida, sin tope de diferencia. Puede ser la versión del videoclip: «La Típica» dura 2:42
-  en el álbum y 3:17 en el canal de AlcolirykoZ. Sin ninguna, la canción queda como «no disponible».
+  en el álbum y 3:17 en el canal de AlcolirykoZ.
+- **Sin fuente oficial**: solo si tampoco hay ninguna se baja el video que eligió spotDL, que puede ser otra
+  versión o de un canal cualquiera. Queda en el registro del servicio como «sin fuente oficial: … se baja de …».
+  Antes esas canciones quedaban como «no disponible».
 
 ## Velocidad
 

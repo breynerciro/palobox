@@ -9,12 +9,12 @@ Spotify.
 
 spotDL busca cada canción en YouTube Music y, si no encuentra el audio oficial, se queda con el video
 que mejor coincida en título y duración: así entran karaokes y versiones de cualquier canal. Aquí
-una canción solo se baja si viene de un canal verificado o de un canal «Artista - Topic» (el audio
-oficial que publica YouTube Music). Si el video elegido no lo es (o no hubo resultado), hay una
-segunda oportunidad: se busca la canción en YouTube y se toma, entre los videos de un canal verificado
-del propio artista cuyo título la nombre, el de duración más parecida, sin tope de diferencia (puede
-ser la versión del videoclip). Si tampoco hay, falla con «Unofficial source» y el servicio la reporta
-como no disponible, para reemplazarla a mano. Se apaga con SPOTDL_OFFICIAL=0.
+se prefiere la fuente oficial: un canal verificado o un canal «Artista - Topic» (el audio oficial que
+publica YouTube Music). Si el video elegido no lo es (o no hubo resultado), hay una segunda oportunidad:
+se busca la canción en YouTube y se toma, entre los videos de un canal verificado del propio artista cuyo
+título la nombre, el de duración más parecida, sin tope de diferencia (puede ser la versión del videoclip).
+Solo si tampoco hay se baja lo que eligió spotDL, y queda anotado en el registro como «sin fuente oficial».
+Se apaga con SPOTDL_OFFICIAL=0 (siempre lo que elija spotDL).
 
 Lo demás es spotDL tal cual.
 """
@@ -63,20 +63,38 @@ def official(data):
     return data.get("channel_is_verified") is True or str(data.get("channel") or "").endswith(" - Topic")
 
 
+# Sin fuente oficial se acepta lo que spotDL habría elegido. relaxed apaga el rechazo en este hilo mientras se
+# repite su búsqueda; allowed son los videos que quedaron aceptados así, para que la descarga no los rechace.
+relaxed = threading.local()
+allowed, allowed_guard = set(), threading.Lock()
+
+
 def only_official(fn, error):
     """Envuelve AudioProvider.get_download_metadata: los datos del video llegan antes de bajar el audio.
-    Los datos sin descarga se recuerdan por URL: la segunda oportunidad ya los pidió para decidir."""
+    Los datos sin descarga se recuerdan por URL: la segunda oportunidad ya los pidió para decidir, y la
+    descarga los reutiliza en vez de volver a consultar el video."""
     memo, guard = {}, threading.Lock()
 
     def wrap(self, url, download=False):
         with guard:
-            data = None if download else memo.get(url)
+            known = memo.get(url)
+        data = None if download else known
+        if download and known is not None:
+            # El video ya se consultó para decidir si era el oficial: se baja con esos mismos datos. Pedírselo
+            # otra vez a YouTube era resolver de nuevo su protección (un proceso de deno, más de un segundo de
+            # procesador por canción). Si con ellos no baja (enlace vencido), sigue el camino de siempre.
+            try:
+                data = self.audio_handler.process_ie_result(copy.deepcopy(known), download=True)
+            except Exception:  # pylint: disable=broad-except
+                data = None
         if data is None:
             data = fn(self, url, download)
             if not download:
                 with guard:
                     memo[url] = data
-        if not official(data):
+        with allowed_guard:
+            ok = url in allowed
+        if not ok and not getattr(relaxed, "on", False) and not official(data):
             raise error(f"Unofficial source: {data.get('channel')} - {url}")
         return data
 
@@ -104,7 +122,7 @@ def pick_official(entries, name, artists, duration):
 
 def second_chance(search, find):
     """Envuelve AudioProvider.search: si lo elegido no es oficial (o no hubo nada), busca la versión oficial.
-    Sin alternativa devuelve lo mismo que spotDL, y only_official lo rechaza al pedir sus datos."""
+    Solo si tampoco existe se queda con lo que eligió spotDL, y lo anota en allowed para que se pueda bajar."""
 
     def wrap(self, song, *args, **kwargs):
         url = rejected = None
@@ -122,9 +140,27 @@ def second_chance(search, find):
                 raise
             rejected = error
         alt = find(song)
-        if alt or url or not rejected:
-            return alt or url
-        raise rejected
+        if alt:
+            # La eligió pick_official en el canal verificado del artista. Al pedir sus datos completos yt-dlp a
+            # veces no repite la marca de verificado («Danny Ocean»): se acepta de una vez para que no se rechace.
+            with allowed_guard:
+                allowed.add(alt)
+            return alt
+        if not rejected:
+            return url
+        # No hay fuente oficial: se baja lo que spotDL habría elegido sin el filtro (puede ser otra versión o un
+        # canal cualquiera), solo en este caso. Si el rechazo saltó dentro de su búsqueda, se repite sin él.
+        relaxed.on = True
+        try:
+            url = url or search(self, song, *args, **kwargs)
+        finally:
+            relaxed.on = False
+        if not url:
+            raise rejected
+        with allowed_guard:
+            allowed.add(url)
+        print(f"sin fuente oficial: «{getattr(song, 'name', '')}» se baja de {url} ({str(rejected)[:80]})", file=sys.stderr, flush=True)
+        return url
 
     return wrap
 

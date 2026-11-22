@@ -72,6 +72,39 @@ class CacheTest(unittest.TestCase):
         datos["channel_is_verified"] = True
         self.assertEqual(meta(None, "u", True), datos)
 
+    def test_la_descarga_reutiliza_la_consulta(self):
+        """El video se consulta para decidir y luego se baja con esos datos, sin pedírselo otra vez a YouTube."""
+        consultas, bajadas = [], []
+
+        class Handler:
+            falla = False
+
+            def process_ie_result(self, info, download=False):
+                if self.falla:
+                    raise RuntimeError("enlace vencido")
+                bajadas.append((info["id"], download))
+                info["bajado"] = True  # yt-dlp escribe sobre lo que recibe: debe ser una copia
+                return info
+
+        class Provider:
+            audio_handler = Handler()
+
+        def consultar(_self, url, download=False):
+            consultas.append((url, download))
+            return {"id": url, "channel_is_verified": True}
+
+        meta = spotdl_fast.only_official(consultar, ValueError)
+        p = Provider()
+        self.assertEqual(meta(p, "a"), {"id": "a", "channel_is_verified": True})
+        self.assertTrue(meta(p, "a", True)["bajado"])
+        self.assertEqual((consultas, bajadas), ([("a", False)], [("a", True)]))  # una sola consulta a YouTube
+        self.assertNotIn("bajado", meta(p, "a"))  # lo recordado quedó intacto
+        Handler.falla = True  # con los datos guardados no baja: se consulta de nuevo, como antes
+        self.assertEqual(meta(p, "a", True), {"id": "a", "channel_is_verified": True})
+        self.assertEqual(consultas[-1], ("a", True))
+        meta(p, "b", True)  # un video que nunca se consultó antes
+        self.assertEqual(consultas[-1], ("b", True))
+
     def test_segunda_oportunidad(self):
         # Lo que devuelve YouTube al buscar «La Típica» de Alcolirykoz (el álbum dura 162 s).
         vistos = [
@@ -99,9 +132,17 @@ class CacheTest(unittest.TestCase):
 
         buscar = {"elige": "fan"}
         search = spotdl_fast.second_chance(lambda _self, _song: buscar["elige"], lambda _song: buscar.get("oficial"))
-        self.assertEqual(search(Provider(), Song()), "fan")  # sin alternativa: queda la de spotDL y se rechaza después
+        spotdl_fast.allowed.clear()
+        self.assertEqual(search(Provider(), Song()), "fan")  # no hay oficial: queda la de spotDL, y se podrá bajar
+        self.assertEqual(spotdl_fast.allowed, {"fan"})
+        meta = spotdl_fast.only_official(lambda _self, u, download=False: {"channel": "Pineda.715"}, ValueError)
+        self.assertEqual(meta(None, "fan"), {"channel": "Pineda.715"})  # aceptada por falta de oficial
+        with self.assertRaises(ValueError):
+            meta(None, "otro-fan")  # las demás siguen exigiendo fuente oficial
+        spotdl_fast.allowed.clear()
         buscar["oficial"] = "oficial"
         self.assertEqual(search(Provider(), Song()), "oficial")
+        self.assertIn("oficial", spotdl_fast.allowed)  # la del canal del artista no se vuelve a poner en duda
         buscar["elige"] = None
         self.assertEqual(search(Provider(), Song()), "oficial")  # spotDL no encontró nada
         buscar["elige"] = "bien"
@@ -114,8 +155,19 @@ class CacheTest(unittest.TestCase):
             raise ValueError("Unofficial source: Rap Metafora - x")
 
         self.assertEqual(spotdl_fast.second_chance(rota, lambda _song: "oficial")(Provider(), Song()), "oficial")
-        with self.assertRaises(ValueError):  # sin alternativa, el mismo rechazo
+        with self.assertRaises(ValueError):  # sin oficial y sin nada que elegir: sigue fallando
             spotdl_fast.second_chance(rota, lambda _song: None)(Provider(), Song())
+
+        # Sin oficial, la búsqueda de spotDL se repite sin el filtro y lo que elija queda aceptado.
+        def filtrada(_self, _song):
+            if not getattr(spotdl_fast.relaxed, "on", False):
+                raise ValueError("Unofficial source: Vibra Latina - x")
+            return "la-de-spotdl"
+
+        self.assertEqual(spotdl_fast.second_chance(filtrada, lambda _song: None)(Provider(), Song()), "la-de-spotdl")
+        self.assertIn("la-de-spotdl", spotdl_fast.allowed)
+        self.assertFalse(spotdl_fast.relaxed.on)  # el filtro vuelve a quedar puesto para la siguiente canción
+        spotdl_fast.allowed.clear()
 
         def sin_red(_self, _song):
             raise OSError("sin red")

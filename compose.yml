@@ -33,6 +33,10 @@ services:
     image: palobox-spotdl
     build: ./spotdl
     restart: unless-stopped
+    # Las descargas copan el procesador (convertir a MP3, resolver YouTube). Con este peso, cuando la app también
+    # lo necesita (música sonando, fotos) se lleva unas 5 de cada 6 partes (peso 100 contra 21, medido en el
+    # servidor); si nadie más lo pide, las descargas van igual de rápido.
+    cpu_shares: 128
     user: "1000:1000" # mismos dueños que la app y Samba
     # DNS fijo: si Tailscale cambia el DNS del servidor, el contenedor viejo deja de resolver YouTube.
     dns: [1.1.1.1, 8.8.8.8]
@@ -50,7 +54,7 @@ services:
       # SPOTDL_COOKIE_FILE: /data/.palobox/spotdl/cookies.txt
       MAX_ACTIVE: "30" # trabajos en cola a la vez; con 5 (el valor del servicio) el sexto pedido de 55 cuentas se rechaza
       # MAX_PER_USER: "2"
-      SPOTDL_OFFICIAL: ${SPOTDL_OFFICIAL:-1} # 1: solo audio de canales verificados o «Topic»; 0: cualquier video que coincida
+      SPOTDL_OFFICIAL: ${SPOTDL_OFFICIAL:-1} # 1: audio de canales verificados o «Topic», y solo si no existe, el video que mejor coincida; 0: siempre ese
       THREADS: ${SPOTDL_THREADS:-4} # canciones a la vez (4 es el valor de spotDL); bájalo en .env si YouTube pide verificación
     healthcheck:
       test: ["CMD", "python3", "-c", "import urllib.request as u; t = open('/run/secrets/spotdl_token').read().strip(); u.urlopen(u.Request('http://127.0.0.1:8801/health', headers={'Authorization': 'Bearer ' + t}), timeout=8)"]
