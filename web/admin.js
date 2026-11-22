@@ -199,30 +199,6 @@ function musicSection(m) {
   ];
 }
 
-// genresSection lista los artistas que nadie ha clasificado y los que clasificó Gemini o heredaron el género de
-// una playlist, para corregirlos. Los de la lista hecha a mano no se muestran: son cientos y ya están revisados.
-async function genresSection() {
-  const r = await api('/api/admin/genres').catch(() => null);
-  if (!r?.ok) return [];
-  const d = await r.json();
-  const pick = (a) => {
-    const sel = el('select', { className: 'btn secondary small' }, el('option', { value: '', textContent: 'Sin género' }),
-      ...d.genres.map((g) => el('option', { value: g, textContent: g.replace('/', ' · '), selected: g === a.genre })));
-    sel.setAttribute('aria-label', `Género de ${a.name}`);
-    sel.onchange = () => send('/api/admin/genres', json('PUT', { artist: a.name, genre: sel.value }), `${a.name}: ${sel.value || 'sin género'}.`);
-    return sel;
-  };
-  const from = { gemini: 'Clasificado por Gemini', playlist: 'Heredado de su playlist', manual: 'Corregido a mano' };
-  const rows = (list) => el('ul', { className: 'list' }, list.map((a) => el('li', {}, el('div', { className: 'row static' },
-    el('div', { className: 'row-text' }, el('p', { textContent: a.name }), el('p', { className: 'muted', textContent: joinText(plural(a.tracks, 'canción', 'canciones'), !a.genre && a.source === 'gemini' ? 'Gemini no lo reconoció' : from[a.source]) })), pick(a)))));
-  const none = d.artists.filter((a) => !a.genre), auto = d.artists.filter((a) => a.genre && (a.source === 'gemini' || a.source === 'playlist'));
-  return [
-    heading('Artistas sin género', none.length),
-    none.length ? rows(none) : el('p', { className: 'muted', textContent: 'Todos los artistas tienen género.' }),
-    ...(auto.length ? [heading('Clasificados automáticamente', auto.length), rows(auto)] : []),
-  ];
-}
-
 async function downloadsSection(sp) {
   if (!sp?.enabled) return [];
   if (!sp.ok) return [heading('Descargas de Spotify', 'sin respuesta')];
@@ -305,7 +281,7 @@ export async function adminView(path = '') {
   $('#subtitle').textContent = `Servidor encendido hace ${days ? plural(days, 'día', 'días') : plural(Math.floor(s.uptime / 3600), 'hora', 'horas')}`;
   const body = key === 'usuarios' ? usersSection(s)
     : key === 'actividad' ? [...sessionsSection(s), ...loginsSection(s)]
-    : key === 'musica' ? [...musicSection(s.music), ...(await downloadsSection(sp)), ...(await genresSection())]
+    : key === 'musica' ? [...musicSection(s.music), ...(await downloadsSection(sp))]
     : key === 'almacenamiento' ? storageSection(s)
     : summary(s, sp);
   const frag = document.createDocumentFragment();

@@ -56,16 +56,6 @@ func TestClassify(t *testing.T) {
 	if calls != 2 {
 		t.Fatalf("solicitudes a Gemini: %d", calls)
 	}
-	// La corrección del administrador pesa más, y vaciarla deja al artista sin género.
-	if err := l.SetGenre("Artista 0 amor", "rock/metal"); err != nil {
-		t.Fatal(err)
-	}
-	if err := l.SetGenre("Artista 0 amor", "no existe"); err == nil {
-		t.Fatal("aceptó un género fuera de la lista")
-	}
-	if s, _ = l.snap(); s.genreOf("Artista 0 amor/x/y.mp3") != "rock/metal" {
-		t.Fatal("corrección manual")
-	}
 }
 
 // Sin Gemini la clasificación se reintenta después, sin dejar a nadie marcado como desconocido.
@@ -92,10 +82,10 @@ func TestInherit(t *testing.T) {
 		}
 	}
 	nuevo := fold(s.tracks[9].ArtistPath)
-	l.exec(t, `INSERT INTO artist_genre VALUES(?, '', 'gemini')`, nuevo) // Gemini no lo reconoció
-	l.exec(t, `INSERT INTO artist_genre VALUES(?, 'rock/metal', 'manual')`, fold(s.tracks[8].ArtistPath))
+	l.exec(t, `INSERT INTO artist_genre VALUES(?, '', 'gemini')`, nuevo)                                  // Gemini no lo reconoció
+	l.exec(t, `INSERT INTO artist_genre VALUES(?, 'rock/metal', 'gemini')`, fold(s.tracks[8].ArtistPath)) // a este sí
 	l.inherit(paths)
-	if got := l.lista(t, `SELECT genre || '/' || source FROM artist_genre ORDER BY source`); got != "rock/metal/manual|tropical/salsa/playlist" {
+	if got := l.lista(t, `SELECT genre || '/' || source FROM artist_genre ORDER BY source`); got != "rock/metal/gemini|tropical/salsa/playlist" {
 		t.Fatal(got)
 	}
 }

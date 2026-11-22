@@ -79,7 +79,7 @@ Con una llave de la API de Gemini (gratis en [aistudio.google.com](https://aistu
 
 - **Sugerencias por género.** Cuando la cola se acaba siguen canciones del mismo género y luego de la misma
   familia. El género va por artista: `internal/music/genres.json` trae los clasificados a mano, Gemini clasifica
-  una sola vez a cada artista nuevo, y el administrador corrige cualquiera en **Administración → Música**.
+  una sola vez a cada artista nuevo.
 - **Playlists por descripción.** «Merengue de los 90 para una fiesta»: lo que se entiende por palabras (género,
   década, artista) se resuelve sin Gemini; el resto lo traduce y lo escoge Gemini. Cinco al día por cuenta.
 

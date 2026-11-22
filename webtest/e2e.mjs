@@ -96,7 +96,7 @@ try {
     return `${n} tarjetas intactas, ${r.total - n} nuevas`;
   });
 
-  await step('géneros en el panel de administrador', async () => {
+  await step('géneros por artista', async () => {
     const g = await api('/api/admin/genres');
     must(g.status === 200 && g.data.genres.length > 20, `géneros ${g.status}`);
     genres = Object.fromEntries(g.data.artists.map((a) => [a.name, a.genre]));
@@ -167,19 +167,6 @@ try {
     const off = p.data.tracks.filter((t) => genres[t.artistPath] !== 'tropical/salsa' || t.year < 1990 || t.year > 1999);
     must(off.length === 0, `fuera del pedido: ${off.slice(0, 3).map((t) => `${t.title} (${t.artistPath}, ${t.year})`).join('; ')}`);
     return `«${name}», ${p.data.tracks.length} canciones de salsa de los 90`;
-  });
-
-  await step('corregir un género desde el panel', async () => {
-    await js(`location.hash = '#/admin/musica'`);
-    await until(`[...document.querySelectorAll('h2')].some((h) => h.textContent.includes('Artistas sin género'))`, 'sección de géneros');
-    const artist = await js(`const s = document.querySelector('select'); if (!s) return null; s.value = 'pop/pop'; s.dispatchEvent(new Event('change')); return s.getAttribute('aria-label').replace('Género de ', '');`);
-    must(artist, 'no hay selectores de género en el panel');
-    await sleep(1500);
-    const g = await api('/api/admin/genres');
-    const row = g.data.artists.find((a) => a.name === artist);
-    must(row.genre === 'pop/pop' && row.source === 'manual', `${artist}: ${row.genre} (${row.source})`);
-    must((await api('/api/admin/genres', 'PUT', { artist, genre: 'no existe' })).status === 400, 'aceptó un género fuera de la lista');
-    return `${artist} → pop/pop`;
   });
 
   await step('borrar la playlist de prueba', async () => {

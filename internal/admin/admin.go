@@ -316,7 +316,7 @@ func (h *Handler) CloseSession(w http.ResponseWriter, r *http.Request, u httpx.U
 	return httpx.WriteJSON(w, 200, done)
 }
 
-// Genres lista los artistas con su género para corregirlos.
+// Genres lista los artistas con su género y de dónde salió: lo consultan las pruebas punta a punta (webtest/e2e.mjs).
 func (h *Handler) Genres(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	if !u.Admin {
 		return errOnlyAdmin
@@ -326,21 +326,6 @@ func (h *Handler) Genres(w http.ResponseWriter, r *http.Request, u httpx.User) e
 		return err
 	}
 	return httpx.WriteJSON(w, 200, out)
-}
-
-// SetGenre guarda el género que el administrador le pone a un artista.
-func (h *Handler) SetGenre(w http.ResponseWriter, r *http.Request, u httpx.User) error {
-	if !u.Admin {
-		return errOnlyAdmin
-	}
-	var in struct{ Artist, Genre string }
-	if err := httpx.ReadJSON(w, r, &in); err != nil {
-		return err
-	}
-	if err := h.Music.SetGenre(in.Artist, in.Genre); err != nil {
-		return err
-	}
-	return httpx.WriteJSON(w, 200, done)
 }
 
 // Reindex vuelve a recorrer la biblioteca de música en segundo plano.

@@ -1,8 +1,8 @@
 package music
 
-// Géneros por artista. Los MP3 que baja spotDL no traen género, así que sale de tres capas, de mayor a menor
-// peso: lo que corrige el administrador (tabla artist_genre, source manual), la lista hecha a mano de
-// genres.json, y lo que se averigua solo: Gemini al llegar un artista nuevo o la playlist con la que llegó.
+// Géneros por artista. Los MP3 que baja spotDL no traen género, así que sale de dos capas: la lista hecha a mano
+// de genres.json, que manda, y para los demás lo que se averigua solo (tabla artist_genre): Gemini al llegar un
+// artista nuevo o la playlist con la que llegó.
 
 import (
 	"context"
@@ -14,8 +14,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"palobox/internal/httpx"
 )
 
 //go:embed genres.json
@@ -50,20 +48,17 @@ func (l *Library) genres() (map[string]string, error) {
 	for a, g := range baseGenre {
 		out[a] = g
 	}
-	rows, err := l.DB.Query(`SELECT artist, genre, source FROM artist_genre`)
+	rows, err := l.DB.Query(`SELECT artist, genre FROM artist_genre`)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
 	for rows.Next() {
-		var a, g, src string
-		if err := rows.Scan(&a, &g, &src); err != nil {
+		var a, g string
+		if err := rows.Scan(&a, &g); err != nil {
 			return nil, err
 		}
-		switch {
-		case src == "manual" && g == "":
-			delete(out, a) // el administrador lo dejó sin género
-		case g != "" && (src == "manual" || out[a] == ""):
+		if g != "" && out[a] == "" {
 			out[a] = g
 		}
 	}
@@ -76,8 +71,7 @@ func (s *snapshot) genreOf(path string) string {
 	return s.genre[fold(dir)]
 }
 
-// GenreList es la lista del panel de administrador: cada artista con su género y de dónde salió
-// (manual, lista, gemini, playlist o vacío si nadie lo ha clasificado).
+// GenreList da cada artista con su género y de dónde salió (lista, gemini, playlist o vacío si nadie lo ha clasificado).
 func (l *Library) GenreList() (map[string]any, error) {
 	s, err := l.snap()
 	if err != nil {
@@ -104,24 +98,12 @@ func (l *Library) GenreList() (map[string]any, error) {
 	for _, ar := range s.artists {
 		a := fold(ar.Path)
 		src := source[a]
-		if _, ok := baseGenre[a]; ok && src != "manual" {
+		if _, ok := baseGenre[a]; ok {
 			src = "lista"
 		}
 		out = append(out, row{ar.Path, s.genre[a], src, ar.Tracks})
 	}
 	return map[string]any{"genres": Genres, "artists": out, "ai": l.Ask != nil}, rows.Err()
-}
-
-// SetGenre guarda la corrección del administrador; genre vacío deja al artista sin género.
-func (l *Library) SetGenre(artist, genre string) error {
-	if artist == "" || (genre != "" && !slices.Contains(Genres, genre)) {
-		return httpx.Error(400, "Ese género no está en la lista.")
-	}
-	if _, err := l.DB.Exec(`INSERT OR REPLACE INTO artist_genre(artist, genre, source) VALUES(?, ?, 'manual')`, fold(artist), genre); err != nil {
-		return err
-	}
-	l.rebuild()
-	return nil
 }
 
 // Clasificación con Gemini
@@ -194,7 +176,7 @@ func (l *Library) askGenres(ctx context.Context, hard bool, batch []sample) ([]s
 }
 
 // classify le pregunta a Gemini el género de los artistas que nadie ha clasificado, una sola vez por artista:
-// la respuesta queda en artist_genre, también cuando es «desconocido» (el administrador lo ve en su panel).
+// la respuesta queda en artist_genre, también cuando es «desconocido», para no volver a preguntar.
 // Lo llama cada recorrido del índice; sin artistas nuevos no gasta nada.
 func (l *Library) classify() {
 	if l.Ask == nil || !l.classMu.TryLock() {
@@ -298,9 +280,9 @@ func (l *Library) inherit(paths []string) {
 		return
 	}
 	for a := range missing {
-		// No pisa una corrección manual ni un género que Gemini sí reconoció.
+		// No pisa un género que Gemini sí reconoció.
 		l.DB.Exec(`INSERT INTO artist_genre(artist, genre, source) VALUES(?, ?, 'playlist')
-			ON CONFLICT(artist) DO UPDATE SET genre = excluded.genre, source = excluded.source WHERE artist_genre.genre = '' AND artist_genre.source != 'manual'`, a, top)
+			ON CONFLICT(artist) DO UPDATE SET genre = excluded.genre, source = excluded.source WHERE artist_genre.genre = ''`, a, top)
 	}
 	l.rebuild()
 }

@@ -101,7 +101,6 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("DELETE /api/admin/sessions/{id}", auth(a.admin.CloseSession))
 	mux.HandleFunc("POST /api/admin/music/reindex", auth(a.admin.Reindex))
 	mux.HandleFunc("GET /api/admin/genres", zip(auth(a.admin.Genres)))
-	mux.HandleFunc("PUT /api/admin/genres", auth(a.admin.SetGenre))
 	mux.HandleFunc("GET /api/admin/spotdl", auth(a.spotdl.Health))
 	mux.HandleFunc("POST /api/uploads", cloud(a.uploads.Start))
 	mux.HandleFunc("PATCH /api/uploads/{id}", cloud(a.uploads.Part))
