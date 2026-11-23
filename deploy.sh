@@ -17,13 +17,13 @@ docker build -t palobox-spotdl spotdl
 # (lleva la fecha de creación), así que se comparan configuración y capas. Sin gzip: las capas ya van
 # comprimidas (medido: 1:1) y por el Wi-Fi del servidor cada byte cuenta.
 SIG='{{json .Config}}{{.RootFS.Layers}}'
-send=()
+send=() # se envía solo :latest: `docker save palobox` a secas manda todas las etiquetas, también palobox:e2e (la imagen de prueba)
 for img in palobox palobox-spotdl; do
   [ "$(docker image inspect -f "$SIG" $img)" = "$($SSH "$HOST" "docker image inspect -f '$SIG' $img 2>/dev/null" || true)" ] || send+=("$img")
 done
 if [ ${#send[@]} -gt 0 ]; then
   echo "deploy: enviando ${send[*]}"
-  docker save "${send[@]}" | $SSH "$HOST" "docker load"
+  docker save "${send[@]/%/:latest}" | $SSH "$HOST" "docker load"
 else
   echo "deploy: las imágenes del servidor ya están al día"
 fi
