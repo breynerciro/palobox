@@ -190,7 +190,7 @@ func main() {
 	if g := gemini.Load(); g != nil { // sin llave: no se clasifican artistas nuevos ni hay playlists por descripción
 		a.music.Ask = g.Ask
 	}
-	a.music.Max = 8000 // tope de canciones para las descargas de quienes no son el administrador
+	a.music.Max = 15000 // tope de canciones para las descargas de quienes no son el administrador
 	if v := os.Getenv("MUSIC_MAX"); v != "" {
 		if _, err := fmt.Sscan(v, &a.music.Max); err != nil {
 			log.Fatal("MUSIC_MAX no es un número: ", v)

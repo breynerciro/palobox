@@ -96,7 +96,7 @@ Variables de `.env`, todas opcionales:
 | `ADMIN` | `admin` | usuario que ve el panel de administrador |
 | `DATA_PATH` | `/srv/data` | carpeta del servidor donde viven los datos |
 | `TZ` | `America/Bogota` | zona horaria |
-| `MUSIC_MAX` | `8000` | tope de canciones: al llegar, solo el administrador descarga más (`0` = sin tope) |
+| `MUSIC_MAX` | `15000` | tope de canciones: al llegar, solo el administrador descarga más (`0` = sin tope) |
 | `GEMINI_PER_DAY` | `300` | solicitudes a Gemini al día entre todas las cuentas (`0` = sin tope) |
 | `DEPLOY_HOST` | — | `usuario@servidor` para `./deploy.sh` |
 
