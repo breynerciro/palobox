@@ -748,7 +748,8 @@ function syncStream(t) {
     || (stream.held != null && room.pos === stream.pos && Math.abs(room.at - stream.held) < 1.5)); // se reanudó donde estaba
   if (steady) {
     stream = mark;
-    if (audio.paused) audio.play().catch(streamBlocked);
+    // Reanudado desde otro dispositivo: igual que en toggle, tras 60 s en pausa el flujo se da por cerrado y se abre otro.
+    if (audio.paused) Date.now() - pausedAt > 60000 ? openStream() : audio.play().catch(streamBlocked);
     return;
   }
   // En segundo plano el iPhone no deja abrir otro audio: se salta el colchón dentro del mismo. Chrome en Android
