@@ -402,7 +402,17 @@ try {
     } else await click('#jam-link');
     await until(`${q('#jam')}.open && ${q('#jam-body .row')}`, 'el panel de dispositivos');
     must((await js(`return document.querySelector('#jam-body').textContent`)).includes('Este dispositivo'), 'el panel no muestra este dispositivo');
+    must(await js(`return !!document.querySelector('#jam-body .jam-now') && !!document.querySelector('#jam-body .jam-card .btn.primary')`), 'faltan el encabezado de dónde suena o la tarjeta del jam');
     await shot('jam');
+    // Iniciar un jam de verdad necesita algo sonando; si la app lo deja abrir sin eso, se revisa la tarjeta y se sale.
+    await js(`[...document.querySelectorAll('#jam-body .jam-card .btn')].find((b) => b.textContent.includes('Iniciar')).click()`);
+    await sleep(2500);
+    if (await js(`return !!document.querySelector('#jam-body .jam-code')`)) {
+      must(/^[A-Z0-9]{6}$/.test(await js(`return document.querySelector('#jam-body .jam-code').textContent`)), 'el código del jam no tiene 6 caracteres');
+      await shot('jam-abierto');
+      await js(`[...document.querySelectorAll('#jam-body .jam-card .btn')].find((b) => b.textContent.includes('Salir')).click()`);
+      await until(`!document.querySelector('#jam-body .jam-code')`, 'salir del jam');
+    }
     await click('#jam-close');
     const dev = await js(`return localStorage.getItem('palobox.device')`);
     const bad = await api('/api/jam', 'POST', { device: dev, op: 'join', code: 'ZZZZZZ' });
@@ -510,6 +520,7 @@ try {
     } else await click('#logout');
     await answer();
     await until(`!${q('#login')}.hidden && ${q('#app')}.hidden`, 'la pantalla de entrada');
+    await shot('entrada');
     must((await api('/api/me')).status === 401, 'la sesión siguió abierta');
   });
 } catch (e) {

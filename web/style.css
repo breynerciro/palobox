@@ -2,14 +2,16 @@
    y el fondo negro hace que el contenido resalte (igual que Fotos o TV en iOS). */
 :root {
   color-scheme: dark;
-  --bg: #0a0a12;
-  --surface: #14141f;
-  --surface-2: #1d1d2b;
-  --line: #2c2c3f;
-  --text: #f4f5fa;
-  --muted: #a3a8ba;          /* 8,1:1 sobre --bg */
-  --accent: #4fb6c6;         /* 8,3:1 sobre --bg; cyan sereno: se nota sin gritar */
-  --on-accent: #0a0a12;
+  /* Marca: fondo #090D16, blanco, gris #94A3B8 y el degradado verde→cian del logo (#00F5A0 → #00F2FE). */
+  --bg: #090D16;
+  --surface: #0f1522;        /* superficies: el fondo de la marca, aclarado por pasos */
+  --surface-2: #18202f;
+  --line: #263145;
+  --text: #f8fafc;
+  --muted: #94a3b8;          /* 7,6:1 sobre --bg */
+  --accent: #00f3cf;         /* el punto medio del degradado, para texto e íconos de un solo color; 13:1 sobre --bg */
+  --grad: linear-gradient(135deg, #00f5a0, #00f2fe); /* el degradado de la marca: botones principales, avatar, filtro elegido */
+  --on-accent: #090D16;
   --glass: rgb(255 255 255 / .06); /* superficies sobre el fondo: dejan pasar el color de atrás */
   --danger: #ff8a8a;
   --success: #4ade9a;
@@ -17,7 +19,7 @@
   --t-folder: #b98aff;
   --t-image: #ff86a2;
   --t-video: #fb923c;
-  --t-audio: #4fb6c6; /* igual al acento: dos cyan parecidos se verían como un error */
+  --t-audio: #00f3cf; /* igual al acento: dos cyan parecidos se verían como un error */
   --t-doc: #60a5fa;
 
   --radius: 14px;
@@ -34,7 +36,7 @@
 * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
 [hidden] { display: none !important; }
 /* --amb: el color de la carátula que suena (player.js); registrado como color para que el cambio entre canciones se funda. */
-@property --amb { syntax: '<color>'; inherits: true; initial-value: #262843; }
+@property --amb { syntax: '<color>'; inherits: true; initial-value: #16233a; }
 html { transition: --amb .6s; }
 html, body { margin: 0; color: var(--text); }
 html { background: var(--bg); }
@@ -67,7 +69,11 @@ dialog:focus-visible { outline: none; }
 .btn.small { min-height: 36px; padding: 0 14px; font-size: .9rem; }
 .btn.small svg { width: 18px; height: 18px; }
 .btn.block { width: 100%; }
-.btn.primary { background: var(--accent); color: var(--on-accent); }
+.btn.primary { background: var(--grad); color: var(--on-accent); }
+/* «PaloBox» como en el logo: Palo en blanco y Box con el degradado. */
+.wordmark { font-weight: 800; letter-spacing: -.03em; }
+.tagline { font-weight: 500; letter-spacing: .04em; } /* el lema, como en el logo horizontal */
+.wordmark span { background: var(--grad); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .btn.secondary { background: var(--surface-2); }
 .btn.danger { background: var(--danger); color: #1a0606; }
 .btn.ghost { background: none; color: var(--accent); padding: 0 8px 0 0; font-weight: 500; }
@@ -81,7 +87,7 @@ dialog:focus-visible { outline: none; }
 /* ---- Login ---- */
 .login { min-height: 100dvh; display: grid; place-items: center; padding: 24px var(--gutter); }
 .login-card { width: 100%; max-width: 360px; text-align: center; }
-.logo { display: block; width: 96px; height: 96px; margin: 0 auto 14px; filter: drop-shadow(0 12px 28px rgb(157 92 250 / .45)); }
+.logo { display: block; width: 96px; height: 96px; margin: 0 auto 14px; filter: drop-shadow(0 12px 28px rgb(0 243 207 / .35)); }
 .login h1 { font-size: 1.75rem; letter-spacing: -.02em; }
 .login .muted { margin: 6px 0 28px; }
 .login form { display: grid; gap: 8px; text-align: left; }
@@ -182,7 +188,7 @@ body:has(#upbar:not([hidden])) { --up-h: 52px; } /* lo último de la vista no qu
 .hero-meta a { display: inline-block; padding: 11px 0; margin: -11px 0; font-weight: 700; color: var(--text); text-decoration: none; }
 .hero-meta a:hover { text-decoration: underline; }
 .actions { display: flex; align-items: center; gap: 8px; padding: 0 var(--gutter) 16px; }
-.play-big { width: 56px; min-height: 56px; background: var(--accent); color: var(--on-accent); }
+.play-big { width: 56px; min-height: 56px; background: var(--grad); color: var(--on-accent); }
 .play-big svg { width: 26px; height: 26px; }
 @media (min-width: 900px) {
   .hero { flex-direction: row; align-items: flex-end; gap: 24px; text-align: left; padding: 24px var(--gutter); }
@@ -203,7 +209,7 @@ body:has(#upbar:not([hidden])) { --up-h: 52px; } /* lo último de la vista no qu
 .like { color: var(--muted); }
 .row-wrap .like[aria-pressed=true], .like[aria-pressed=true] { color: var(--accent); }
 .like[aria-pressed=true] svg { fill: currentColor; } /* relleno además de color */
-.cover.liked { color: #fff; background: linear-gradient(145deg, #a5abff, #5b63e8); }
+.cover.liked { color: var(--on-accent); background: var(--grad); }
 .cover.liked > svg { fill: currentColor; }
 @media (max-width: 899px) { .tracks.covers .num { display: none; } } /* en celular la carátula ocupa el lugar del número */
 li[draggable=true] { cursor: grab; }
@@ -234,7 +240,7 @@ li[draggable=true] { cursor: grab; }
 .toolbar { display: flex; align-items: center; gap: 8px; padding: 4px var(--gutter) 8px; overflow-x: auto; }
 .chip { flex: none; font: inherit; font-size: .9rem; font-weight: 600; min-height: 44px; padding: 0 16px; cursor: pointer;
   border-radius: 999px; border: 1px solid var(--line); background: var(--glass); color: var(--text); }
-.chip[aria-pressed=true] { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.chip[aria-pressed=true] { background: var(--grad); color: var(--on-accent); border-color: transparent; }
 
 .dl-card { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 16px var(--gutter) 0; padding: 16px;
   background: var(--surface); border: 1px solid color-mix(in srgb, var(--t-audio) 45%, var(--line)); border-radius: var(--radius); }
@@ -483,7 +489,7 @@ body.has-player.paused:not(.music) #view { padding-bottom: calc(var(--tabs-h) + 
 
 /* Secciones del panel: chips como enlaces (cada sección tiene su ruta) y un resumen con tarjetas. */
 a.chip { display: inline-flex; align-items: center; text-decoration: none; }
-.chip[aria-current=page] { background: var(--accent); color: var(--on-accent); border-color: transparent; }
+.chip[aria-current=page] { background: var(--grad); color: var(--on-accent); border-color: transparent; }
 .admin-nav { padding-top: 0; position: relative; } /* referencia de offsetLeft para centrar la sección elegida */
 .section-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding-right: var(--gutter); }
 .section-head .section-title { margin-right: 0; }
@@ -518,6 +524,37 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .in-room.own-stream [data-act=shuffle], .in-room.own-stream [data-act=repeat] { opacity: 1; } /* en la sala propia del flujo continuo sí funcionan */
 .jam-code { margin: 4px var(--gutter) 8px; font-size: 2rem; font-weight: 700; letter-spacing: .2em; text-align: center; font-variant-numeric: tabular-nums; -webkit-user-select: all; user-select: all; }
 .jam-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px var(--gutter) 8px; }
+/* Arriba, dónde suena ahora; luego los dispositivos, y el jam en su propia tarjeta. */
+.jam-now { display: flex; align-items: center; gap: 14px; margin: 4px var(--gutter) 8px; padding: 14px 16px; border-radius: var(--radius);
+  background: color-mix(in srgb, var(--accent) 14%, transparent); }
+.jam-now > svg { width: 28px; height: 28px; color: var(--accent); }
+.jam-now .muted { font-size: .8125rem; }
+.jam-now p:last-child { font-size: 1.125rem; font-weight: 700; color: var(--accent); }
+.jam-label { margin: 16px var(--gutter) 6px; font-size: .8125rem; font-weight: 700; color: var(--muted); }
+#jam-body .list { margin: 0 var(--gutter); background: var(--glass); border-radius: var(--radius); }
+#jam-body .list > li + li { border-top: 1px solid var(--line); }
+#jam-body .row { min-height: 60px; padding: 10px 12px; }
+#jam-body .row .type { width: 40px; height: 40px; }
+#jam-body .row .type svg { width: 20px; height: 20px; }
+#jam-body .note { padding-top: 8px; font-size: .8125rem; }
+.jam-card { display: grid; gap: 10px; margin: 16px var(--gutter) 0; padding: 16px; border-radius: var(--radius); background: var(--surface-2); }
+.jam-card h3 { margin: 0; font-size: 1.125rem; }
+.jam-card > .muted { font-size: .875rem; }
+.jam-card .jam-code { margin: 4px 0; padding: 10px 0; border-radius: var(--radius-sm); background: var(--glass); }
+.jam-card .btn.ghost { padding: 0; color: var(--danger); }
+.jam-card .btn.secondary { background: var(--line); } /* sobre la tarjeta, el fondo normal del botón no se distingue */
+.jam-members { list-style: none; margin: 4px 0 0; padding: 0; display: grid; gap: 10px; }
+.jam-members li { display: flex; align-items: center; gap: 12px; }
+.jam-members .avatar { width: 36px; height: 36px; font-size: .9rem; }
+.jam-members .avatar.away { background: var(--line); color: var(--muted); }
+.jam-members .muted { font-size: .8125rem; }
+@media (max-width: 899px) {
+  /* En el celular es una hoja inferior, como la cola: sube desde abajo y no tapa toda la pantalla. */
+  #jam { inset: auto 0 0 0; width: 100vw; height: auto; max-height: 88dvh; border-radius: 16px 16px 0 0;
+    background: linear-gradient(color-mix(in srgb, var(--amb) 35%, var(--surface)), var(--surface) 45%); }
+  #jam[open] { animation: rise var(--med) var(--ease); }
+  #jam .panel-head { position: relative; padding-top: 20px; }
+}
 
 /* Cuenta de solo Música: sin salidas a Fotos ni Archivos (el servidor tampoco los entrega). */
 .music-only #mtabs-exit, .music-only .side-foot { display: none; }
@@ -542,7 +579,7 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
   color: var(--muted); background: var(--surface-2); pointer-events: auto; }
 .offline #offline-bar { display: block; }
 .offline #view { margin-bottom: 22px; } /* lo último de la vista no queda bajo la franja */
-.cover.downloads { color: #fff; background: linear-gradient(145deg, #4fb6c6, #1f6f7d); }
+.cover.downloads { color: var(--accent); background: linear-gradient(145deg, var(--surface-2), var(--bg)); }
 .offline-box { margin-top: 12px; }
 .offline-box .bar { margin: 6px 0 4px; }
 
@@ -587,7 +624,7 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 
 /* Avatar con la inicial y menú de la cuenta (panel desde la izquierda). El botón de la barra solo sale en el celular, en Música. */
 .avatar { display: grid; place-items: center; flex: none; width: 48px; height: 48px; border: 0; border-radius: 50%; padding: 0;
-  background: var(--accent); color: var(--on-accent); font: inherit; font-weight: 700; font-size: 1.25rem; }
+  background: var(--grad); color: var(--on-accent); font: inherit; font-weight: 700; font-size: 1.25rem; }
 #me-btn, #search-back { display: none; }
 .panel.left { inset: 0 auto 0 0; width: min(88vw, 340px); padding: calc(env(safe-area-inset-top) + 16px) 8px calc(var(--safe-b) + 16px); }
 .panel.left[open] { animation: slide-in var(--med) var(--ease); }
@@ -645,7 +682,7 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
   body.music .toolbar { gap: 8px; padding: 8px var(--gutter); }
   body.music .chip { position: relative; min-height: 32px; padding: 0 12px; font-size: .8125rem; font-weight: 500; border: 0; background: rgb(255 255 255 / .1); }
   body.music .chip::before { content: ""; position: absolute; inset: -6px 0; }
-  body.music .chip[aria-pressed=true] { background: var(--accent); color: var(--on-accent); }
+  body.music .chip[aria-pressed=true] { background: var(--grad); color: var(--on-accent); }
   /* Orden a la izquierda y la vista (lista o cuadrícula) en el extremo derecho. */
   body.music .lib-tools .btn.ghost { color: var(--text); font-size: .8125rem; font-weight: 700; }
   body.music .lib-tools .btn.secondary { min-height: 32px; padding: 0 12px; font-size: .8125rem; white-space: nowrap; }

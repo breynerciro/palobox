@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#0a0a12">
+<meta name="theme-color" content="#090D16">
 <meta name="color-scheme" content="dark">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="PaloBox">
@@ -66,8 +66,8 @@
 <main id="login" class="login" hidden>
   <div class="login-card">
     <img class="logo" src="icon.svg" alt="">
-    <h1>PaloBox</h1>
-    <p class="muted">Tus fotos, archivos y música en un solo lugar.</p>
+    <h1 class="wordmark">Palo<span>Box</span></h1>
+    <p class="muted tagline">Your Personal Sound Box</p>
     <form id="login-form" novalidate>
       <label for="u">Usuario</label>
       <input id="u" name="name" autocomplete="username" autocapitalize="none" autocorrect="off" spellcheck="false" required>
@@ -109,7 +109,7 @@
 <div id="app" hidden>
   <!-- Barra lateral de Música: solo en escritorio (≥ 900 px). -->
   <aside id="side" class="side" aria-label="Música" hidden>
-    <a class="side-brand" href="#/fotos" id="side-exit"><img src="icon.svg" alt="">PaloBox</a>
+    <a class="side-brand" href="#/fotos" id="side-exit"><img src="icon.svg" alt=""><span class="wordmark">Palo<span>Box</span></span></a>
     <nav aria-label="Navegación de música">
       <a href="#/musica" data-m="inicio"><svg><use href="#i-home"/></svg>Inicio</a>
       <a href="#/musica/buscar" data-m="buscar"><svg><use href="#i-search"/></svg>Buscar</a>
@@ -282,6 +282,7 @@
 
 <dialog autofocus id="jam" class="panel" aria-labelledby="jam-title">
   <div class="panel-head">
+    <span class="sheet-grip" aria-hidden="true"></span>
     <h2 id="jam-title">Dispositivos y jam</h2>
     <button id="jam-close" class="icon-btn" aria-label="Cerrar"><svg><use href="#i-x"/></svg></button>
   </div>
