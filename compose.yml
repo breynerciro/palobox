@@ -1,9 +1,15 @@
 # Dos formas de usarlo: `docker compose up -d --build` con el código al lado, o ./deploy.sh,
 # que compila en el PC de desarrollo y solo envía las imágenes (el servidor no guarda código).
 # ADMIN, DATA_PATH y TZ salen de .env (ver .env.example).
+# Tope de logs: sin esto json-file crece sin límite.
+x-logs: &logs
+  driver: json-file
+  options: {max-size: 10m, max-file: "3"}
+
 services:
   palobox:
     image: palobox
+    logging: *logs
     build: .
     restart: unless-stopped
     ports: ["127.0.0.1:8080:8080"] # solo para tailscale serve; el túnel de Cloudflare entra por la red de compose, no por aquí
@@ -31,6 +37,7 @@ services:
   # No publica puerto: solo lo alcanza la app por la red de compose, y con su token.
   spotdl:
     image: palobox-spotdl
+    logging: *logs
     build: ./spotdl
     restart: unless-stopped
     # Las descargas copan el procesador (convertir a MP3, resolver YouTube). Con este peso, cuando la app también
@@ -68,9 +75,11 @@ services:
   # público apunta a http://palobox:8080 (la red de compose), así clientIP toma la IP real de X-Forwarded-For.
   cloudflared:
     image: cloudflare/cloudflared:latest
+    logging: *logs
     profiles: [tunnel]
     restart: unless-stopped
-    command: tunnel --no-autoupdate run --token-file /run/secrets/cloudflared_token
+    # http2 (TCP) y no quic: por UDP el túnel se caía a diario («failed to dial to edge with quic: timeout», 55 reconexiones en 6 días).
+    command: tunnel --no-autoupdate --protocol http2 run --token-file /run/secrets/cloudflared_token
     secrets: [cloudflared_token]
     depends_on: [palobox]
 
