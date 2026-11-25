@@ -129,6 +129,8 @@
     <div class="topbar-row">
       <button id="back" class="btn ghost back" hidden><svg><use href="#i-back"/></svg><span id="back-label"></span></button>
       <span class="spacer"></span>
+      <button id="sel-cancel" class="btn ghost" hidden>Cancelar</button>
+      <button id="sel-del" class="icon-btn" aria-label="Eliminar lo seleccionado" hidden><svg><use href="#i-trash"/></svg></button>
       <button id="mkdir" class="icon-btn" aria-label="Nueva carpeta" hidden><svg><use href="#i-folder-plus"/></svg></button>
       <button id="add" class="btn primary small" hidden><svg><use href="#i-upload"/></svg>Subir</button>
       <button id="jam-link" class="icon-btn" data-act="jam" aria-label="Dispositivos y jam" hidden><svg><use href="#i-cast"/></svg></button>
@@ -230,6 +232,7 @@
     <button id="v-del" class="icon-btn on-dark" aria-label="Eliminar"><svg><use href="#i-trash"/></svg></button>
   </div>
   <div id="stage"></div>
+  <div class="viewer-foot"><div id="v-strip" class="v-strip" aria-label="Fotos y videos cercanos"></div></div>
   <button id="v-prev" class="icon-btn on-dark nav-arrow left" aria-label="Anterior"><svg><use href="#i-back"/></svg></button>
   <button id="v-next" class="icon-btn on-dark nav-arrow right" aria-label="Siguiente"><svg><use href="#i-next"/></svg></button>
 </dialog>

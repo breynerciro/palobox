@@ -97,6 +97,8 @@ async function renderView() {
   $('#subtitle').textContent = '';
   $('#admin-link').hidden = !isAdmin || admin;
   $('#jam-link').hidden = !music;
+  $('#sel-del').hidden = $('#sel-cancel').hidden = true; // la selección múltiple de Fotos no sobrevive a cambiar de vista
+  document.body.classList.remove('selecting');
   $('#me-btn').textContent = userName.slice(0, 1).toUpperCase();
   $('#back').hidden = music ? !detail : !parts.length && !admin;
   $('#me-btn').hidden = !$('#back').hidden; // en el celular, a la izquierda va el avatar o la flecha de volver

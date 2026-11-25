@@ -227,16 +227,19 @@ try {
   // ---- El resto de la app, sin reproducir música: Fotos, Archivos, biblioteca, playlists, cuentas y sesión ----
   const mobile = await js(`return matchMedia('(max-width: 899px)').matches`);
 
-  await step('fotos: subir, abrir en el visor y borrar', async () => {
+  await step('fotos: subir, menú propio, selección múltiple, visor y borrar', async () => {
     await js(`location.hash = '#/fotos'`);
     await until(`${q('#view .empty')} || ${q('#view .tile')}`, 'la galería');
     const before = (await api('/api/photos')).data.length;
-    await js(`const c = document.createElement('canvas'); c.width = 640; c.height = 480; const g = c.getContext('2d');
-      g.fillStyle = '#4fb6c6'; g.fillRect(0, 0, 640, 480); g.fillStyle = '#161535'; g.fillRect(200, 150, 240, 180);
-      const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
-      const dt = new DataTransfer(); dt.items.add(new File([blob], 'e2e-foto.jpg', { type: 'image/jpeg' }));
+    await js(`const dt = new DataTransfer();
+      for (const [name, color] of [['e2e-foto.jpg', '#14b8a6'], ['e2e-foto2.jpg', '#b98aff']]) {
+        const c = document.createElement('canvas'); c.width = 640; c.height = 480; const g = c.getContext('2d');
+        g.fillStyle = color; g.fillRect(0, 0, 640, 480); g.fillStyle = '#090d16'; g.fillRect(200, 150, 240, 180);
+        dt.items.add(new File([await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9))], name, { type: 'image/jpeg' }));
+      }
       const i = document.querySelector('#pick-media'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true }));`);
-    await until(`document.querySelectorAll('#view .tile').length === ${before + 1}`, 'la foto en la galería', 60000);
+    await until(`document.querySelectorAll('#view .tile').length === ${before + 2}`, 'las dos fotos en la galería', 60000);
+    must(!(await js(`return document.querySelector('#toast-text').textContent`)).includes('convirt'), 'avisó de una conversión de formato que no hubo');
     await shot('fotos');
     const it = (await api('/api/photos')).data.find((p) => p.name === 'e2e-foto.jpg');
     must(it, 'la foto no quedó en /api/photos');
@@ -244,14 +247,47 @@ try {
       const r = await js(`const r = await fetch(arg); return { s: r.status, t: r.headers.get('content-type') || '', n: (await r.arrayBuffer()).byteLength };`, `/api/photos/${it.id}/${v}`);
       must(r.s === 200 && r.t.startsWith('image/') && r.n > 500, `versión ${v}: ${r.s} ${r.t} ${r.n} bytes`);
     }
+    // Mantener presionada una miniatura (el celular manda contextmenu) abre el menú de la app, no el del navegador.
+    const hold = (n) => js(`document.querySelectorAll('#view .tile')[arg].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))`, n);
+    const pickMenu = (text) => js(`[...document.querySelectorAll('#menu .menu-item')].find((b) => b.textContent.includes(arg)).click()`, text);
+    await hold(0);
+    await until(`${q('#menu')}.open`, 'el menú de la foto');
+    must((await js(`return [...document.querySelectorAll('#menu .menu-item')].map((b) => b.textContent).join()`)) === 'Seleccionar,Descargar original,Eliminar', 'el menú de la foto no trae sus tres acciones');
+    // Selección múltiple: marcar dos, cancelar, y nada se borra.
+    await pickMenu('Seleccionar');
+    await until(`document.body.classList.contains('selecting') && document.querySelectorAll('#view .tile[aria-pressed=true]').length === 1 && !${q('#sel-del')}.hidden`, 'la selección con una foto');
+    await js(`document.querySelectorAll('#view .tile')[1].click()`);
+    must((await js(`return document.querySelector('#subtitle').textContent`)).startsWith('2 seleccionadas'), 'la barra no cuenta dos seleccionadas');
+    must(!(await js(`return document.querySelector('#viewer').open`)), 'en selección, tocar una foto abrió el visor');
+    await shot('fotos-seleccion');
+    await click('#sel-cancel');
+    must(!(await js(`return document.body.classList.contains('selecting') || !!document.querySelector('#view .tile[aria-pressed=true]')`)), 'cancelar no quitó la selección');
+    // Visor: tira de miniaturas, pasar a la siguiente y esconder las barras con un toque.
     await click('#view .tile');
-    await until(`${q('#viewer')}.open && ${q('#stage img')}`, 'el visor');
-    must((await js(`return document.querySelector('#v-sub').textContent`)).includes('e2e-foto.jpg'), 'el visor abrió otra foto');
+    await until(`${q('#viewer')}.open && ${q('#stage img')} && ${q('#v-strip .v-thumb[aria-current]')}`, 'el visor con su tira');
+    const first = await js(`return document.querySelector('#v-sub').textContent`);
     await shot('fotos-visor');
+    await click('#v-next');
+    await until(`document.querySelector('#v-sub').textContent !== ${JSON.stringify(first)}`, 'pasar a la siguiente');
+    await js(`document.querySelector('#v-strip .v-thumb').click()`); // la primera de la tira: de vuelta
+    await until(`document.querySelector('#v-sub').textContent === ${JSON.stringify(first)}`, 'volver con la tira');
+    await click('#stage img');
+    must(await js(`return document.querySelector('#viewer').classList.contains('bare')`), 'un toque no escondió las barras');
+    await click('#stage img');
     await click('#v-del');
     await answer();
-    await until(`document.querySelectorAll('#view .tile').length === ${before}`, 'que la foto se vaya de la galería');
-    must(!(await api('/api/photos')).data.some((p) => p.id === it.id), 'la foto sigue en el servidor');
+    await until(`document.querySelectorAll('#view .tile').length === ${before + 1}`, 'que la foto borrada desde el visor se vaya');
+    await js(`document.querySelector('#viewer').close()`);
+    // La otra se borra con la selección múltiple.
+    const mine = (await api('/api/photos')).data.findIndex((p) => p.name.startsWith('e2e-foto'));
+    await hold(mine);
+    await until(`${q('#menu')}.open`, 'el menú de la segunda foto');
+    await pickMenu('Seleccionar');
+    await until(`!${q('#sel-del')}.hidden`, 'el botón de eliminar la selección');
+    await click('#sel-del');
+    await answer();
+    await until(`document.querySelectorAll('#view .tile').length === ${before} && !document.body.classList.contains('selecting')`, 'que la selección se borre');
+    must(!(await api('/api/photos')).data.some((p) => p.name.startsWith('e2e-foto')), 'quedaron fotos de prueba en el servidor');
     must((await api(`/api/photos/${it.id}/o`)).status === 404, 'el original sigue disponible después de borrar');
   });
 

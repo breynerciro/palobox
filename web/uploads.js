@@ -123,10 +123,13 @@ async function upload(files, kind, dir) {
   let msg = `${plural(ok, 'archivo subido', 'archivos subidos')}.`;
   if (dups) msg += ` ${plural(dups, 'ya estaba', 'ya estaban')} en el servidor.`;
   if (failed.length) msg += ` Falló: ${failed.join(', ')}. Vuelve a elegirlos para reintentar.`;
-  // Las fotos de cámara originales se llaman IMG_0001.HEIC o .JPG; ".jpeg" en minúscula es la conversión de iOS.
-  const converted = kind === 'photo' && files.some((f) => /^IMG_\d+\.jpeg$/.test(f.name));
-  if (converted) msg += ' Tu iPhone convirtió las fotos a JPG. Para subir originales: en el selector toca Opciones → Formato → Actual.';
-  toast(msg, { kind: failed.length || converted ? 'warn' : 'ok', sticky: failed.length > 0 || converted });
+  // Cuando el iPhone convierte al elegir (Opciones → Formato → Más compatible), TODAS las fotos HEIC llegan como
+  // IMG_0001.jpeg. Por eso solo se avisa si llegó ese nombre y ninguna HEIC: con una sola HEIC en el lote el
+  // selector iba en «Actual» y los .jpeg son fotos que ya eran JPEG (capturas, las que llegaron por chat). Y aun
+  // así es una sospecha, no una certeza: el nombre es lo único que el navegador deja ver.
+  const converted = kind === 'photo' && files.some((f) => /^IMG_\d+\.jpeg$/.test(f.name)) && !files.some((f) => /\.hei[cf]$/i.test(f.name) || /hei[cf]/i.test(f.type));
+  if (converted) msg += ' Puede que tu iPhone haya convertido las fotos a JPG. Si quieres los originales: en el selector toca Opciones → Formato → Actual.';
+  toast(msg, { kind: failed.length ? 'warn' : 'ok', sticky: failed.length > 0 || converted });
   render();
 }
 

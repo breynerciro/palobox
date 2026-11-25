@@ -460,6 +460,31 @@ body.has-player.paused:not(.music) #view { padding-bottom: calc(var(--tabs-h) + 
 .nav-arrow.left { left: 8px; }
 .nav-arrow.right { right: 8px; }
 @media (hover: none) { .nav-arrow { display: none; } } /* en el celular se desliza */
+/* Visor: barras que se esconden con un toque, tira de miniaturas abajo y entrada suave al cambiar de elemento. */
+.viewer-bar, .viewer-foot, .nav-arrow { transition: opacity var(--fast); }
+#viewer.bare :is(.viewer-bar, .viewer-foot, .nav-arrow) { opacity: 0; pointer-events: none; }
+#stage > * { animation: v-in var(--med) var(--ease); }
+@keyframes v-in { from { opacity: .2; transform: translateX(var(--dx, 0)); } }
+#stage > img { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; } /* sin el menú de imagen de Safari: descargar está arriba */
+#viewer.is-video #stage { top: calc(env(safe-area-inset-top) + 56px); bottom: calc(var(--safe-b) + 84px); } /* los controles del video quedan libres */
+.viewer-foot { position: absolute; left: 0; right: 0; bottom: 0; z-index: 2; padding: 16px 0 calc(var(--safe-b) + 12px); background: linear-gradient(transparent, rgb(0 0 0 / .75)); }
+.v-strip { display: flex; align-items: center; gap: 4px; overflow-x: auto; padding: 0 50%; } /* 50 %: la primera y la última también llegan al centro */
+.v-thumb { position: relative; flex: none; width: 40px; height: 56px; padding: 0; border: 0; border-radius: 6px; overflow: hidden; background: #222; opacity: .55; cursor: pointer; }
+.v-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.v-thumb svg { position: absolute; inset: 0; margin: auto; width: 16px; height: 16px; fill: #fff; stroke: none; }
+.v-thumb[aria-current] { width: 56px; opacity: 1; outline: 2px solid #fff; outline-offset: -2px; }
+/* Galería: el menú al mantener presionado es el de la app, y la selección múltiple marca cada miniatura. */
+.tile { -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+.tile img { pointer-events: none; -webkit-user-drag: none; }
+.tile-check { display: none; position: absolute; top: 6px; left: 6px; width: 24px; height: 24px; border-radius: 50%; place-items: center;
+  border: 2px solid #fff; background: rgb(0 0 0 / .35); color: transparent; }
+.tile-check svg { width: 14px; height: 14px; stroke-width: 3; }
+.selecting .tile-check { display: grid; }
+.tile[aria-pressed=true] { outline: 3px solid var(--accent); outline-offset: -3px; }
+.tile[aria-pressed=true] img { opacity: .7; }
+.tile[aria-pressed=true] .tile-check { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.selecting #add { display: none; } /* mientras se elige, la barra es de la selección */
+#sel-cancel { padding: 0 8px; }
 
 /* ---- Diálogo de confirmación / nombre ---- */
 .sheet { border: 0; padding: 0; width: min(92vw, 380px); border-radius: 18px; background: var(--surface); color: var(--text); }
