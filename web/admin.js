@@ -63,7 +63,7 @@ function alerts(s, sp) {
   if (disk >= 0.9) out.push([`El disco está al ${Math.round(disk * 100)} %: quedan ${size(s.diskFree)}. Las subidas y descargas fallarán cuando se llene.`, 'almacenamiento']);
   if (1 - s.memFree / s.memTotal >= 0.9) out.push(['La memoria del servidor está casi llena.', '']);
   if (s.failed24h >= 5) out.push([`${plural(s.failed24h, 'intento fallido', 'intentos fallidos')} de entrar en las últimas 24 h.`, 'actividad']);
-  if (sp?.enabled && !sp.ok) out.push([sp.error || 'El servicio de descargas de Spotify no responde.', 'musica']);
+  if (sp?.enabled && !sp.ok) out.push([sp.error || 'El servicio de descargas no responde.', 'musica']);
   if (s.music.max && s.music.tracks >= s.music.max) out.push([`La biblioteca llegó a su tope de ${s.music.max.toLocaleString('es-CO')} canciones: solo tú puedes seguir descargando.`, 'musica']);
   if (!out.length) return null;
   return el('ul', { className: 'list alerts' }, out.map(([t, key]) => {
@@ -201,11 +201,11 @@ function musicSection(m) {
 
 async function downloadsSection(sp) {
   if (!sp?.enabled) return [];
-  if (!sp.ok) return [heading('Descargas de Spotify', 'sin respuesta')];
+  if (!sp.ok) return [heading('Descargas de música', 'sin respuesta')];
   const r = await api('/api/spotdl?all=1').catch(() => null);
   const items = r?.ok ? (await r.json()).items.filter((j) => j.status !== 'finished') : [];
   return [
-    heading('Descargas de Spotify', joinText(sp.spotdl && `spotDL ${sp.spotdl}`, plural(sp.active ?? 0, 'activa', 'activas'))),
+    heading('Descargas de música', joinText(sp.spotdl && `spotDL ${sp.spotdl}`, plural(sp.active ?? 0, 'activa', 'activas'))),
     items.length
       ? el('ul', { className: 'list' }, items.map((j) => jobRow(j, render)))
       : el('p', { className: 'muted note', textContent: 'No hay descargas en cola ni con errores.' }),

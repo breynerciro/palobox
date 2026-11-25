@@ -71,7 +71,7 @@ async function homeView() {
     return empty('download', 'No hay música descargada', 'Cuando tengas conexión, toca el botón de descarga en un álbum o una playlist.');
   }
   if (!d.albums.length) {
-    return empty('music', 'Tu música empieza aquí', 'La biblioteca está vacía. En Buscar puedes pegar un enlace de Spotify; aparece aquí cuando termine de descargar.',
+    return empty('music', 'Tu música empieza aquí', 'La biblioteca está vacía. En Buscar puedes pegar un enlace para descargar música; aparece aquí cuando termine.',
       linkBtn('Buscar música', href('musica', 'buscar'), 'search'));
   }
   // Lo que cambia en cada visita: canciones al azar de toda la biblioteca y uno de los artistas con más música.
@@ -180,10 +180,20 @@ $('#searchbox').onsubmit = (e) => {
   setQuery(v);
 };
 $('#search-clear').onclick = () => { $('#search').value = ''; setQuery(''); $('#search').focus(); };
+// Modo de búsqueda (celular): con el campo enfocado o algo escrito, la barra deja solo la flecha de volver y el campo.
+// Con clase y no con :has(:focus): en el teléfono el estilo no se enteraba del foco puesto con el dedo.
+function searchMode() {
+  const inp = $('#search');
+  document.body.classList.toggle('searching', route().path === 'buscar' && (document.activeElement === inp || !!inp.value));
+}
+for (const ev of ['focus', 'blur', 'input']) $('#search').addEventListener(ev, searchMode);
+// La flecha cancela la búsqueda: borra lo escrito y suelta el campo.
+$('#search-back').onclick = () => { $('#search').value = ''; setQuery(''); $('#search').blur(); searchMode(); };
 export function syncSearchBox() {
   const inp = $('#search');
   if (inp.value.trim() !== query) inp.value = query;
   $('#search-clear').hidden = !inp.value;
+  searchMode();
 }
 
 // spotifyLinks saca todos los enlaces de open.spotify.com (con intl-xx y ?si=) y URIs spotify: del texto, canónicos
@@ -245,7 +255,7 @@ async function suggestView() {
   return frag(
     recents.length > 0 && frag(heading('Búsquedas recientes'), el('ul', { className: 'list' }, recents.map(recentRow))),
     browse.length ? frag(heading('Explora por artista', browse.length), el('div', { className: 'cards compact' }, browse.map((a) => card(item.artist(a), songs(a.tracks)))))
-      : empty('search', 'Busca en tu música', 'Artistas, álbumes, canciones o tus playlists. Pega uno o varios enlaces de Spotify para descargar lo que falta.'));
+      : empty('search', 'Busca en tu música', 'Artistas, álbumes, canciones o tus playlists. Pega uno o varios enlaces para descargar lo que falta.'));
 }
 
 async function resultsView(q) {
@@ -268,7 +278,7 @@ async function resultsView(q) {
     out.push(el('div', { className: 'search-top' },
       el('section', {}, heading('Resultado principal'), top),
       tracks.length > 0 && el('section', {}, heading('Canciones'), trackList(tracks.slice(0, 5), { covers: true, sub: (t) => joinText(t.artist, t.album) }))));
-  } else out.push(note('Aún no está en PaloBox. Si lo tienes en Spotify, pega aquí el enlace para descargarlo.', 'first'));
+  } else out.push(note('Aún no está en PaloBox. Pega aquí su enlace para descargarlo.', 'first'));
   out.push(shelf('Artistas', artists.map((a) => card(item.artist(a)))),
     shelf('Álbumes', albums.filter((a) => a.tracks > 1).map((a) => card(item.album(a), joinText(a.artist, a.year)))), // los de una canción ya salen como canción
     shelf('Tus playlists', playlists.map((p) => card(item.playlist(p)))));
@@ -285,7 +295,7 @@ async function linkView(links) {
   const what = many ? (links.every((l) => l.kind === 'track') ? `${links.length} canciones` : `${links.length} enlaces`) : KINDS[links[0].kind];
   if (!dl) {
     return empty('alert', 'No se puede descargar ahora', dl === false
-      ? 'Las descargas de Spotify no están activadas en este servidor. Pídele al administrador que las active.'
+      ? 'Las descargas no están activadas en este servidor. Pídele al administrador que las active.'
       : 'El servicio de descargas no responde. Intenta de nuevo en un momento.');
   }
   const btn = el('button', { className: 'btn primary dl-go' }, icon('download'), `Descargar ${what}`);
@@ -305,7 +315,7 @@ async function linkView(links) {
   };
   return frag(el('section', { className: 'dl-card' },
     el('span', { className: 'type', style: '--tc: var(--t-audio)' }, icon('download')),
-    el('div', { className: 'row-text' }, el('p', { textContent: many ? `Enlaces de Spotify: ${what}` : `Enlace de Spotify: ${what}` }),
+    el('div', { className: 'row-text' }, el('p', { textContent: many ? `Enlaces para descargar: ${what}` : `Enlace para descargar: ${what}` }),
       el('p', { className: 'muted', textContent: 'El avance se ve en Tu biblioteca; al terminar aparece en Inicio.' })),
     btn));
 }
@@ -318,12 +328,12 @@ const ACTIVE = { queued: 'En cola', downloading: 'Descargando' };
 export function jobRow(j, repaint) {
   const active = j.status in ACTIVE;
   const again = j.attempts > 1; // un reintento: solo las canciones que fallaron
-  const title = j.title || 'Descarga de Spotify';
+  const title = j.title || 'Descarga';
   const pct = j.progress == null ? null : Math.round(j.progress * 100);
   // Antes de bajar, el servicio busca cada canción en YouTube (minutos en una playlist) y aún no hay nombre ni avance.
   // shortcut: también sale los segundos que tarda la primera canción en bajar; si molesta, que el servicio marque la fase.
   const searching = j.status === 'downloading' && !again && !j.done && !j.current;
-  const state = searching ? (j.total > 1 ? `Buscando ${j.total} canciones en YouTube` : 'Buscando en YouTube')
+  const state = searching ? (j.total > 1 ? `Buscando ${j.total} canciones` : 'Buscando la canción')
     : j.status === 'downloading' ? joinText(j.total ? `${again ? 'Reintentando' : 'Descargando'} ${j.done} de ${j.total}` : again ? 'Reintentando' : 'Descargando', j.current)
     : j.status === 'queued' ? (again ? 'Reintento en cola' : 'En cola') : j.error;
   const row = el('div', { className: 'row static' }, typeBadge('audio'),
@@ -425,7 +435,7 @@ async function libraryView() {
     layout.setAttribute('aria-label', grid ? 'Ver como lista' : 'Ver como cuadrícula');
     const items = libItems(d, { show: filter, recent });
     box.replaceChildren(grid ? el('div', { className: 'cards compact' }, items.map((it) => card(it)))
-      : el('ul', { className: 'list' }, items.map((it) => el('li', {}, libRow(it)))));
+      : el('ul', { className: 'list lib' }, items.map((it) => el('li', {}, libRow(it)))));
   }
   paint();
   const filters = el('div', { className: 'toolbar' }, chips);
@@ -434,7 +444,7 @@ async function libraryView() {
   const saved = offlineBox();
   // Con algo encima (descargas de Spotify o lo guardado en el celular), el título separa la biblioteca de eso.
   return frag(filters,
-    el('div', { className: 'toolbar' }, order, el('span', { className: 'spacer' }), layout, !offline.active && add),
+    el('div', { className: 'toolbar lib-tools' }, order, el('span', { className: 'spacer' }), layout, !offline.active && add),
     dl?.node, saved, (dl || saved) && heading('Biblioteca'), box);
 }
 

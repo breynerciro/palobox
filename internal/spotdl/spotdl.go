@@ -58,11 +58,11 @@ type Job struct {
 func spotifyURL(raw string) (string, error) {
 	raw = strings.TrimSpace(raw)
 	if raw == "" || len(raw) > 512 {
-		return "", httpx.Error(400, "El enlace no es de Spotify.")
+		return "", httpx.Error(400, "Ese enlace no sirve para descargar.")
 	}
 	m := spotifyRe.FindStringSubmatch(raw)
 	if m == nil {
-		return "", httpx.Error(400, "El enlace no es de Spotify.")
+		return "", httpx.Error(400, "Ese enlace no sirve para descargar.")
 	}
 	return "https://open.spotify.com/" + m[1] + "/" + m[2], nil
 }

@@ -1,18 +1,27 @@
 // Prueba punta a punta contra una instancia de prueba de PaloBox (la levanta ../e2e.sh), con Chromium sin
 // ventana por su protocolo de depuración: sin dependencias. Uso: E2E_PASS=… node webtest/e2e.mjs URL usuario
 // El usuario debe ser el administrador de esa instancia. Sale con código 1 si algo falla.
+// E2E_CDP=http://127.0.0.1:PUERTO corre lo mismo en un Chrome ya abierto (el del celular, por adb forward): usa la
+// pestaña que ya tenga abierta esta dirección y la cierra al terminar. E2E_SHOTS=carpeta guarda capturas de los pasos que las piden.
 import { spawn } from 'node:child_process';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 const [base, user] = process.argv.slice(2);
 const pass = process.env.E2E_PASS;
 const profile = mkdtempSync(join(tmpdir(), 'palobox-e2e-'));
-const chrome = spawn(process.env.CHROMIUM || 'chromium', ['--headless=new', '--remote-debugging-port=9334', `--user-data-dir=${profile}`, '--no-first-run', '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
+const cdp = process.env.E2E_CDP;
+const chrome = cdp ? null : spawn(process.env.CHROMIUM || 'chromium', ['--headless=new', '--remote-debugging-port=9334', `--user-data-dir=${profile}`, '--no-first-run', '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-let ws;
-for (let i = 0; i < 60 && !ws; i++) {
+let ws, tab;
+for (let i = 0; cdp && i < 60 && !ws; i++) { // la pestaña ya la abrió e2e.sh con un intent: Chrome de Android no deja crearla por aquí
+  await sleep(250);
+  tab = (await fetch(`${cdp}/json`).then((r) => r.json()).catch(() => [])).find((x) => x.type === 'page' && x.url.startsWith(base));
+  if (tab) ws = new WebSocket(tab.webSocketDebuggerUrl);
+}
+if (cdp && !ws) { console.log('e2e: el Chrome del celular no abrió la copia de prueba'); process.exit(1); }
+for (let i = 0; !cdp && i < 60 && !ws; i++) {
   await sleep(250);
   const tabs = await fetch('http://127.0.0.1:9334/json').then((r) => r.json()).catch(() => null);
   const t = tabs?.find((x) => x.type === 'page');
@@ -44,6 +53,27 @@ const api = (path, method = 'GET', body) => js(`
   const text = await r.text();
   let data = null; try { data = JSON.parse(text); } catch {}
   return { status: r.status, data, text: text.slice(0, 200), type: r.headers.get('content-type'), bytes: text.length };`, { path, method, body });
+
+const shot = async (name) => {
+  if (!process.env.E2E_SHOTS) return;
+  const r = await send('Page.captureScreenshot', { format: 'jpeg', quality: 60 });
+  writeFileSync(join(process.env.E2E_SHOTS, name + '.jpg'), Buffer.from(r.result.data, 'base64'));
+};
+const click = (sel) => js(`const n = document.querySelector(arg); if (!n) throw new Error('no está ' + arg); n.click();`, sel);
+// answer acepta el diálogo de confirmación; con texto, lo escribe antes en su campo.
+const answer = async (text) => {
+  await until(`document.querySelector('#ask').open`, 'el diálogo');
+  if (text != null) await js(`document.querySelector('#ask-input').value = arg`, text);
+  await click('#ask-ok');
+  await until(`!document.querySelector('#ask').open`, 'que cierre el diálogo');
+};
+// out pide desde fuera del navegador: otra persona, con su propia sesión (cookie) o sin ninguna.
+const out = async (path, method = 'GET', body, cookie) => {
+  const r = await fetch(new URL(path, base), { method, headers: { ...(body ? { 'Content-Type': 'application/json' } : {}), ...(cookie ? { Cookie: cookie } : {}) }, body: body && JSON.stringify(body) });
+  const text = await r.text();
+  let data = null; try { data = JSON.parse(text); } catch {}
+  return { status: r.status, data, text: text.slice(0, 200), cookie: r.headers.getSetCookie().map((c) => c.split(';')[0]).join('; ') };
+};
 
 let failed = 0;
 async function step(name, fn) {
@@ -193,18 +223,269 @@ try {
     must((await api('/api/music/playlists/' + playlistId, 'DELETE')).status === 200, 'no se pudo borrar');
   });
 
+  // ---- El resto de la app, sin reproducir música: Fotos, Archivos, biblioteca, playlists, cuentas y sesión ----
+  const mobile = await js(`return matchMedia('(max-width: 899px)').matches`);
+
+  await step('fotos: subir, abrir en el visor y borrar', async () => {
+    await js(`location.hash = '#/fotos'`);
+    await until(`${q('#view .empty')} || ${q('#view .tile')}`, 'la galería');
+    const before = (await api('/api/photos')).data.length;
+    await js(`const c = document.createElement('canvas'); c.width = 640; c.height = 480; const g = c.getContext('2d');
+      g.fillStyle = '#4fb6c6'; g.fillRect(0, 0, 640, 480); g.fillStyle = '#161535'; g.fillRect(200, 150, 240, 180);
+      const blob = await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9));
+      const dt = new DataTransfer(); dt.items.add(new File([blob], 'e2e-foto.jpg', { type: 'image/jpeg' }));
+      const i = document.querySelector('#pick-media'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true }));`);
+    await until(`document.querySelectorAll('#view .tile').length === ${before + 1}`, 'la foto en la galería', 60000);
+    const it = (await api('/api/photos')).data.find((p) => p.name === 'e2e-foto.jpg');
+    must(it, 'la foto no quedó en /api/photos');
+    for (const v of ['t', 'p', 'o']) { // miniatura, vista previa y original
+      const r = await js(`const r = await fetch(arg); return { s: r.status, t: r.headers.get('content-type') || '', n: (await r.arrayBuffer()).byteLength };`, `/api/photos/${it.id}/${v}`);
+      must(r.s === 200 && r.t.startsWith('image/') && r.n > 500, `versión ${v}: ${r.s} ${r.t} ${r.n} bytes`);
+    }
+    await click('#view .tile');
+    await until(`${q('#viewer')}.open && ${q('#stage img')}`, 'el visor');
+    must((await js(`return document.querySelector('#v-sub').textContent`)).includes('e2e-foto.jpg'), 'el visor abrió otra foto');
+    await shot('fotos-visor');
+    await click('#v-del');
+    await answer();
+    await until(`document.querySelectorAll('#view .tile').length === ${before}`, 'que la foto se vaya de la galería');
+    must(!(await api('/api/photos')).data.some((p) => p.id === it.id), 'la foto sigue en el servidor');
+    must((await api(`/api/photos/${it.id}/o`)).status === 404, 'el original sigue disponible después de borrar');
+  });
+
+  await step('archivos: crear carpeta, subir, descargar y borrar', async () => {
+    await js(`location.hash = '#/archivos'`);
+    await until(`!${q('#mkdir')}.hidden`, 'la vista de archivos');
+    await click('#mkdir');
+    await answer('e2e carpeta');
+    const row = (name) => `[...document.querySelectorAll('#view .row-text p:first-child')].some((p) => p.textContent === ${JSON.stringify(name)})`;
+    await until(row('e2e carpeta'), 'la carpeta nueva');
+    await js(`location.hash = '#/archivos/' + encodeURIComponent('e2e carpeta')`);
+    await until(q('#view .empty'), 'la carpeta vacía');
+    const text = 'hola desde la prueba punta a punta: áéíóú ñ';
+    await js(`const dt = new DataTransfer(); dt.items.add(new File([arg], 'nota e2e.txt', { type: 'text/plain' }));
+      const i = document.querySelector('#pick-file'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true }));`, text);
+    await until(row('nota e2e.txt'), 'el archivo subido', 60000);
+    await shot('archivos-carpeta');
+    const got = await js(`const a = [...document.querySelectorAll('#view a.row')].find((a) => a.textContent.includes('nota e2e.txt')); const r = await fetch(a.href); return { s: r.status, body: await r.text() };`);
+    must(got.s === 200 && got.body === text, `el archivo no volvió igual: ${got.s} ${got.body.slice(0, 40)}`);
+    // Nada fuera de la carpeta del usuario: subir con ../ no sale de ella (muestra la raíz propia) y lo demás no existe.
+    const root = (await api('/api/files?path=')).text;
+    for (const p of ['../', '../../..']) must((await api('/api/files?path=' + encodeURIComponent(p))).text === root, `${p} no mostró la raíz del usuario`);
+    for (const p of ['../../.palobox', '/etc']) {
+      const r = await api('/api/files?path=' + encodeURIComponent(p));
+      must(r.status >= 400, `listó ${p}: ${r.status} ${r.text}`);
+    }
+    must((await api('/api/files/raw?path=' + encodeURIComponent('../.palobox/db.sqlite'))).status >= 400, 'entregó un archivo fuera de la carpeta del usuario');
+    await js(`[...document.querySelectorAll('#view .row-wrap')].find((li) => li.textContent.includes('nota e2e.txt')).querySelector('.icon-btn').click()`);
+    await answer();
+    await until(q('#view .empty'), 'que el archivo se vaya');
+    await js(`location.hash = '#/archivos'`);
+    await until(row('e2e carpeta'), 'la raíz');
+    await js(`[...document.querySelectorAll('#view .row-wrap')].find((li) => li.textContent.includes('e2e carpeta')).querySelector('.icon-btn').click()`);
+    await answer();
+    await until(`!(${row('e2e carpeta')})`, 'que la carpeta se vaya');
+  });
+
+  let album, tracks3;
+  await step('música: inicio, álbum, artista y búsqueda desde la interfaz', async () => {
+    await js(`location.hash = '#/musica'`);
+    await until(q('#view .quick-tile, #view .card'), 'el inicio de música');
+    await shot('musica-inicio');
+    const a = await api('/api/music/artist?path=' + encodeURIComponent(seed.artistPath));
+    must(a.status === 200 && a.data.tracks.length, `artista ${a.status}`);
+    album = (await api('/api/music/album?path=' + encodeURIComponent(seed.albumPath))).data;
+    must(album?.name && album.tracks.length, 'el álbum de la canción de prueba no abrió');
+    tracks3 = (await api('/api/music/search?q=merengue')).data.tracks.slice(0, 3);
+    must(tracks3.length === 3, 'la búsqueda de prueba trajo menos de 3 canciones');
+    await js(`location.hash = '#/musica/album/' + arg`, album.path.split('/').map(encodeURIComponent).join('/'));
+    await until(`${q('#view .hero h1')} && ${q('#view .tracks [data-track]')}`, 'la página del álbum');
+    must(await js(`return document.querySelector('#view .hero h1').textContent`) === album.name, 'el título del álbum no coincide');
+    await shot('musica-album');
+    await js(`location.hash = '#/musica/artista/' + encodeURIComponent(arg)`, seed.artistPath);
+    await until(`${q('#view .hero h1')} && ${q('#view .tracks [data-track]')}`, 'la página del artista');
+    await shot('musica-artista');
+    // Buscar escribiendo en el campo, como lo haría una persona.
+    await js(`location.hash = '#/musica/buscar'`);
+    await until(`!${q('#searchbox')}.hidden`, 'el buscador');
+    await js(`const i = document.querySelector('#search'); i.focus(); i.value = arg; i.dispatchEvent(new Event('input', { bubbles: true }));`, seed.title);
+    await until(`[...document.querySelectorAll('#view [data-track]')].some((r) => r.dataset.track === ${JSON.stringify(seed.path)})`, `«${seed.title}» en los resultados`);
+    if (mobile) must(await js(`return document.body.classList.contains('searching') && getComputedStyle(document.querySelector('#title')).display === 'none' && getComputedStyle(document.querySelector('#search-back')).display !== 'none'`), 'el modo de búsqueda no se activó');
+    await shot('musica-buscar');
+    // Un enlace (o varios) se ofrece para descargar; en esta copia el servicio de descargas no está activado.
+    await js(`const i = document.querySelector('#search'); i.value = arg; i.dispatchEvent(new Event('input', { bubbles: true }));`, 'https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC https://open.spotify.com/track/1ATL5GLyefJaxhQzSPVrLX');
+    await until(q('#view .empty, #view .dl-card'), 'la respuesta al enlace pegado');
+    const said = await js(`return document.querySelector('#view').textContent`);
+    must(/no están activadas|Descargar 2 canciones/.test(said), `respuesta inesperada al pegar enlaces: ${said.slice(0, 120)}`);
+    must(!/spotify|youtube/i.test(said), `la vista menciona a Spotify o YouTube: ${said.slice(0, 120)}`);
+    await click(mobile ? '#search-back' : '#search-clear');
+    await until(`document.querySelector('#search').value === ''`, 'que se borre la búsqueda');
+    if (mobile) { await js(`document.querySelector('#search').blur()`); must(!(await js(`return document.body.classList.contains('searching')`)), 'el modo de búsqueda no se cerró'); }
+  });
+
+  await step('música: playlist a mano (crear, agregar, ordenar, renombrar, quitar, borrar)', async () => {
+    const made = await api('/api/music/playlists', 'POST', { name: 'e2e manual' });
+    must(made.status === 200 && made.data.id, `crear: ${made.status} ${made.text}`);
+    const base = '/api/music/playlists/' + made.data.id;
+    for (const t of tracks3) must((await api(base + '/tracks', 'POST', { path: t.path })).status === 200, 'agregar canción');
+    must((await api(base + '/tracks', 'POST', { path: 'no/existe.mp3' })).status >= 400, 'aceptó una canción que no existe');
+    const paths = async () => (await api(base)).data.tracks.map((t) => t.path);
+    must((await paths()).join() === tracks3.map((t) => t.path).join(), 'las canciones no quedaron en el orden en que se agregaron');
+    const flipped = tracks3.map((t) => t.path).reverse();
+    must((await api(base + '/order', 'PUT', { paths: flipped })).status === 200, 'ordenar');
+    must((await paths()).join() === flipped.join(), 'el orden nuevo no se guardó');
+    must((await api(base, 'PATCH', { name: 'e2e renombrada' })).status === 200, 'renombrar');
+    await js(`location.hash = '#/musica/playlist/' + arg`, made.data.id);
+    await until(`${q('#view .hero h1')}?.textContent === 'e2e renombrada' && document.querySelectorAll('#view .tracks [data-track]').length === 3`, 'la playlist en pantalla');
+    await shot('musica-playlist');
+    // Mantener presionada una canción abre su menú (el celular manda contextmenu).
+    await js(`document.querySelector('#view .tracks > li').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))`);
+    await until(`${q('#menu')}.open && ${q('#menu .menu-item')}`, 'el menú de la canción');
+    await js(`document.querySelector('#menu').close()`);
+    must((await api(base + '/tracks?path=' + encodeURIComponent(flipped[0]), 'DELETE')).status === 200, 'quitar canción');
+    must((await paths()).length === 2, 'la canción no se quitó');
+    // En Tu biblioteca aparece, y se borra.
+    await js(`location.hash = '#/musica/biblioteca'`);
+    await until(`[...document.querySelectorAll('#view .row-text p:first-child, #view .card p:first-of-type')].some((p) => p.textContent === 'e2e renombrada')`, 'la playlist en Tu biblioteca');
+    await shot('musica-biblioteca');
+    must((await api(base, 'DELETE')).status === 200, 'borrar');
+    must((await api(base)).status === 404, 'la playlist borrada sigue ahí');
+  });
+
+  await step('música: guardar un álbum, seguir a un artista y me gusta', async () => {
+    const saved = async () => { const d = (await api('/api/music?catalog=1')).data; return JSON.stringify(d); };
+    for (const [kind, path] of [['album', album.path], ['artist', seed.artistPath]]) {
+      const u = `/api/music/saved?kind=${kind}&path=${encodeURIComponent(path)}`;
+      must((await api(u, 'PUT')).status === 200, `guardar ${kind}`);
+      must((await api(`/api/music/saved?kind=${kind}&path=no-existe`, 'PUT')).status >= 400, `guardó un ${kind} que no existe`);
+      must((await api(u, 'DELETE')).status === 200, `quitar ${kind}`);
+    }
+    must((await api('/api/music/saved?kind=otro&path=x', 'PUT')).status === 400, 'aceptó un tipo inválido');
+    const like = '/api/music/likes?path=' + encodeURIComponent(seed.path);
+    must((await api(like, 'PUT')).status === 200, 'me gusta');
+    must((await api('/api/music/likes')).data.some((t) => t.path === seed.path), 'el me gusta no quedó');
+    must((await api(like, 'DELETE')).status === 200, 'quitar me gusta');
+    must(!(await api('/api/music/likes')).data.some((t) => t.path === seed.path), 'el me gusta sigue');
+    must((await saved()).length > 100, 'la biblioteca no respondió');
+  });
+
+  await step('descargas: cada quien ve las suyas y la cola completa es del panel', async () => {
+    // En esta copia el servicio no está activado: las dos listas responden vacías y deshabilitadas, sin error.
+    for (const u of ['/api/spotdl', '/api/spotdl?all=1']) {
+      const r = await api(u);
+      must(r.status === 200 && Array.isArray(r.data.items), `${u}: ${r.status} ${r.text}`);
+    }
+    must((await api('/api/spotdl', 'POST', { url: 'https://example.com/track/4uLU6hMCjMI75M1A2tKUQC' })).status === 400, 'aceptó un enlace que no sirve');
+  });
+
+  await step('dispositivos y jam: el panel abre y un código falso no entra', async () => {
+    await js(`location.hash = '#/musica'`);
+    await until(q('#view .quick-tile, #view .card'), 'el inicio de música');
+    if (mobile) {
+      must(await js(`return getComputedStyle(document.querySelector('#me-btn')).display !== 'none' && getComputedStyle(document.querySelector('#logout')).display === 'none'`), 'falta el avatar o sobran los botones de arriba');
+      await click('#me-btn');
+      await until(`${q('#me')}.open && document.querySelectorAll('#me .menu-item').length >= 3`, 'el menú de la cuenta');
+      await shot('menu-cuenta');
+      await js(`[...document.querySelectorAll('#me .menu-item')].find((b) => b.textContent.includes('jam')).click()`);
+    } else await click('#jam-link');
+    await until(`${q('#jam')}.open && ${q('#jam-body .row')}`, 'el panel de dispositivos');
+    must((await js(`return document.querySelector('#jam-body').textContent`)).includes('Este dispositivo'), 'el panel no muestra este dispositivo');
+    await shot('jam');
+    await click('#jam-close');
+    const dev = await js(`return localStorage.getItem('palobox.device')`);
+    const bad = await api('/api/jam', 'POST', { device: dev, op: 'join', code: 'ZZZZZZ' });
+    must(bad.status >= 400, `entró a un jam con un código falso: ${bad.status} ${bad.text}`);
+  });
+
+  await step('administración: panel, secciones y géneros', async () => {
+    const s = await api('/api/admin');
+    must(s.status === 200 && s.data.users.some((u) => u.name === user && u.admin), `/api/admin ${s.status}`);
+    for (const sec of ['', 'usuarios', 'actividad', 'musica', 'almacenamiento']) {
+      await js(`location.hash = '#/admin' + (arg ? '/' + arg : '')`, sec);
+      await until(`${q('#view .chip')} && !${q('#view .skeleton')}`, `la sección ${sec || 'resumen'}`);
+      must(!(await js(`return !!document.querySelector('#view .empty .type[style*=danger]')`)), `la sección ${sec} mostró un error`);
+    }
+    await js(`location.hash = '#/admin/usuarios'`);
+    await until(`[...document.querySelectorAll('#view .row-text p:first-child')].some((p) => p.textContent.includes(${JSON.stringify(user)}))`, 'la lista de usuarios');
+    await shot('admin-usuarios');
+  });
+
+  await step('cuentas: invitar, entrar como invitado de solo música, limitar, desactivar y borrar', async () => {
+    const name = 'e2einvitado';
+    await api('/api/admin/users/' + name, 'DELETE'); // por si quedó de una corrida anterior
+    const made = await api('/api/admin/users', 'POST', { name, musicOnly: true });
+    must(made.status === 200 && /^[a-f0-9]{64}$/.test(made.data.token), `crear usuario: ${made.status} ${made.text}`);
+    must((await api('/api/admin/users', 'POST', { name: 'Nombre Inválido' })).status >= 400, 'aceptó un nombre de usuario inválido');
+    const token = made.data.token;
+    must((await out('/api/invite?token=' + token)).data?.name === name, 'la invitación no reconoce al invitado');
+    must((await out('/api/invite', 'POST', { token, pass: 'corta' })).status >= 400, 'aceptó una contraseña corta');
+    const guestPass = 'clave-' + pass;
+    const inv = await out('/api/invite', 'POST', { token, pass: guestPass });
+    must(inv.status === 200 && inv.cookie, `aceptar invitación: ${inv.status} ${inv.text}`);
+    must((await out('/api/invite?token=' + token)).status === 404, 'la invitación sirvió dos veces');
+    const me = await out('/api/me', 'GET', null, inv.cookie);
+    must(me.data?.name === name && me.data.musicOnly && !me.data.admin, `/api/me del invitado: ${me.text}`);
+    // Solo música: entra a la música y a nada más.
+    must((await out('/api/music', 'GET', null, inv.cookie)).status === 200, 'el invitado no ve la música');
+    for (const u of ['/api/photos', '/api/files', '/api/admin', '/api/admin/genres', '/api/spotdl?all=1']) {
+      const r = await out(u, 'GET', null, inv.cookie);
+      must(u.startsWith('/api/spotdl') ? r.status === 200 : r.status === 403, `el invitado en ${u}: ${r.status}`);
+    }
+    must((await out('/api/admin/users', 'POST', { name: 'otro' }, inv.cookie)).status === 403, 'el invitado pudo crear usuarios');
+    // Lo de una persona no lo toca otra.
+    const mine = await api('/api/music/playlists', 'POST', { name: 'e2e privada' });
+    for (const [m, b] of [['GET'], ['PATCH', { name: 'x' }], ['DELETE']]) must((await out('/api/music/playlists/' + mine.data.id, m, b, inv.cookie)).status === 404, `el invitado pudo ${m} una playlist ajena`);
+    await api('/api/music/playlists/' + mine.data.id, 'DELETE');
+    // Entrar con contraseña: la buena sí, la mala no.
+    must((await out('/api/login', 'POST', { name, pass: 'no-es-la-clave' })).status === 401, 'entró con una contraseña equivocada');
+    const login = await out('/api/login', 'POST', { name, pass: guestPass });
+    must(login.status === 200 && login.cookie, `entrar con contraseña: ${login.status}`);
+    // El administrador le da acceso completo, lo desactiva y lo borra.
+    const path = '/api/admin/users/' + name;
+    must((await api(path + '/access', 'PUT', { musicOnly: false })).status === 200, 'dar acceso completo');
+    must((await out('/api/photos', 'GET', null, login.cookie)).status === 200, 'con acceso completo sigue sin ver Fotos');
+    must((await api(path + '/disabled', 'PUT', { disabled: true })).status === 200, 'desactivar');
+    must((await out('/api/me', 'GET', null, login.cookie)).status === 401, 'la sesión de una cuenta desactivada sigue viva');
+    must((await out('/api/login', 'POST', { name, pass: guestPass })).status >= 400, 'una cuenta desactivada pudo entrar');
+    must((await api(path + '?files=1', 'DELETE')).status === 200, 'borrar usuario');
+    must(!(await api('/api/admin')).data.users.some((u) => u.name === name), 'el usuario borrado sigue en la lista');
+    must((await api('/api/admin/users/' + user, 'DELETE')).status >= 400, 'el administrador pudo borrarse a sí mismo');
+  });
+
+  await step('sin sesión no se entra a nada', async () => {
+    for (const u of ['/api/me', '/api/music', '/api/photos', '/api/files', '/api/admin', '/api/spotdl', '/api/music/offline?path=' + encodeURIComponent(seed.path), '/api/music/likes']) {
+      must((await out(u)).status === 401, `${u} respondió sin sesión`);
+    }
+    must((await out('/api/version')).status === 200, '/api/version debe ser pública');
+  });
+
   await step('sin errores en la consola del navegador', async () => {
     // Las respuestas 4xx que estas pruebas provocan a propósito también salen en la consola: no cuentan.
     const real = errors.filter((e) => !/Failed to load resource/.test(e));
     must(real.length === 0, real.join(' | '));
+  });
+  await step('cerrar sesión desde la interfaz', async () => {
+    await js(`location.hash = '#/musica'`);
+    await until(q('#view .quick-tile, #view .card'), 'el inicio de música');
+    if (mobile) {
+      await click('#me-btn');
+      await until(`${q('#me')}.open`, 'el menú de la cuenta');
+      await js(`[...document.querySelectorAll('#me .menu-item')].find((b) => b.textContent.includes('Cerrar sesión')).click()`);
+    } else await click('#logout');
+    await answer();
+    await until(`!${q('#login')}.hidden && ${q('#app')}.hidden`, 'la pantalla de entrada');
+    must((await api('/api/me')).status === 401, 'la sesión siguió abierta');
   });
 } catch (e) {
   failed++;
   console.log('  FALLA (preparación):', e.message);
 }
 ws.close();
-chrome.kill();
-await new Promise((r) => chrome.on('exit', r)); // el perfil no se puede borrar mientras Chromium sigue cerrando
+if (cdp) await fetch(`${cdp}/json/close/${tab.id}`).catch(() => {});
+else {
+  chrome.kill();
+  await new Promise((r) => chrome.on('exit', r)); // el perfil no se puede borrar mientras Chromium sigue cerrando
+}
 try { rmSync(profile, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); } catch {}
 console.log(failed ? `\n${failed} pruebas fallaron.` : '\nTodas las pruebas punta a punta pasaron.');
 process.exit(failed ? 1 : 0);

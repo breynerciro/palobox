@@ -3,6 +3,7 @@
 # levanta la imagen recién compilada en un contenedor temporal (puerto 8098), con una copia de la base, la
 # música montada en solo lectura y un usuario de prueba que solo existe en esa copia. Al terminar lo borra todo.
 # Uso: ./e2e.sh [usuario@servidor]        pruebas punta a punta (gasta unas 3 solicitudes de Gemini)
+#      E2E_ADB=serial ./e2e.sh             lo mismo, pero dentro del Chrome de un celular Android conectado por adb
 #      CARGA=1 ./e2e.sh [usuario@servidor] además, pruebas de carga con p95/p99 y consumo del servidor
 # Necesita node y chromium aquí; el generador de carga (webtest/carga.go) se compila aquí y se copia al servidor.
 set -euo pipefail
@@ -46,6 +47,13 @@ $SSH "$HOST" "set -e
 # Túnel: el navegador de aquí ve la copia como http://127.0.0.1:8098.
 $SSH -f -N -L $PORT:127.0.0.1:$PORT -o ExitOnForwardFailure=yes "$HOST"
 echo "e2e: pruebas punta a punta"
+if [ -n "${E2E_ADB:-}" ]; then
+  # En un celular Android conectado por adb (E2E_ADB = su serial): su Chrome ve la copia en su propio 127.0.0.1.
+  adb -s "$E2E_ADB" reverse tcp:$PORT tcp:$PORT >/dev/null
+  adb -s "$E2E_ADB" forward tcp:9335 localabstract:chrome_devtools_remote >/dev/null
+  adb -s "$E2E_ADB" shell am start -a android.intent.action.VIEW -d "http://127.0.0.1:$PORT/" com.android.chrome >/dev/null
+  export E2E_CDP=http://127.0.0.1:9335
+fi
 node webtest/e2e.mjs "http://127.0.0.1:$PORT/" "$USER_E2E"
 
 if [ "${CARGA:-}" = 1 ]; then

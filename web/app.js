@@ -1,8 +1,8 @@
 // Punto de entrada: decide qué vista pintar según la ruta y mantiene la interfaz al día.
-import { $, el, empty, toast } from './lib.js';
+import { $, el, icon, empty, toast } from './lib.js';
 import { TABS, route, go, setRenderer, render } from './nav.js';
 import { audio, markPlaying, joinJam } from './player.js';
-import { isAdmin, musicOnly, start } from './session.js';
+import { isAdmin, musicOnly, userName, start } from './session.js';
 import * as offline from './offline.js';
 import { uploading } from './uploads.js';
 import { photosView } from './photos.js';
@@ -24,8 +24,33 @@ document.addEventListener('click', (e) => {
   const a = e.target.closest(TAB_LINKS);
   if (!a || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   e.preventDefault();
+  if (a.href === location.href) { // tocar la pestaña en la que ya se está sube al inicio; en Buscar, además, deja escribir
+    scrollTo({ top: 0, behavior: 'smooth' });
+    if (a.dataset.m === 'buscar') $('#search').focus();
+    return;
+  }
   location.replace(a.href);
 });
+
+// Menú de la cuenta: en el celular, dentro de Música, reúne lo que en escritorio son los botones de la barra de arriba.
+$('#me-btn').onclick = () => {
+  const d = $('#me');
+  const item = (glyph, label, run) => {
+    const b = el('button', { className: 'menu-item' }, icon(glyph), label);
+    b.onclick = () => { d.close(); run(); };
+    return el('li', {}, b);
+  };
+  $('#me-avatar').textContent = $('#me-btn').textContent;
+  $('#me-name').textContent = userName;
+  $('#me-list').replaceChildren(...[
+    !offline.active && item('cast', 'Dispositivos y jam', () => $('#jam-link').click()),
+    !offline.active && !musicOnly && item('cloud', 'Fotos y archivos', () => location.replace(lastCloud)),
+    !offline.active && isAdmin && item('activity', 'Administración', () => { location.hash = '#/admin'; }),
+    item('logout', 'Cerrar sesión', () => $('#logout').click()),
+  ].filter(Boolean));
+  d.showModal();
+};
+$('#me').onclick = (e) => e.target === e.currentTarget && e.currentTarget.close(); // clic en el telón
 
 let renderId = 0;
 let wasMusic; // la vista anterior era de Música (undefined antes de la primera)
@@ -69,6 +94,8 @@ async function renderView() {
   $('#subtitle').textContent = '';
   $('#admin-link').hidden = !isAdmin || admin;
   $('#jam-link').hidden = !music;
+  $('#me-btn').hidden = !music || detail;
+  $('#me-btn').textContent = userName.slice(0, 1).toUpperCase();
   $('#back').hidden = music ? !detail : !parts.length && !admin;
   $('#back-label').textContent = admin ? TABS[route(lastHash).tab].title : music ? 'Atrás' : parts.at(-2) ?? TABS[tab].title;
   $('#back').onclick = () => {

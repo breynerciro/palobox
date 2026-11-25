@@ -188,7 +188,7 @@ for i in range(1, 4):
         for url in ("", "https://evil.example/track/4uLU6hMCjMI75M1A2tKUQC", "texto"):
             code, body = self.request("POST", "/jobs", {"url": url})
             self.assertEqual(code, 400, url)
-            self.assertIn("Spotify", body["error"])
+            self.assertIn("no sirve", body["error"])
         self.assertEqual(self.request("POST", "/jobs", {})[0], 400)
         self.assertEqual(self.request("DELETE", "/jobs/" + "0" * 16)[0], 404)
         self.assertEqual(self.request("DELETE", "/jobs/no-es-id")[0], 404)

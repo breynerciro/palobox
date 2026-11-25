@@ -18,7 +18,7 @@ GET /api/spotdl
 
 POST /api/spotdl   {"url": "https://open.spotify.com/..."}
 200 job                                       # también si ya estaba en cola
-400 "El enlace no es de Spotify."
+400 "Ese enlace no sirve para descargar."
 429 "Ya tienes 2 descargas en cola; espera a que terminen."
 429 "Hay demasiadas descargas en cola."
 503

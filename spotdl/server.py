@@ -616,7 +616,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.send_json(400, {"error": "petición inválida"})
         url = clean_url(body.get("url") if isinstance(body, dict) else None)
         if not url:
-            return self.send_json(400, {"error": "El enlace no es de Spotify."})
+            return self.send_json(400, {"error": "Ese enlace no sirve para descargar."})
 
         store = self.service.store
         with store.lock:  # revisar y crear de una vez: un doble clic no crea dos trabajos

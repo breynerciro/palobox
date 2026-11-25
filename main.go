@@ -186,7 +186,7 @@ func main() {
 	if err != nil {
 		log.Fatal(err)
 	}
-	a.spotdl.Module = module.Load("SPOTDL", "El servicio de descargas de Spotify")
+	a.spotdl.Module = module.Load("SPOTDL", "El servicio de descargas")
 	if g := gemini.Load(); g != nil { // sin llave: no se clasifican artistas nuevos ni hay playlists por descripción
 		a.music.Ask = g.Ask
 	}

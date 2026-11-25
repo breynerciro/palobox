@@ -229,7 +229,7 @@ function present(t, at) {
   // Si falla, lazyImg ya la quitó; el color se quita solo si en la barra no quedó otra carátula (la de la pista siguiente).
   art?.addEventListener('error', () => { if (!$('#player-cover img')) amb.removeProperty('--amb'); });
   for (const b of document.querySelectorAll('#player .like, #np .like')) b.dataset.like = t.path;
-  for (const s of seeks) setSeek(s, 0);
+  for (const s of seeks) setSeek(s, t.dur ? Math.min(1, at / t.dur) : 0); // una canción retomada a medias no arranca con la barra en cero
   paintTimes(at, t.dur);
   $('#player').hidden = false;
   document.body.classList.add('has-player');
@@ -404,6 +404,10 @@ $('#np-more').onclick = () => {
     t.artistPath && { icon: 'user', label: 'Ir al artista', run: () => leave(`artista/${t.artistPath}`) },
   ]);
 };
+// Atajo con el dedo: tocar el título lleva al álbum y tocar el artista, al artista (con teclado están en el menú de arriba).
+for (const [sel, path] of [['#np-title', (t) => `album/${t.albumPath}`], ['#np-sub', (t) => t.artistPath && `artista/${t.artistPath}`]]) {
+  $(sel).onclick = () => { const t = queue[pos]; const p = t && path(t); if (p) { $('#np').close(); go('musica', p); } };
+}
 
 // markPlaying resalta en la vista la pista que suena y pone al día los botones compartidos.
 export function markPlaying() {

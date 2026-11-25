@@ -353,6 +353,7 @@ export function trackList(tracks, { covers = false, sub = (t) => t.artist, extra
     more.setAttribute('aria-haspopup', 'menu');
     more.onclick = () => trackMenu(more, t, extra?.(t, i));
     const li = el('li', { className: 'row-wrap' }, b, likeButton(t), el('span', { className: 'dur muted', textContent: t.dur ? clock(t.dur) : '' }), more);
+    li.oncontextmenu = (e) => { e.preventDefault(); more.click(); }; // mantener presionada una canción abre su menú
     if (onMove) {
       li.draggable = true;
       li.ondragstart = (e) => e.dataTransfer.setData('text/plain', i);

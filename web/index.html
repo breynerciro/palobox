@@ -135,9 +135,11 @@
       <a id="admin-link" class="icon-btn" href="#/admin" aria-label="Administración" hidden><svg><use href="#i-activity"/></svg></a>
       <button id="logout" class="icon-btn" aria-label="Cerrar sesión"><svg><use href="#i-logout"/></svg></button>
     </div>
+    <button id="me-btn" class="avatar" aria-label="Menú de la cuenta" aria-haspopup="dialog" hidden></button>
     <h1 id="title">Fotos</h1>
     <p id="subtitle" class="muted"></p>
     <form id="searchbox" class="searchbox" role="search" hidden>
+      <button type="button" id="search-back" class="icon-btn" aria-label="Cancelar la búsqueda"><svg><use href="#i-back"/></svg></button>
       <svg aria-hidden="true"><use href="#i-search"/></svg>
       <input id="search" type="search" enterkeyhint="search" autocomplete="off" autocorrect="off" aria-label="Buscar en tu música o pegar un enlace de Spotify">
       <button type="button" id="search-clear" class="icon-btn small" aria-label="Borrar búsqueda" hidden><svg><use href="#i-x"/></svg></button>
@@ -287,6 +289,12 @@
 </dialog>
 
 <dialog id="menu" class="menu"><ul id="menu-list" role="menu"></ul></dialog>
+
+<!-- Menú de la cuenta (celular, en Música): entra desde la izquierda al tocar el avatar. -->
+<dialog autofocus id="me" class="panel left" aria-labelledby="me-name">
+  <div class="me-head"><span class="avatar" id="me-avatar" aria-hidden="true"></span><h2 id="me-name" class="ellipsis"></h2></div>
+  <ul id="me-list"></ul>
+</dialog>
 
 <dialog id="ask" class="sheet">
   <form method="dialog">
