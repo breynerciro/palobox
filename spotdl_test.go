@@ -231,19 +231,34 @@ func TestSpotdlDeshabilitado(t *testing.T) {
 	}
 }
 
-// La app marca como propios solo los trabajos del usuario (o todos, para el admin).
+// Cada quien ve solo sus descargas; la cola completa es del administrador y solo en su panel (?all=1).
 func TestSpotdlDueno(t *testing.T) {
 	fake, ana, a := newSpotdlTest(t)
 	fake.jobs = []spotdl.Job{{ID: "0123456789abcdef", Owner: "ana", Status: "queued"}, {ID: "fedcba9876543210", Owner: "pepe", Status: "done"}}
-	_, m, raw := ana.do("GET", "/api/spotdl", nil)
-	items := m["items"].([]any)
-	if items[0].(map[string]any)["mine"] != true || items[1].(map[string]any)["mine"] != false {
-		t.Fatalf("mine mal calculado para ana: %s", raw)
+	ids := func(path string) string {
+		_, m, _ := ana.do("GET", path, nil)
+		var out []string
+		for _, it := range m["items"].([]any) {
+			j := it.(map[string]any)
+			if j["mine"] != true {
+				t.Errorf("%s: %v debía ser gestionable", path, j["id"])
+			}
+			out = append(out, j["id"].(string))
+		}
+		return strings.Join(out, ",")
+	}
+	if got := ids("/api/spotdl"); got != "0123456789abcdef" {
+		t.Fatalf("ana ve descargas ajenas: %s", got)
+	}
+	if got := ids("/api/spotdl?all=1"); got != "0123456789abcdef" {
+		t.Fatalf("all=1 sin ser admin muestra lo ajeno: %s", got)
 	}
 	a.auth.Admin = "ana"
-	_, m, raw = ana.do("GET", "/api/spotdl", nil)
-	if m["items"].([]any)[1].(map[string]any)["mine"] != true {
-		t.Fatalf("el admin puede quitar cualquiera: %s", raw)
+	if got := ids("/api/spotdl"); got != "0123456789abcdef" {
+		t.Fatalf("el admin ve lo ajeno fuera de su panel: %s", got)
+	}
+	if got := ids("/api/spotdl?all=1"); got != "0123456789abcdef,fedcba9876543210" {
+		t.Fatalf("el panel del admin debe ver todo: %s", got)
 	}
 	fake.Lock()
 	last := fake.users[len(fake.users)-1]

@@ -67,7 +67,8 @@ func spotifyURL(raw string) (string, error) {
 	return "https://open.spotify.com/" + m[1] + "/" + m[2], nil
 }
 
-// List devuelve la cola. Sin servicio configurado responde deshabilitado para que
+// List devuelve las descargas de quien pregunta; la cola completa solo al administrador y solo si la pide
+// (?all=1, el panel de administración). Sin servicio configurado responde deshabilitado para que
 // la interfaz oculte la sección sin mostrar un error.
 func (h *Handler) List(w http.ResponseWriter, r *http.Request, u httpx.User) error {
 	if h.Module.URL == "" {
@@ -77,17 +78,20 @@ func (h *Handler) List(w http.ResponseWriter, r *http.Request, u httpx.User) err
 	if err := h.Module.Do(u, "GET", "/jobs", nil, &items); err != nil {
 		return err
 	}
-	if items == nil {
-		items = []Job{}
-	}
+	all := u.Admin && r.URL.Query().Get("all") == "1"
+	out := []Job{}
 	for i := range items {
 		items[i].Mine = items[i].Owner == u.Name || u.Admin
+		// La playlist se crea aunque la lista la pida otro: no depende de que su dueño vuelva a entrar.
 		if j := items[i]; len(j.Tracks) > 0 && h.Playlist != nil && j.Status == "finished" && strings.Contains(j.URL, "/playlist/") {
 			h.Playlist(j.Owner, j.ID, j.Title, j.Tracks)
 		}
 		items[i].Tracks = nil // a la interfaz no le sirven
+		if all || items[i].Owner == u.Name {
+			out = append(out, items[i])
+		}
 	}
-	return httpx.WriteJSON(w, 200, map[string]any{"enabled": true, "items": items})
+	return httpx.WriteJSON(w, 200, map[string]any{"enabled": true, "items": out})
 }
 
 func (h *Handler) Add(w http.ResponseWriter, r *http.Request, u httpx.User) error {

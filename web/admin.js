@@ -202,7 +202,7 @@ function musicSection(m) {
 async function downloadsSection(sp) {
   if (!sp?.enabled) return [];
   if (!sp.ok) return [heading('Descargas de Spotify', 'sin respuesta')];
-  const r = await api('/api/spotdl').catch(() => null);
+  const r = await api('/api/spotdl?all=1').catch(() => null);
   const items = r?.ok ? (await r.json()).items.filter((j) => j.status !== 'finished') : [];
   return [
     heading('Descargas de Spotify', joinText(sp.spotdl && `spotDL ${sp.spotdl}`, plural(sp.active ?? 0, 'activa', 'activas'))),
