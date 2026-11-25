@@ -404,8 +404,6 @@ body.has-player.paused:not(.music) #view { padding-bottom: calc(var(--tabs-h) + 
   font-size: .7rem; font-weight: 600; color: var(--muted); text-decoration: none; transition: color var(--fast); }
 .tabs a svg { width: 24px; height: 24px; }
 .tabs a[aria-current] { color: var(--accent); }
-.tabs .exit { flex: .8; position: relative; }
-.tabs .exit::before { content: ""; position: absolute; left: 0; top: 10px; bottom: 10px; width: 1px; background: var(--line); }
 
 /* ---- Escritorio: Música con barra lateral y reproductor a todo el ancho ---- */
 .side { display: none; }
@@ -558,7 +556,7 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 }
 
 /* Cuenta de solo Música: sin salidas a Fotos ni Archivos (el servidor tampoco los entrega). */
-.music-only #mtabs-exit, .music-only .side-foot { display: none; }
+.music-only .side-foot { display: none; }
 /* Opciones excluyentes dentro del diálogo (tipo de acceso al crear un usuario). */
 .ask-choice { display: grid; gap: 8px; }
 .ask-choice[hidden] { display: none; }
@@ -572,7 +570,7 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 /* ---- Modo sin conexión (offline.js): solo la música descargada; lo que necesita servidor se esconde ---- */
 /* Con el reproductor a la vista, su botón de jam basta; el de arriba queda para cuando no suena nada (unirse con un código). */
 .has-player #jam-link { display: none; }
-.offline #jam-link, .offline #mtabs-exit, .offline .side-foot, .offline #admin-link { display: none; }
+.offline #jam-link, .offline .side-foot, .offline #admin-link { display: none; }
 /* Me gusta y crear playlists también necesitan servidor: sin conexión la música descargada solo se escucha. */
 .offline .like, .offline #side-new { display: none; }
 /* Aviso fijo abajo, pegado a la barra de navegación, como una franja delgada: no mueve nada del encabezado. */

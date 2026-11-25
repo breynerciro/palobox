@@ -304,6 +304,7 @@ try {
     await js(`location.hash = '#/musica'`);
     await until(q('#view .quick-tile, #view .card'), 'el inicio de música');
     await shot('musica-inicio');
+    must(await js(`return document.querySelectorAll('#mtabs a').length`) === 3, 'la barra inferior de Música debe tener solo Inicio, Buscar y Tu biblioteca');
     const a = await api('/api/music/artist?path=' + encodeURIComponent(seed.artistPath));
     must(a.status === 200 && a.data.tracks.length, `artista ${a.status}`);
     album = (await api('/api/music/album?path=' + encodeURIComponent(seed.albumPath))).data;

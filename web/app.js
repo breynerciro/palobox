@@ -12,7 +12,7 @@ import { musicView, greeting, syncSearchBox } from './music-views.js';
 import { adminView } from './admin.js';
 
 let lastHash = ''; // de dónde se entró a Administración, para volver ahí
-let lastCloud = '#/fotos'; // última sección fuera de Música: a ella vuelve «Nube»
+let lastCloud = '#/fotos'; // última sección fuera de Música: a ella vuelve «Fotos y archivos»
 let lastView = ''; // vista pintada la última vez: repintarla (buscar mientras se escribe, una acción del panel) no muestra el esqueleto
 const MUSIC = { '': 'inicio', buscar: 'buscar', biblioteca: 'biblioteca' }; // vistas raíz de Música; el resto son páginas de detalle
 
@@ -86,7 +86,7 @@ async function renderView() {
   document.body.classList.toggle('flat', music || tab === 'archivos' || tab === 'fotos'); // listas sin caja en el celular
   $('#tabs').hidden = music;
   $('#mtabs').hidden = $('#side').hidden = !music;
-  $('#mtabs-exit').href = $('#side-exit').href = musicOnly ? '#/musica' : lastCloud;
+  $('#side-exit').href = musicOnly ? '#/musica' : lastCloud;
   for (const a of document.querySelectorAll('[data-m]')) {
     a.dataset.m === section ? a.setAttribute('aria-current', 'page') : a.removeAttribute('aria-current');
   }
