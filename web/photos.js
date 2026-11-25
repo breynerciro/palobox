@@ -1,5 +1,5 @@
 // Galería de fotos y videos, y su visor.
-import { $, el, icon, setIcon, sleep, size, clock, fmtDate, plural, lazyImg, toast, ask, menu, empty, uploadButton } from './lib.js';
+import { $, el, icon, setIcon, sleep, size, clock, fmtDate, plural, lazyImg, toast, ask, empty, uploadButton } from './lib.js';
 import { render } from './nav.js';
 import { api } from './session.js';
 
@@ -13,6 +13,7 @@ export async function photosView() {
   photos = await r.json();
   endSelect(); // cada pintada empieza sin selección (app.js ya ocultó sus botones)
   $('#subtitle').textContent = photos.length ? plural(photos.length, 'elemento', 'elementos') : '';
+  $('#sel-start').hidden = !photos.length;
   if (!photos.length) {
     return empty('image', 'Aún no hay fotos', 'Sube fotos y videos de tu galería; se guardan con su calidad original.', uploadButton());
   }
@@ -25,67 +26,154 @@ export async function photosView() {
     groups.get(m).push([it, i]);
   });
   for (const [m, items] of groups) {
-    frag.append(el('h2', { className: 'section-title' }, m, el('span', { textContent: items.length })));
-    frag.append(el('div', { className: 'grid' }, items.map(([it, i]) => tile(it, i))));
+    const grid = el('div', { className: 'grid' }, items.map(([it, i]) => tile(it, i)));
+    // En selección, cada mes trae su propio «Seleccionar»: marca (o desmarca, si ya están todas) el mes entero.
+    const all = el('button', { className: 'sel-group', textContent: 'Seleccionar' });
+    all.setAttribute('aria-label', `Seleccionar todo ${m}`);
+    all.onclick = () => {
+      const on = items.some(([it]) => !selected.has(it.id));
+      [...grid.children].forEach((b, k) => mark(b, items[k][0], on));
+      paintSel();
+    };
+    frag.append(el('h2', { className: 'section-title' }, m, el('span', { textContent: items.length }), all), grid);
   }
   return frag;
 }
 
 // Una miniatura: un toque la abre (o la marca, en selección múltiple); mantenerla presionada o el clic derecho abren
 // el menú propio. El menú del sistema (el de Safari para imágenes) se apaga en style.css.
+let swallowUntil = 0; // tras un toque largo o un barrido, el clic que le sigue no cuenta
 function tile(it, i) {
   const b = el('button', { className: 'tile' }, lazyImg(`/api/photos/${it.id}/t?v=${it.v}`),
     it.kind === 'video' && el('span', { className: 'badge' }, icon('play'), 'Video'), el('span', { className: 'tile-check' }, icon('check')));
   b.dataset.id = it.id;
   b.setAttribute('aria-label', `${noun(it)} del ${fmtDate(it.taken)}`);
   let hold = null; // temporizador del toque largo
-  let held = false; // el toque largo ya abrió el menú: el clic que sigue no cuenta
   const cancel = () => { clearTimeout(hold); hold = null; };
+  const open = () => { swallowUntil = performance.now() + 600; tileMenu(b, it); };
   b.addEventListener('pointerdown', (e) => {
-    held = false;
-    if (e.pointerType === 'mouse') return; // con mouse, el clic derecho
+    if (e.pointerType === 'mouse' || document.body.classList.contains('selecting')) return; // con mouse, el clic derecho; eligiendo, el dedo barre
     const { clientX: x, clientY: y } = e;
-    hold = setTimeout(() => { held = true; tileMenu(b, it); }, 450);
+    hold = setTimeout(open, 450);
     b.onpointermove = (m) => { if (Math.hypot(m.clientX - x, m.clientY - y) > 10) cancel(); }; // se está desplazando la galería
   });
   for (const ev of ['pointerup', 'pointercancel', 'pointerleave']) b.addEventListener(ev, cancel);
-  b.oncontextmenu = (e) => { e.preventDefault(); cancel(); if (!held) tileMenu(b, it); };
+  b.oncontextmenu = (e) => {
+    e.preventDefault();
+    cancel();
+    if (performance.now() > swallowUntil && !document.body.classList.contains('selecting')) open();
+  };
   b.onclick = () => {
-    if (held) return void (held = false);
+    if (performance.now() < swallowUntil) return;
     if (document.body.classList.contains('selecting')) toggle(b, it);
     else openViewer(i);
   };
   return b;
 }
 
+// El menú de una foto, como el de la fototeca del teléfono: la foto se levanta sobre el fondo desenfocado y debajo
+// van sus acciones, cada una con su ícono a la derecha.
 function tileMenu(b, it) {
-  menu(b, `Acciones de ${it.name}`, [
-    { icon: 'check', label: 'Seleccionar', run: () => { startSelect(); toggle(b, it, true); } },
-    { icon: 'download', label: 'Descargar original', run: () => el('a', { href: `/api/photos/${it.id}/o?dl`, download: it.name }).click() },
-    { icon: 'trash', label: 'Eliminar', danger: true, run: async () => { if (await remove([it])) render(); } },
-  ]);
+  const d = $('#pmenu');
+  const row = (glyph, label, run, danger) => {
+    const x = el('button', { className: `pmenu-item${danger ? ' danger' : ''}` }, el('span', { textContent: label }), icon(glyph));
+    x.setAttribute('role', 'menuitem');
+    x.onclick = () => { shut(); run(); };
+    const li = el('li', {}, x);
+    li.setAttribute('role', 'none');
+    return li;
+  };
+  d.setAttribute('aria-label', `Acciones de ${it.name}`);
+  $('#pmenu-img').src = `/api/photos/${it.id}/${it.kind === 'video' ? 't' : 'p'}?v=${it.v}`;
+  $('#pmenu-cap').textContent = `${fmtDate(it.taken)} · ${size(it.size)}`;
+  $('#pmenu-list').replaceChildren(
+    row('check', 'Seleccionar', () => { startSelect(); toggle(b, it, true); }),
+    row('download', 'Descargar original', () => el('a', { href: `/api/photos/${it.id}/o?dl`, download: it.name }).click()),
+    row('trash', 'Eliminar', async () => { if (await remove([it])) render(); }, true));
+  armed = false;
+  d.showModal();
 }
+// Un toque fuera lo cierra; soltar el dedo que lo abrió no cuenta, por eso el toque tiene que empezar con el menú ya abierto.
+let armed = false;
+$('#pmenu').onpointerdown = () => { armed = true; };
+const shut = () => { $('#pmenu').close(); swallowUntil = 0; }; // cerrado el menú, el siguiente toque ya es otro
+$('#pmenu').onclick = (e) => e.target.closest('.pmenu-item, .pmenu-card') || (armed && shut());
 
 // Selección múltiple: la barra de arriba muestra cuántas van y deja eliminarlas o cancelar.
 function startSelect() { document.body.classList.add('selecting'); paintSel(); }
 function endSelect() {
   selected.clear();
   document.body.classList.remove('selecting');
+  swallowUntil = 0; // el clic que se ignora tras un barrido solo aplica mientras se elige
   $('#sel-del').hidden = $('#sel-cancel').hidden = true;
   for (const t of document.querySelectorAll('.tile[aria-pressed]')) t.removeAttribute('aria-pressed');
 }
-function toggle(b, it, on = !selected.has(it.id)) {
+// mark deja una miniatura elegida o no, sin repintar la barra (quien marca muchas la repinta una vez).
+function mark(b, it, on) {
+  if (selected.has(it.id) === on) return;
   on ? selected.add(it.id) : selected.delete(it.id);
   b.setAttribute('aria-pressed', on);
+}
+function toggle(b, it, on = !selected.has(it.id)) {
+  mark(b, it, on);
   paintSel();
 }
 function paintSel() {
   $('#sel-del').hidden = !selected.size;
   $('#sel-cancel').hidden = false;
-  $('#subtitle').textContent = selected.size ? plural(selected.size, 'seleccionada', 'seleccionadas') : 'Toca las fotos y videos que quieras elegir';
+  $('#subtitle').textContent = selected.size ? plural(selected.size, 'seleccionada', 'seleccionadas') : 'Toca o desliza el dedo sobre las fotos para elegirlas';
 }
+$('#sel-start').onclick = startSelect;
 $('#sel-cancel').onclick = () => { endSelect(); $('#subtitle').textContent = plural(photos.length, 'elemento', 'elementos'); };
 $('#sel-del').onclick = async () => { if ((await remove(photos.filter((p) => selected.has(p.id)))) !== false) render(); };
+
+// Barrido: en selección, deslizar el dedo de lado sobre las fotos las va eligiendo (o quitando, si la primera ya lo
+// estaba); sin soltar, subir o bajar toma filas enteras, y cerca del borde la galería se desplaza sola. Si el dedo
+// vuelve atrás, lo que deja de estar entre el inicio y el dedo recupera el estado que tenía.
+let sweep = null; // { id, tile, x, y, live, list, from, on, base }
+function sweepPaint() {
+  const to = sweep.list.indexOf(document.elementFromPoint(sweep.x, sweep.y)?.closest('.tile'));
+  if (to < 0) return;
+  const [a, b] = [Math.min(sweep.from, to), Math.max(sweep.from, to)];
+  sweep.list.forEach((t, i) => {
+    const it = photos[sweep.at[i]];
+    mark(t, it, i >= a && i <= b ? sweep.on : sweep.base.has(it.id));
+  });
+  paintSel();
+}
+function sweepScroll() {
+  if (!sweep?.live) return;
+  const edge = 96;
+  const v = sweep.y < edge ? sweep.y - edge : sweep.y > innerHeight - edge - 64 ? sweep.y - (innerHeight - edge - 64) : 0; // 64: la barra de pestañas
+  if (v) { scrollBy(0, Math.max(-18, Math.min(18, v / 4))); sweepPaint(); }
+  requestAnimationFrame(sweepScroll);
+}
+$('#view').addEventListener('pointerdown', (e) => {
+  const t = e.target.closest?.('.tile');
+  sweep = t && document.body.classList.contains('selecting') && e.isPrimary ? { id: e.pointerId, tile: t, x: e.clientX, y: e.clientY, live: false } : null;
+});
+$('#view').addEventListener('pointermove', (e) => {
+  if (sweep?.id !== e.pointerId) return;
+  if (!sweep.live) {
+    const dx = e.clientX - sweep.x;
+    const dy = e.clientY - sweep.y;
+    if (Math.hypot(dx, dy) < 12) return; // todavía puede ser un toque
+    if (Math.abs(dy) > Math.abs(dx)) return void (sweep = null); // hacia arriba o abajo de entrada: es la galería desplazándose
+    const list = [...document.querySelectorAll('#view .tile')];
+    const index = new Map(photos.map((p, i) => [String(p.id), i]));
+    Object.assign(sweep, { live: true, list, at: list.map((t) => index.get(t.dataset.id)), from: list.indexOf(sweep.tile),
+      on: sweep.tile.getAttribute('aria-pressed') !== 'true', base: new Set(selected) });
+    requestAnimationFrame(sweepScroll);
+  }
+  sweep.x = e.clientX;
+  sweep.y = e.clientY;
+  sweepPaint();
+});
+for (const ev of ['pointerup', 'pointercancel']) $('#view').addEventListener(ev, (e) => {
+  if (sweep?.id !== e.pointerId) return;
+  if (sweep.live) swallowUntil = performance.now() + 400; // el clic que sigue al barrido no vuelve a cambiar la foto
+  sweep = null;
+});
 
 // remove elimina del servidor, con una sola confirmación, una foto o todas las elegidas.
 async function remove(items) {

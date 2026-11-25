@@ -97,7 +97,7 @@ async function renderView() {
   $('#subtitle').textContent = '';
   $('#admin-link').hidden = !isAdmin || admin;
   $('#jam-link').hidden = !music;
-  $('#sel-del').hidden = $('#sel-cancel').hidden = true; // la selección múltiple de Fotos no sobrevive a cambiar de vista
+  $('#sel-start').hidden = $('#sel-del').hidden = $('#sel-cancel').hidden = true; // la selección múltiple de Fotos no sobrevive a cambiar de vista
   document.body.classList.remove('selecting');
   $('#me-btn').textContent = userName.slice(0, 1).toUpperCase();
   $('#back').hidden = music ? !detail : !parts.length && !admin;

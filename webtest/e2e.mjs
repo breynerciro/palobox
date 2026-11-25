@@ -249,10 +249,19 @@ try {
     }
     // Mantener presionada una miniatura (el celular manda contextmenu) abre el menú de la app, no el del navegador.
     const hold = (n) => js(`document.querySelectorAll('#view .tile')[arg].dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }))`, n);
-    const pickMenu = (text) => js(`[...document.querySelectorAll('#menu .menu-item')].find((b) => b.textContent.includes(arg)).click()`, text);
+    const pickMenu = (text) => js(`[...document.querySelectorAll('#pmenu .pmenu-item')].find((b) => b.textContent.includes(arg)).click()`, text);
     await hold(0);
-    await until(`${q('#menu')}.open`, 'el menú de la foto');
-    must((await js(`return [...document.querySelectorAll('#menu .menu-item')].map((b) => b.textContent).join()`)) === 'Seleccionar,Descargar original,Eliminar', 'el menú de la foto no trae sus tres acciones');
+    await until(`${q('#pmenu')}.open && ${q('#pmenu-img')}.complete`, 'el menú de la foto');
+    must((await js(`return [...document.querySelectorAll('#pmenu .pmenu-item')].map((b) => b.textContent).join()`)) === 'Seleccionar,Descargar original,Eliminar', 'el menú de la foto no trae sus tres acciones');
+    await sleep(350);
+    await shot('fotos-menu');
+    // Un clic fuera sin haber empezado con el menú abierto (el dedo que lo abrió, al soltarse) no lo cierra; un toque completo sí.
+    await click('#pmenu');
+    must(await js(`return ${q('#pmenu')}.open`), 'soltar el dedo cerró el menú de la foto');
+    await js(`${q('#pmenu')}.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true })); ${q('#pmenu')}.click()`);
+    must(!(await js(`return ${q('#pmenu')}.open`)), 'tocar fuera no cerró el menú de la foto');
+    await hold(0);
+    await until(`${q('#pmenu')}.open`, 'el menú de la foto otra vez');
     // Selección múltiple: marcar dos, cancelar, y nada se borra.
     await pickMenu('Seleccionar');
     await until(`document.body.classList.contains('selecting') && document.querySelectorAll('#view .tile[aria-pressed=true]').length === 1 && !${q('#sel-del')}.hidden`, 'la selección con una foto');
@@ -262,6 +271,21 @@ try {
     await shot('fotos-seleccion');
     await click('#sel-cancel');
     must(!(await js(`return document.body.classList.contains('selecting') || !!document.querySelector('#view .tile[aria-pressed=true]')`)), 'cancelar no quitó la selección');
+    // Barrido: con «Seleccionar» de la barra, deslizar de la primera a la segunda las elige a las dos; volver atrás suelta la segunda.
+    await click('#sel-start');
+    const sweep = (steps) => js(`const ts = document.querySelectorAll('#view .tile'); const c = (i) => { const r = ts[i].getBoundingClientRect(); return { clientX: r.left + r.width / 2, clientY: r.top + r.height / 2 }; };
+      const ev = (type, p, el) => el.dispatchEvent(new PointerEvent(type, { bubbles: true, pointerId: 7, isPrimary: true, pointerType: 'touch', ...p }));
+      const a = c(arg[0]); ev('pointerdown', a, ts[arg[0]]);
+      for (const i of arg.slice(1)) { const b = c(i); ev('pointermove', { clientX: (a.clientX + b.clientX) / 2, clientY: b.clientY }, ts[arg[0]]); ev('pointermove', b, ts[arg[0]]); }
+      ev('pointerup', c(arg.at(-1)), ts[arg[0]]); ts[arg[0]].click();
+      return document.querySelectorAll('#view .tile[aria-pressed=true]').length;`, steps);
+    must(await sweep([0, 1]) === 2, 'deslizar sobre dos fotos no eligió las dos');
+    await click('#sel-cancel');
+    await click('#sel-start');
+    must(await sweep([0, 1, 0]) === 1, 'al volver atrás con el dedo la segunda foto debía soltarse');
+    await js(`document.querySelector('#view .sel-group').click()`); // «Seleccionar» del mes: todas las de ese mes
+    must(await js(`return document.querySelectorAll('#view .grid')[0].querySelectorAll('.tile[aria-pressed=true]').length === document.querySelectorAll('#view .grid')[0].children.length`), '«Seleccionar» del mes no eligió todo el mes');
+    await click('#sel-cancel');
     // Visor: tira de miniaturas, pasar a la siguiente y esconder las barras con un toque.
     await click('#view .tile');
     await until(`${q('#viewer')}.open && ${q('#stage img')} && ${q('#v-strip .v-thumb[aria-current]')}`, 'el visor con su tira');
@@ -288,7 +312,7 @@ try {
     // La otra se borra con la selección múltiple.
     const mine = (await api('/api/photos')).data.findIndex((p) => p.name.startsWith('e2e-foto'));
     await hold(mine);
-    await until(`${q('#menu')}.open`, 'el menú de la segunda foto');
+    await until(`${q('#pmenu')}.open`, 'el menú de la segunda foto');
     await pickMenu('Seleccionar');
     await until(`!${q('#sel-del')}.hidden`, 'el botón de eliminar la selección');
     await click('#sel-del');

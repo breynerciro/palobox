@@ -132,6 +132,7 @@
     <div class="topbar-row">
       <button id="back" class="btn ghost back" hidden><svg><use href="#i-back"/></svg><span id="back-label"></span></button>
       <span class="spacer"></span>
+      <button id="sel-start" class="btn ghost" hidden>Seleccionar</button>
       <button id="sel-cancel" class="btn ghost" hidden>Cancelar</button>
       <button id="sel-del" class="icon-btn" aria-label="Eliminar lo seleccionado" hidden><svg><use href="#i-trash"/></svg></button>
       <button id="mkdir" class="icon-btn" aria-label="Nueva carpeta" hidden><svg><use href="#i-folder-plus"/></svg></button>
@@ -316,6 +317,15 @@
 </dialog>
 
 <dialog id="menu" class="menu"><ul id="menu-list" role="menu"></ul></dialog>
+
+<!-- Menú de una foto o video (mantenerla presionada): la foto levantada y debajo sus acciones. -->
+<dialog id="pmenu" class="pmenu">
+  <img id="pmenu-img" alt="">
+  <div class="pmenu-card">
+    <p id="pmenu-cap"></p>
+    <ul id="pmenu-list" role="menu"></ul>
+  </div>
+</dialog>
 
 <!-- Menú de la cuenta (celular, en Música): entra desde la izquierda al tocar el avatar. -->
 <dialog autofocus id="me" class="panel left" aria-labelledby="me-name">

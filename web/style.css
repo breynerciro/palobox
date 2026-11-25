@@ -529,7 +529,33 @@ body.has-player.paused:not(.music) #view { padding-bottom: calc(var(--tabs-h) + 
 .tile[aria-pressed=true] img { opacity: .7; }
 .tile[aria-pressed=true] .tile-check { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
 .selecting #add { display: none; } /* mientras se elige, la barra es de la selección */
-#sel-cancel { padding: 0 8px; }
+#sel-cancel, #sel-start { padding: 0 8px; }
+.selecting #sel-start { display: none; }
+.selecting .grid { touch-action: pan-y; } /* de lado, el dedo barre fotos en vez de mover la página */
+/* «Seleccionar» de cada mes: solo mientras se elige. */
+.sel-group { display: none; margin-left: auto; padding: 4px 12px; border: 0; border-radius: 999px; font: inherit; font-size: .8125rem; font-weight: 600;
+  background: var(--glass); color: var(--accent); cursor: pointer; }
+.selecting .sel-group { display: inline-block; }
+/* Menú de una foto: fondo desenfocado, la foto levantada y debajo una tarjeta de vidrio con las acciones. */
+.pmenu { inset: 0; width: 100vw; height: 100dvh; max-width: none; max-height: none; margin: 0; border: 0; background: none; color: var(--text);
+  padding: calc(env(safe-area-inset-top) + 24px) 24px calc(var(--safe-b) + 24px); }
+.pmenu[open] { display: grid; grid-template-rows: minmax(0, 1fr) auto; justify-items: center; align-content: center; gap: 12px; }
+.pmenu::backdrop { background: rgb(4 6 12 / .55); backdrop-filter: blur(22px) saturate(140%); -webkit-backdrop-filter: blur(22px) saturate(140%); }
+#pmenu-img { align-self: end; max-width: 100%; max-height: 100%; min-height: 0; border-radius: 18px; object-fit: contain; box-shadow: 0 24px 60px -12px rgb(0 0 0 / .7);
+  animation: pmenu-in var(--med) var(--ease); -webkit-touch-callout: none; pointer-events: none; }
+.pmenu-card { width: min(100%, 280px); border-radius: 16px; overflow: hidden; border: 1px solid rgb(255 255 255 / .1);
+  background: color-mix(in srgb, var(--surface-2) 82%, transparent); backdrop-filter: blur(30px) saturate(160%); -webkit-backdrop-filter: blur(30px) saturate(160%);
+  animation: pmenu-in var(--med) var(--ease); transform-origin: top center; }
+@keyframes pmenu-in { from { opacity: 0; transform: scale(.9); } }
+#pmenu-cap { padding: 10px 16px; font-size: .78rem; color: var(--muted); text-align: center; border-bottom: 1px solid rgb(255 255 255 / .08); }
+#pmenu-list { list-style: none; margin: 0; padding: 0; }
+#pmenu-list li + li { border-top: 1px solid rgb(255 255 255 / .08); }
+.pmenu-item { display: flex; align-items: center; justify-content: space-between; gap: 16px; width: 100%; min-height: 48px; padding: 0 16px; border: 0;
+  background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.pmenu-item:hover, .pmenu-item:focus-visible, .pmenu-item:active { background: rgb(255 255 255 / .08); }
+.pmenu-item svg { width: 20px; height: 20px; }
+.pmenu-item.danger { color: var(--danger); }
+@media (prefers-reduced-motion: reduce) { #pmenu-img, .pmenu-card { animation: none; } }
 
 /* ---- Diálogo de confirmación / nombre ---- */
 .sheet { border: 0; padding: 0; width: min(92vw, 380px); border-radius: 18px; background: var(--surface); color: var(--text); }
