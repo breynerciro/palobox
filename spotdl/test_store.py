@@ -22,7 +22,7 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(job["total"], 0)
         self.assertIsNone(job["progress"])
         self.assertEqual(self.store.active_count(), 1)
-        self.assertIsNotNone(self.store.find_active(job["url"]))
+        self.assertIsNotNone(self.store.find_active(job["url"], ""))
 
         self.assertTrue(self.store.claim(job["id"]))
         self.assertFalse(self.store.claim(job["id"]))  # ya no está en cola
@@ -56,6 +56,32 @@ class StoreTest(unittest.TestCase):
         for jid in (uno["id"], dos["id"]):
             job = self.store.get(jid)
             self.assertEqual((job["status"], job["done"], job["total"], job["current"]), ("queued", 0, 0, ""))
+
+    def test_el_mismo_enlace_de_otro_usuario_no_cuenta(self):
+        url = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+        suyo = self.store.create(url, "ana")
+        self.assertEqual(self.store.find_active(url, "ana")["id"], suyo["id"])
+        self.assertIsNone(self.store.find_active(url, "pepe"))
+
+    def test_las_canciones_sueltas_pasan_primero(self):
+        lista = self.store.create("https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M")
+        album = self.store.create("https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX")
+        suelta = self.store.create("https://open.spotify.com/track/4uLU6hMCjMI75M1A2tKUQC")
+        orden = []
+        while job := self.store.next_queued():
+            orden.append(job["id"])
+            self.store.claim(job["id"])
+        self.assertEqual(orden, [suelta["id"], lista["id"], album["id"]])  # lo demás, por orden de llegada
+
+    def test_reanudar_borra_lo_cancelado_a_medias(self):
+        job = self.store.create("https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX")
+        self.store.set_status(job["id"], "canceled")  # el apagado llegó antes de borrar la fila
+        self.store.resume()
+        self.assertIsNone(self.store.get(job["id"]))
+
+    def test_base_nueva_nace_en_la_version_actual(self):
+        self.assertEqual(self.store.db.execute("PRAGMA user_version").fetchone()[0], 1)
+        self.assertIn("tracks", [r["name"] for r in self.store.db.execute("PRAGMA table_info(jobs)")])
 
     def test_conserva_solo_los_ultimos_terminados(self):
         ids = [self.store.create(f"https://open.spotify.com/playlist/{i:022d}")["id"] for i in range(4)]

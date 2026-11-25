@@ -243,15 +243,20 @@ class Runner:
             with self.cv:
                 if self.stopping:
                     return
-            job = self.store.next_queued()
+            try:
+                job = self.store.next_queued()
+                if job and not self.store.claim(job["id"]):
+                    continue
+            except Exception:  # SQLite ocupada o disco lleno: se espera y se vuelve a mirar, el trabajador no muere
+                log.exception("no se pudo leer la cola")
+                job = None
             if not job:
                 # Sin nada pendiente: se limpian las cancelaciones ya inútiles.
                 with self.lock:
                     self.canceled.clear()
                 with self.cv:
-                    self.cv.wait(timeout=5)
-                continue
-            if not self.store.claim(job["id"]):
+                    if not self.stopping:  # un apagado que llegó justo antes no espera los 5 s
+                        self.cv.wait(timeout=5)
                 continue
             try:
                 self.run_job(job)
@@ -485,8 +490,10 @@ class Service:
         self._version_lock = threading.Lock()
 
     def start(self):
+        for sub in ("temp", "errors"):  # audio crudo y ffmpeg_error_*.txt que spotDL deja y nunca borra
+            shutil.rmtree(os.path.join(self.settings.spotdl_config_dir(), sub), ignore_errors=True)
         for name in os.listdir(self.settings.state_dir):
-            # Restos de ejecuciones cortadas; Store ya migró lo que necesitaba de ellos.
+            # Restos de ejecuciones cortadas.
             if (name.startswith("errors-") and name.endswith(".txt")) or (
                     name.startswith(("songs-", "plan-", "to-download-")) and name.endswith(".spotdl")):
                 try:
@@ -611,7 +618,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
         store = self.service.store
         with store.lock:  # revisar y crear de una vez: un doble clic no crea dos trabajos
-            found = store.find_active(url)
+            found = store.find_active(url, who[0])
             err = "" if found else self.over_limit(who[0])
             job = None if found or err else store.create(url, who[0])
         if found:
@@ -697,6 +704,8 @@ def main():
         httpd.serve_forever()
     finally:
         service.stop()
+        # El trabajador borra al salir los MP3 a medias: sin esperarlo quedaban y al reanudar se daban por hechos.
+        service.runner.thread.join(timeout=8)  # Docker da 10 s
         httpd.server_close()
 
 
