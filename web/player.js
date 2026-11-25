@@ -755,7 +755,7 @@ function syncStream(t) {
   }
   // En segundo plano el iPhone no deja abrir otro audio: se salta el colchón dentro del mismo. Chrome en Android
   // no deja moverse dentro de un audio en vivo, pero sí abrir otro: ahí se reabre como con la app a la vista.
-  if (stream && audio.src && !audio.paused && document.visibilityState !== 'visible' && (apple || seekable())) {
+  if (stream && audio.src && !audio.paused && document.visibilityState !== 'visible' && apple) {
     stream = mark;
     // El servidor ya reinició el flujo por este cambio y dice dónde empieza lo nuevo (skip): se salta hasta ahí sin
     // pedirle nada. Si ese punto ya quedó atrás o no vino, se le pide «cut» como antes.
@@ -773,7 +773,6 @@ function openStream() {
   audio.play().then(() => (warned = false)).catch(streamBlocked);
 }
 const apple = /iPhone|iPad|iPod/.test(navigator.userAgent) || (/Macintosh/.test(navigator.userAgent) && navigator.maxTouchPoints > 1);
-const seekable = () => audio.seekable.length > 0 && audio.seekable.end(audio.seekable.length - 1) > audio.currentTime + 1;
 // streamDo salta, devuelve o adelanta en el flujo continuo. La acción viaja en la misma petición que abre el audio
 // nuevo, y esa petición se hace aquí mismo, dentro del toque: la canción anterior se corta al instante y, como
 // el cambio lo pidió el usuario (también desde la pantalla bloqueada), iOS lo deja cargar. La sala se adelanta
@@ -828,7 +827,6 @@ async function skipBuffer(known) {
       stop();
       const to = from + (exact ? 0.05 : 0.3);
       try { audio.currentTime = to; } catch (e) { console.warn('No se pudo saltar el colchón:', e); }
-      if (!apple && Math.abs(audio.currentTime - to) > 1) openStream(); // el navegador ignoró el salto: se reabre
     } else if (Date.now() - started > 12000) stop(); // lo viejo en camino puede tardar en llegar: es el colchón entero
   }
   if (!r || !(from >= 0) || !streaming()) return stop();
