@@ -69,7 +69,7 @@ POST /api/spotdl/{id}/retry                   # sin cuerpo
   número de canciones que se vuelven a pedir.
 - `owner`: usuario que la pidió; `mine` (lo calcula la app): si este usuario puede
   cancelarla, quitarla o reintentarla (su dueño o el administrador). La música descargada es de todos.
-- Un `POST` repetido de una URL que ya está en cola devuelve el mismo trabajo.
+- Un `POST` repetido de una URL que el mismo usuario ya tiene en cola devuelve el mismo trabajo; otro usuario recibe el suyo.
 - La interfaz consulta cada 4 s mientras haya trabajos activos (aunque cambie de vista, para
   que llegue el aviso) y no bloquea la biblioteca si responde `503`.
 
@@ -135,11 +135,7 @@ La cola vive en `/data/.palobox/spotdl/jobs.sqlite` (WAL). Al arrancar, los trab
 (`--overwrite skip`). Se conservan los últimos 30 terminados (filas `error` y avisos
 `finished` sin ver) y hay un timeout de 12 h.
 
-La base migra sola al arrancar (`PRAGMA user_version`): agrega las columnas `attempts`,
-`failed` y `notice` si faltan y, una sola vez, convierte los terminados del formato viejo: un
-`done` sin errores se borra (ya se vio), un `done` con canciones fallidas o un `error` quedan
-en `error` reintentables (las URLs salen de `errors-{id}.txt` si existe). `queued` y
-`downloading` no se tocan.
+La base agrega sola al arrancar las columnas que le falten (`attempts`, `failed`, `notice`...).
 
 ## Variables de entorno
 
