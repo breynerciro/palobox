@@ -3,7 +3,7 @@ import { $, el, icon, json, plural, joinText, fmtLong, typeBadge, toast, ask, me
 import { href, go, render, route } from './nav.js';
 import { api, userName } from './session.js';
 import * as offline from './offline.js';
-import { playAt, isShuffle } from './player.js';
+import { playAt, isShuffle, markPlaying } from './player.js';
 import { library, ensureLib, freshLib, liked, newPlaylist, cover, item, card, libRow, trackList, libItems, saveButton, downloadButton, offlineBox, downloadsCover, wipeDownloads } from './music.js';
 
 const OFFLINE = 'Sin conexión con el servidor.';
@@ -443,8 +443,42 @@ async function libraryView() {
 // tint tiñe el encabezado con el color de la carátula; si el canvas falla queda el fondo normal.
 const tint = (hero, art) => art.querySelector('img')?.addEventListener('load', (e) => hero.style.setProperty('--tint', coverColor(e.target) ?? ''));
 
+// Etiquetas de género de una playlist: una por cada género que tiene, de más a menos canciones; tocar una deja
+// solo esas canciones (y Reproducir suena esas). El género es el del artista (catálogo); con uno solo no salen.
+const GENRES = { regueton: 'Reguetón', 'rap-espanol': 'Rap en español', 'rock-espanol': 'Rock en español', norteno: 'Norteño', 'pop-latino': 'Pop latino', 'hip-hop': 'Hip hop' };
+const genreName = (g) => { const k = g.split('/').pop(); return GENRES[k] ?? k[0].toUpperCase() + k.slice(1); };
+// byGenre devuelve { body, shown }. list(pistas, filtrada) pinta la lista; shown() son las pistas a la vista.
+// shortcut: sin conexión no hay catálogo de artistas y las etiquetas no salen; guardar el género con lo descargado si hace falta.
+function byGenre(d, tracks, list) {
+  const of = new Map((d?.artists || []).map((a) => [a.path, a.genre]));
+  const genre = (t) => of.get(t.path.split('/')[0]); // la carpeta del artista, como en el servidor
+  const count = new Map();
+  for (const t of tracks) if (genre(t)) count.set(genre(t), (count.get(genre(t)) || 0) + 1);
+  if (count.size < 2) return { body: list(tracks, false), shown: () => tracks };
+  let on = '';
+  let shown = tracks;
+  const box = el('div', {});
+  const chips = [...count].sort((a, b) => b[1] - a[1]).map(([g]) => {
+    const b = el('button', { className: 'chip', textContent: genreName(g) });
+    b.onclick = () => { on = on === g ? '' : g; paint(); markPlaying(); };
+    b.dataset.k = g;
+    return b;
+  });
+  function paint() {
+    shown = on ? tracks.filter((t) => genre(t) === on) : tracks;
+    for (const b of chips) b.setAttribute('aria-pressed', on === b.dataset.k);
+    box.replaceChildren(list(shown, !!on));
+  }
+  paint();
+  const bar = el('div', { className: 'toolbar' }, chips);
+  bar.setAttribute('role', 'group');
+  bar.setAttribute('aria-label', 'Filtrar por género');
+  return { body: frag(bar, box), shown: () => shown };
+}
+
 // page arma una página de colección. meta: textos o nodos bajo el título; actions: botones extra; body: lo que va bajo los botones.
-function page({ label, title, art, meta, tracks, actions = [], body }) {
+// shown: las pistas que suenan con Reproducir cuando la lista se puede filtrar.
+function page({ label, title, art, meta, tracks, actions = [], body, shown = () => tracks }) {
   document.title = `${title} · PaloBox`;
   const hero = el('header', { className: 'hero' }, art, el('div', { className: 'hero-text' },
     el('p', { className: 'hero-label', textContent: label }), el('h1', { textContent: title }),
@@ -453,7 +487,7 @@ function page({ label, title, art, meta, tracks, actions = [], body }) {
   const play = el('button', { className: 'icon-btn play-big' }, icon('play'));
   play.setAttribute('aria-label', `Reproducir ${title}`);
   play.disabled = !tracks.length;
-  play.onclick = () => playAt(tracks, isShuffle() ? Math.floor(Math.random() * tracks.length) : 0);
+  play.onclick = () => { const ts = shown(); playAt(ts, isShuffle() ? Math.floor(Math.random() * ts.length) : 0); };
   const mix = el('button', { className: 'icon-btn toggle' }, icon('shuffle'));
   mix.dataset.act = 'shuffle';
   mix.setAttribute('aria-label', 'Aleatorio');
@@ -492,11 +526,13 @@ const emptyList = () => empty('music', 'Aún no hay canciones aquí', 'Agrégala
 
 async function likedView() {
   const tracks = await getJSON('/api/music/likes');
-  await ensureLib().catch(() => {});
+  const d = await ensureLib().catch(() => {});
+  const { body, shown } = byGenre(d, tracks, (ts) => trackList(ts, { covers: true, sub: (t) => joinText(t.artist, t.album) }));
   return page({
+    shown,
     label: 'Playlist', title: 'Canciones que te gustan', art: el('div', { className: 'cover liked' }, icon('heart')), tracks, actions: [downloadButton(tracks)],
     meta: [songs(tracks.length), total(tracks)],
-    body: tracks.length ? trackList(tracks, { covers: true, sub: (t) => joinText(t.artist, t.album) })
+    body: tracks.length ? body
       : empty('heart', 'Aún no te gusta ninguna', 'Toca el corazón de una canción y queda guardada aquí.', linkBtn('Buscar música', href('musica', 'buscar'), 'search')),
   });
 }
@@ -518,7 +554,7 @@ async function downloadsView() {
 
 async function playlistView(id) {
   const base = `/api/music/playlists/${encodeURIComponent(id)}`;
-  const [pl] = await Promise.all([getJSON(base), ensureLib().catch(() => {})]);
+  const [pl, d] = await Promise.all([getJSON(base), ensureLib().catch(() => {})]);
   if (!pl) return gone('Esta playlist ya no está');
   const { tracks } = pl;
   // Una playlist descargada se pone al día cada vez que se abre con conexión: sin conexión mostrará de estas
@@ -548,19 +584,21 @@ async function playlistView(id) {
       if (await send(base, { method: 'DELETE' }, 'No se pudo eliminar la playlist.')) go('musica', 'biblioteca');
     } },
   ]);
-  return page({
-    label: 'Playlist', title: pl.name, art: cover(tracks.length ? tracks[0].albumPath : null), tracks, actions: [downloadButton(tracks, pl), !offline.active && more],
-    meta: [songs(tracks.length), total(tracks)],
-    body: !tracks.length ? emptyList() : trackList(tracks, {
-      // Sin conexión la playlist se ve y suena, pero no se edita.
-      covers: true, sub: (t) => joinText(t.artist, t.album), onMove: offline.active ? undefined : move,
+  // Sin conexión la playlist se ve y suena, pero no se edita. Filtrada por género tampoco se reordena:
+  // las posiciones a la vista no son las de la playlist.
+  const { body, shown } = byGenre(d, tracks, (ts, filtered) => trackList(ts, {
+      covers: true, sub: (t) => joinText(t.artist, t.album), onMove: offline.active || filtered ? undefined : move,
       extra: (t, i) => !offline.active && [
-        i > 0 && { icon: 'up', label: 'Subir', run: () => move(i, i - 1) },
-        i < tracks.length - 1 && { icon: 'down', label: 'Bajar', run: () => move(i, i + 1) },
+        !filtered && i > 0 && { icon: 'up', label: 'Subir', run: () => move(i, i - 1) },
+        !filtered && i < tracks.length - 1 && { icon: 'down', label: 'Bajar', run: () => move(i, i + 1) },
         { icon: 'x', label: 'Quitar de esta playlist', danger: true, run: async () => {
           if (await send(`${base}/tracks?path=${encodeURIComponent(t.path)}`, { method: 'DELETE' }, 'No se pudo quitar la canción.')) render();
         } },
       ],
-    }),
+    }));
+  return page({
+    label: 'Playlist', title: pl.name, art: cover(tracks.length ? tracks[0].albumPath : null), tracks, actions: [downloadButton(tracks, pl), !offline.active && more],
+    meta: [songs(tracks.length), total(tracks)], shown,
+    body: !tracks.length ? emptyList() : body,
   });
 }

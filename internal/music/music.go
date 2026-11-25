@@ -83,6 +83,7 @@ type artist struct {
 	Name   string `json:"name"`
 	Albums int    `json:"albums"`
 	Tracks int    `json:"tracks"`
+	Genre  string `json:"genre,omitempty"` // «familia/género»; las etiquetas de género de las playlists salen de aquí
 	Added  int64  `json:"added"`
 	Played int64  `json:"played"`
 	Plays  int    `json:"plays"`

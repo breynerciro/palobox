@@ -77,6 +77,7 @@ func (l *Library) build() (*snapshot, error) {
 	}
 	for i := range s.artists {
 		s.artists[i].text = normOf(s.artists[i].Name)
+		s.artists[i].Genre = s.genre[fold(s.artists[i].Path)]
 		s.artistAt[s.artists[i].Path] = i
 	}
 	// Se comprime una vez por instantánea, al máximo: cada /api/music repetía 2 MB de JSON y su gzip.

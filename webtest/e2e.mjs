@@ -134,6 +134,25 @@ try {
     must((await api('/api/music/skips', 'POST', { path: 'no/existe.mp3', auto: true })).status === 404, 'aceptó un salto de una pista que no existe');
   });
 
+  await step('etiquetas de género: filtran la playlist y vuelven a mostrarla entera', async () => {
+    const salsero = Object.keys(genres).find((x) => genres[x] === 'tropical/salsa');
+    must(salsero, 'no hay artistas de salsa');
+    const salsa = (await api('/api/music/artist?path=' + encodeURIComponent(salsero))).data.tracks[0];
+    for (const t of [seed, salsa]) must((await api('/api/music/likes?path=' + encodeURIComponent(t.path), 'PUT')).status === 200, 'me gusta');
+    await js(`location.hash = '#/musica/gustan'`);
+    await until(`document.querySelectorAll('#view .toolbar .chip').length === 2`, 'las dos etiquetas (Merengue y Salsa)');
+    const rows = `document.querySelectorAll('#view .tracks [data-track]').length`;
+    must(await js(`return ${rows}`) === 2, 'sin filtro debían verse las dos canciones');
+    const label = await js(`const c = [...document.querySelectorAll('#view .toolbar .chip')].find((c) => c.textContent === 'Salsa'); c?.click(); return c?.textContent;`);
+    must(label === 'Salsa', 'no salió la etiqueta Salsa');
+    const only = await js(`return [...document.querySelectorAll('#view .tracks [data-track]')].map((r) => r.dataset.track)`);
+    must(only.length === 1 && only[0] === salsa.path, `con Salsa quedó: ${only}`);
+    await js(`document.querySelector('#view .chip[aria-pressed=true]').click()`);
+    must(await js(`return ${rows}`) === 2, 'al soltar la etiqueta no volvieron todas');
+    for (const t of [seed, salsa]) await api('/api/music/likes?path=' + encodeURIComponent(t.path), 'DELETE');
+    return 'Merengue y Salsa';
+  });
+
   await step('playlist por descripción sin IA (solo palabras) no gasta cupo', async () => {
     const before = await api('/api/music/playlists/ai', 'POST', { prompt: 'x' });
     must(before.status === 400, `pedido de una letra: ${before.status}`);
