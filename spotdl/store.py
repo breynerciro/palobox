@@ -1,14 +1,10 @@
 """La cola de trabajos en SQLite y su forma en JSON para la app."""
 
 import json
-import os
-import re
 import secrets
 import sqlite3
 import threading
 import time
-
-from results import failures_from, outcome
 
 
 class Store:
@@ -57,35 +53,14 @@ class Store:
             for name, ddl in self.COLUMNS.items():
                 if name not in cols:
                     self.db.execute(f"ALTER TABLE jobs ADD COLUMN {name} {ddl}")
+            self.db.execute("PRAGMA user_version=1")
             self.db.commit()
-            if self.db.execute("PRAGMA user_version").fetchone()[0] < 1:
-                self.migrate_v1(os.path.dirname(path))
-                self.db.execute("PRAGMA user_version=1")  # en la misma transacción que las filas
-            self.db.commit()
-
-    def migrate_v1(self, state_dir):
-        """Trabajos terminados con las reglas viejas: el éxito ya se vio y se va; un 'done' con
-        canciones fallidas o un 'error' quedan reintentables. La cola activa no se toca."""
-        rows = self.db.execute("SELECT * FROM jobs WHERE status NOT IN ('queued', 'downloading')").fetchall()
-        for r in rows:
-            if r["status"] not in ("done", "error") or (r["status"] == "done" and not r["error"]):
-                self.db.execute("DELETE FROM jobs WHERE id=?", (r["id"],))
-                continue
-            failed = []
-            if r["status"] == "done":
-                failed = failures_from(os.path.join(state_dir, f"errors-{r['id']}.txt"))
-                if not failed:  # sin el archivo solo queda el número del texto viejo
-                    m = re.match(r"(\d+) canci", r["error"])
-                    failed = [{"url": "", "name": "", "retry": True}] * (int(m.group(1)) if m else 1)
-            status, error, notice = outcome(r["title"], r["url"], failed, not failed, 1, self.max_attempts)
-            self.db.execute(
-                "UPDATE jobs SET status=?, error=?, notice=?, failed=? WHERE id=?",
-                (status, error, notice, json.dumps(failed, ensure_ascii=False), r["id"]),
-            )
 
     def resume(self):
         """Lo que quedó a medias vuelve a la cola; spotDL salta lo ya descargado."""
         with self.lock:
+            # Un apagado entre marcar 'canceled' y borrar la fila la dejaba para siempre.
+            self.db.execute("DELETE FROM jobs WHERE status='canceled'")
             self.db.execute(
                 "UPDATE jobs SET status='queued', done=0, total=0, current='', error='' "
                 "WHERE status IN ('queued', 'downloading')"
@@ -138,19 +113,22 @@ class Store:
         with self.lock:
             return self.db.execute(sql, args).fetchone()[0]
 
-    def find_active(self, url):
+    def find_active(self, url, owner):
+        """El mismo enlace ya pedido por ese usuario; el de otro no cuenta: cada quien espera su playlist."""
         with self.lock:
             row = self.db.execute(
-                "SELECT * FROM jobs WHERE url=? AND status IN ('queued', 'downloading') "
+                "SELECT * FROM jobs WHERE url=? AND owner=? AND status IN ('queued', 'downloading') "
                 "ORDER BY created LIMIT 1",
-                (url,),
+                (url, owner),
             ).fetchone()
         return job_json(row) if row else None
 
     def next_queued(self):
+        # Las canciones sueltas pasan primero: no esperan detrás de una playlist de horas.
         with self.lock:
             row = self.db.execute(
-                "SELECT * FROM jobs WHERE status='queued' ORDER BY created, rowid LIMIT 1"
+                "SELECT * FROM jobs WHERE status='queued' "
+                "ORDER BY instr(url, '/track/') = 0, created, rowid LIMIT 1"
             ).fetchone()
         return job_json(row) if row else None
 

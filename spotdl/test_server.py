@@ -122,10 +122,10 @@ for i in range(1, 4):
             with exc:
                 return exc.code, json.loads(exc.read() or b"{}")
 
-    def esperar(self, jid, estados=("finished", "error"), timeout=10, intentos=None):
+    def esperar(self, jid, estados=("finished", "error"), timeout=10, intentos=None, user="ana"):
         fin = time.time() + timeout
         while time.time() < fin:
-            _, jobs = self.request("GET", "/jobs")
+            _, jobs = self.request("GET", "/jobs", user=user)
             for job in jobs:
                 if job["id"] == jid and job["status"] in estados and intentos in (None, job["attempts"]):
                     return job
@@ -200,6 +200,17 @@ for i in range(1, 4):
         _, dos = self.request("POST", "/jobs", {"url": url})
         self.assertEqual(uno["id"], dos["id"])
         self.esperar(uno["id"])
+
+    def test_el_mismo_enlace_de_dos_usuarios_son_dos_trabajos(self):
+        self.service.settings = dataclasses.replace(self.settings, max_active=5)
+        url = "https://open.spotify.com/playlist/37i9dQZF1DXcBWIGoYBM5M"
+        _, ana = self.request("POST", "/jobs", {"url": url})
+        code, pepe = self.request("POST", "/jobs", {"url": url}, user="pepe")
+        self.assertEqual((code, pepe["owner"]), (201, "pepe"))
+        self.assertNotEqual(ana["id"], pepe["id"])
+        # Cada quien recibe su aviso (y con él su playlist), no solo el primero que la pidió.
+        self.esperar(ana["id"], ("finished",))
+        self.esperar(pepe["id"], ("finished",), user="pepe")
 
     def test_error_de_spotdl(self):
         self.script(
@@ -325,13 +336,56 @@ if lines:
         self.service.runner.thread.join(timeout=10)
         self.assertEqual(self.request("GET", "/health")[0], 503)  # sin trabajador no está sano
 
+    def test_un_error_al_leer_la_cola_no_mata_al_trabajador(self):
+        real, fallas = self.service.store.next_queued, []
+
+        def next_queued():
+            if not fallas:
+                fallas.append(1)
+                raise sqlite3.OperationalError("database is locked")
+            return real()
+
+        with mock.patch.object(self.service.store, "next_queued", side_effect=next_queued):
+            fin = time.time() + 10
+            while time.time() < fin and not fallas:
+                self.service.runner.wake()
+                time.sleep(0.05)
+            self.assertEqual(fallas, [1])
+            _, job = self.request("POST", "/jobs", {"url": "https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX"})
+            self.assertEqual(self.esperar(job["id"])["status"], "finished")
+        self.assertTrue(self.service.runner.thread.is_alive())
+
+    def test_main_espera_al_trabajador_al_apagar(self):
+        """Sin esperarlo, su limpieza (drop_partial) perdía la carrera contra la salida del proceso."""
+        self.teardown()
+        self.script("\ntime.sleep(60)\n")
+        job = self.service.store.create("https://open.spotify.com/album/1ATL5GLyefJaxhQzSPVrLX", "ana")
+        servicios, senales = [], {}
+        real = server.Service
+
+        def apagar():  # el SIGTERM de Docker, cuando el trabajo ya está corriendo
+            fin = time.time() + 10
+            while time.time() < fin and not (servicios and senales and servicios[0].store.status(job["id"]) == "downloading"):
+                time.sleep(0.05)
+            senales[server.signal.SIGTERM](server.signal.SIGTERM, None)
+
+        with mock.patch.object(server.Settings, "from_env", return_value=dataclasses.replace(self.settings, port=0)), \
+                mock.patch.object(server, "Service", side_effect=lambda s: servicios.append(real(s)) or servicios[0]), \
+                mock.patch.object(server.signal, "signal", side_effect=senales.__setitem__), \
+                mock.patch.object(server.logging, "basicConfig"), \
+                mock.patch.object(server, "drop_partial", side_effect=lambda *a: time.sleep(0.5)):  # recorrer la biblioteca tarda
+            threading.Thread(target=apagar, daemon=True).start()
+            server.main()
+        self.assertFalse(servicios[0].runner.thread.is_alive())
+        self.assertEqual(servicios[0].store.status(job["id"]), "downloading")  # queda para reanudar
+
     def test_doble_clic_crea_un_solo_trabajo(self):
         self.service.settings = dataclasses.replace(self.settings, max_active=5)
         self.script("\ntime.sleep(60)\n")
         real = self.service.store.find_active
 
-        def lenta(url):
-            job = real(url)
+        def lenta(url, owner):
+            job = real(url, owner)
             time.sleep(0.2)  # sin el candado, los dos pedidos ven la cola vacía
             return job
 
@@ -351,8 +405,13 @@ if lines:
         nombres = ["errors-a.txt", "songs-a.spotdl", "plan-a.spotdl", "to-download-a.spotdl", "jobs.sqlite"]
         for n in nombres[:-1]:
             open(os.path.join(self.settings.state_dir, n), "w").close()
+        cfg = self.settings.spotdl_config_dir()  # spotDL deja ahí audio crudo (temp) y errores de ffmpeg (errors)
+        for sub in ("temp", "errors"):
+            os.makedirs(os.path.join(cfg, sub))
+            open(os.path.join(cfg, sub, "resto"), "w").close()
         self.reiniciar()
         self.assertEqual([n for n in nombres if os.path.exists(os.path.join(self.settings.state_dir, n))], ["jobs.sqlite"])
+        self.assertEqual([s for s in ("temp", "errors") if os.path.exists(os.path.join(cfg, s))], [])
 
     def test_fallo_transitorio_reintenta_solo_las_fallidas_y_luego_se_agota(self):
         t = self.TRACKS
@@ -454,53 +513,6 @@ if lines:
         self.assertEqual(self.request("POST", f"/jobs/{job['id']}/retry", user="")[0], 400)
         self.assertEqual(self.request("POST", f"/jobs/{job['id']}/retry", token="otro")[0], 401)
         self.assertEqual(self.request("POST", f"/jobs/{job['id']}/retry", user="pepe", admin=True)[0], 200)
-
-    def test_toma_en_formato_viejo_queda_reintentable(self):
-        """La base de producción: 'done' con el texto crudo de spotDL y su errors-{id}.txt."""
-        t = self.TRACKS
-        self.teardown()
-        self.service.store.db.close()
-        for sufijo in ("", "-wal", "-shm"):
-            if os.path.exists(self.settings.db_path + sufijo):
-                os.remove(self.settings.db_path + sufijo)
-        db = sqlite3.connect(self.settings.db_path)
-        db.execute("CREATE TABLE jobs(id TEXT PRIMARY KEY, url TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', "
-                   "status TEXT NOT NULL, current TEXT NOT NULL DEFAULT '', total INTEGER NOT NULL DEFAULT 0, "
-                   "done INTEGER NOT NULL DEFAULT 0, error TEXT NOT NULL DEFAULT '', created INTEGER NOT NULL, "
-                   "owner TEXT NOT NULL DEFAULT '')")
-        crudo = f"2 canciones no se pudieron descargar: {t[0]} - AudioProviderError: YT-DLP download error - https://mus"
-        db.executemany("INSERT INTO jobs(id, url, title, status, total, done, error, created, owner) VALUES(?, ?, ?, ?, 5, 5, ?, ?, 'ana')", [
-            ("aaaaaaaaaaaaaaaa", self.PLAYLIST, "Tomá", "done", crudo, 1),
-            ("bbbbbbbbbbbbbbbb", self.PLAYLIST, "Viejo", "done", "", 2),  # éxito viejo: se va
-            ("cccccccccccccccc", self.PLAYLIST, "Sin archivo", "done", "22 canciones no se pudieron descargar: x", 3),
-            ("dddddddddddddddd", self.PLAYLIST, "En cola", "queued", "", 4),
-        ])
-        db.commit()
-        db.close()
-        with open(os.path.join(self.settings.state_dir, "errors-aaaaaaaaaaaaaaaa.txt"), "w", encoding="utf-8") as f:
-            f.write(f"2026-11-17-10-00-00\n{t[0]} - {self.YTDLP}\n{t[1]} - {self.YTDLP}\n")
-        self.script("\ntime.sleep(60)\n")  # la cola sigue viva pero no termina durante la prueba
-        self.reiniciar()
-        self.reiniciar()  # la migración corre una sola vez
-
-        jobs = {j["id"]: j for j in self.service.store.jobs("ana")}
-        self.assertNotIn("bbbbbbbbbbbbbbbb", jobs)
-        self.assertIn(jobs["dddddddddddddddd"]["status"], ("queued", "downloading"))
-        toma = jobs["aaaaaaaaaaaaaaaa"]
-        self.assertEqual((toma["status"], toma["error"]), ("error", "2 canciones no se pudieron descargar"))
-        self.assertEqual(self.service.store.failed(toma["id"]), [{"url": u, "name": "", "retry": True} for u in t[:2]])
-        sin = jobs["cccccccccccccccc"]
-        self.assertEqual((sin["status"], sin["error"]), ("error", "22 canciones no se pudieron descargar"))
-
-        # Reintentar Tomá pide solo las dos canciones del archivo; sin archivo, el enlace entero.
-        self.service.cancel("dddddddddddddddd")
-        self.lista({})
-        self.assertEqual(self.request("POST", "/jobs/aaaaaaaaaaaaaaaa/retry")[0], 200)
-        self.assertEqual(self.esperar("aaaaaaaaaaaaaaaa", ("finished",))["notice"], "«Tomá» ya está en tu biblioteca.")
-        self.assertEqual(self.pedidas()[-1], t[:2])
-        self.assertEqual(self.request("POST", "/jobs/cccccccccccccccc/retry")[0], 200)
-        self.esperar("cccccccccccccccc", ("finished",))
-        self.assertEqual(self.pedidas()[-1], t)  # el enlace entero, ya filtrado por el plan
 
     def test_apagar_no_marca_error_y_deja_el_trabajo_para_reanudar(self):
         self.script(

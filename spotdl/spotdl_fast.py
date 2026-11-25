@@ -72,12 +72,13 @@ allowed, allowed_guard = set(), threading.Lock()
 def only_official(fn, error):
     """Envuelve AudioProvider.get_download_metadata: los datos del video llegan antes de bajar el audio.
     Los datos sin descarga se recuerdan por URL: la segunda oportunidad ya los pidió para decidir, y la
-    descarga los reutiliza en vez de volver a consultar el video."""
+    descarga los reutiliza en vez de volver a consultar el video. Cada uno pesa cientos de KB: la descarga
+    se lo lleva y solo se guardan los últimos, o una playlist larga llenaba la memoria."""
     memo, guard = {}, threading.Lock()
 
     def wrap(self, url, download=False):
         with guard:
-            known = memo.get(url)
+            known = memo.pop(url, None) if download else memo.get(url)
         data = None if download else known
         if download and known is not None:
             # El video ya se consultó para decidir si era el oficial: se baja con esos mismos datos. Pedírselo
@@ -92,6 +93,8 @@ def only_official(fn, error):
             if not download:
                 with guard:
                     memo[url] = data
+                    if len(memo) > 32:
+                        del memo[next(iter(memo))]  # la más vieja
         with allowed_guard:
             ok = url in allowed
         if not ok and not getattr(relaxed, "on", False) and not official(data):

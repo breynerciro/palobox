@@ -105,6 +105,32 @@ class CacheTest(unittest.TestCase):
         meta(p, "b", True)  # un video que nunca se consultó antes
         self.assertEqual(consultas[-1], ("b", True))
 
+    def test_lo_recordado_tiene_tope(self):
+        """Los datos de un video pesan cientos de KB: la descarga se los lleva y solo quedan los últimos."""
+        consultas = []
+
+        class Handler:
+            def process_ie_result(self, info, download=False):
+                return info
+
+        class Provider:
+            audio_handler = Handler()
+
+        def consultar(_self, url, download=False):
+            consultas.append((url, download))
+            return {"id": url, "channel_is_verified": True}
+
+        meta = spotdl_fast.only_official(consultar, ValueError)
+        p = Provider()
+        for i in range(40):
+            meta(p, f"v{i}")
+        del consultas[:]
+        meta(p, "v39", True)  # reciente: se baja con lo recordado
+        self.assertEqual(consultas, [])
+        meta(p, "v39", True)  # la descarga se lo llevó
+        meta(p, "v0", True)  # la más vieja ya salió por el tope
+        self.assertEqual(consultas, [("v39", True), ("v0", True)])
+
     def test_segunda_oportunidad(self):
         # Lo que devuelve YouTube al buscar «La Típica» de Alcolirykoz (el álbum dura 162 s).
         vistos = [
