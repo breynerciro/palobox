@@ -524,6 +524,8 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .ask-option small { font-weight: 400; }
 
 /* ---- Modo sin conexión (offline.js): solo la música descargada; lo que necesita servidor se esconde ---- */
+/* Con el reproductor a la vista, su botón de jam basta; el de arriba queda para cuando no suena nada (unirse con un código). */
+.has-player #jam-link { display: none; }
 .offline #jam-link, .offline #mtabs-exit, .offline .side-foot, .offline #admin-link { display: none; }
 /* Me gusta y crear playlists también necesitan servidor: sin conexión la música descargada solo se escucha. */
 .offline .like, .offline #side-new { display: none; }
