@@ -74,6 +74,7 @@ class Settings:
     threads: int = 4
     max_active: int = 5
     max_per_user: int = 2
+    max_tracks: int = 20  # canciones sueltas en cola por usuario: se pegan varias de una vez y no gastan los cupos de arriba
     keep_finished: int = 30
     max_attempts: int = 3  # el original, un reintento automático y uno pedido por el usuario
     job_timeout: float = 12 * 3600
@@ -106,6 +107,7 @@ class Settings:
             threads=max(1, entero("THREADS", 4)),  # el valor por defecto de spotDL
             max_active=max(1, entero("MAX_ACTIVE", 5)),
             max_per_user=max(1, entero("MAX_PER_USER", 2)),
+            max_tracks=max(1, entero("MAX_TRACKS", 20)),
             job_timeout=timeout,
             spotdl_bin=os.environ.get("SPOTDL_BIN", "spotdl"),
             cookie_file=os.environ.get("SPOTDL_COOKIE_FILE", ""),
@@ -619,7 +621,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         store = self.service.store
         with store.lock:  # revisar y crear de una vez: un doble clic no crea dos trabajos
             found = store.find_active(url, who[0])
-            err = "" if found else self.over_limit(who[0])
+            err = "" if found else self.over_limit(who[0], url)
             job = None if found or err else store.create(url, who[0])
         if found:
             return self.send_json(200, found)
@@ -628,11 +630,15 @@ class Handler(http.server.BaseHTTPRequestHandler):
         self.service.runner.wake()
         self.send_json(201, job)
 
-    def over_limit(self, user):
+    def over_limit(self, user, url):
         store, s = self.service.store, self.service.settings
-        if store.active_count(user) >= s.max_per_user:
+        if "/track/" in url:  # una canción suelta es corta: tiene su propio tope y no ocupa el de álbumes y playlists
+            if store.active_count(user, tracks=True) >= s.max_tracks:
+                return f"Ya tienes {s.max_tracks} canciones en cola; espera a que terminen."
+            return ""
+        if store.active_count(user, tracks=False) >= s.max_per_user:
             return f"Ya tienes {s.max_per_user} descargas en cola; espera a que terminen."
-        if store.active_count() >= s.max_active:
+        if store.active_count(tracks=False) >= s.max_active:
             return "Hay demasiadas descargas en cola."
         return ""
 
@@ -646,7 +652,7 @@ class Handler(http.server.BaseHTTPRequestHandler):
         if job["status"] != "error":
             return self.send_json(409, {"error": "Esta descarga ya no se puede reintentar."})
         with store.lock:
-            err = self.over_limit(who[0])
+            err = self.over_limit(who[0], job["url"])
             ok = not err and store.requeue(jid)
         if err:
             return self.send_json(429, {"error": err})

@@ -608,6 +608,13 @@ if lines:
         # Otro usuario todavía puede pedir; repetir un enlace en cola no cuenta como nuevo.
         self.assertEqual(self.request("POST", "/jobs", {"url": "https://open.spotify.com/album/" + "9" * 22}, user="pepe")[0], 201)
         self.assertEqual(self.request("POST", "/jobs", {"url": f"https://open.spotify.com/album/{0:022d}"})[0], 200)
+        # Las canciones sueltas van por su propio tope: no las frena el de álbumes ni lo gastan.
+        self.service.settings = dataclasses.replace(self.service.settings, max_tracks=3)
+        for i in range(3):
+            self.assertEqual(self.request("POST", "/jobs", {"url": f"https://open.spotify.com/track/{i:022d}"})[0], 201)
+        code, body = self.request("POST", "/jobs", {"url": "https://open.spotify.com/track/" + "9" * 22})
+        self.assertEqual(code, 429)
+        self.assertIn("Ya tienes 3 canciones", body["error"])
         for j in self.service.store.jobs():
             self.service.cancel(j["id"])
 

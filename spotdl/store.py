@@ -104,10 +104,12 @@ class Store:
             self.db.commit()
         return self.get(jid)
 
-    def active_count(self, owner=None):
-        """Trabajos activos; con owner, solo los de ese usuario."""
+    def active_count(self, owner=None, tracks=None):
+        """Trabajos activos; con owner, solo los de ese usuario; con tracks, solo (True) o sin (False) canciones sueltas."""
         sql = "SELECT COUNT(*) FROM jobs WHERE status IN ('queued', 'downloading')"
         args = ()
+        if tracks is not None:
+            sql += f" AND url {'' if tracks else 'NOT '}LIKE '%/track/%'"
         if owner is not None:
             sql, args = sql + " AND owner=?", (owner,)
         with self.lock:

@@ -168,12 +168,12 @@ $('#search').oninput = (e) => {
   clearTimeout(searchTimer);
   $('#search-clear').hidden = !e.target.value;
   // Espera a que deje de escribir; un enlace pegado no tiene nada que autocompletar.
-  searchTimer = setTimeout(() => setQuery(e.target.value), spotifyLink(e.target.value) ? 0 : 200);
+  searchTimer = setTimeout(() => setQuery(e.target.value), spotifyLinks(e.target.value).length ? 0 : 200);
 };
 $('#searchbox').onsubmit = (e) => {
   e.preventDefault();
   const v = $('#search').value.trim();
-  if (spotifyLink(v)) {
+  if (spotifyLinks(v).length) {
     if (v === query) return $('#view .dl-go')?.click(); // Enter sobre el enlace ya mostrado: descargar
   } else remember(v);
   $('#search').blur();
@@ -186,14 +186,19 @@ export function syncSearchBox() {
   $('#search-clear').hidden = !inp.value;
 }
 
-// spotifyLink reconoce enlaces de open.spotify.com (con intl-xx y ?si=) y URIs spotify:, y los deja canónicos.
-const SPOTIFY = /open\.spotify\.com\/(?:intl-[A-Za-z-]{2,10}\/)?(track|album|playlist|artist)\/([A-Za-z0-9]{16,40})|spotify:(track|album|playlist|artist):([A-Za-z0-9]{16,40})/;
+// spotifyLinks saca todos los enlaces de open.spotify.com (con intl-xx y ?si=) y URIs spotify: del texto, canónicos
+// y sin repetir. Varios pegados de una vez pueden llegar sin separación (el campo quita los saltos de línea):
+// el id se corta donde empieza el siguiente enlace.
+const ID = '([A-Za-z0-9]{16,40}?)(?=https?:|spotify:|[^A-Za-z0-9]|$)';
+const SPOTIFY = new RegExp(`open\\.spotify\\.com/(?:intl-[A-Za-z-]{2,10}/)?(track|album|playlist|artist)/${ID}|spotify:(track|album|playlist|artist):${ID}`, 'g');
 const KINDS = { track: 'canción', album: 'álbum', playlist: 'playlist', artist: 'artista' };
-function spotifyLink(text) {
-  const m = SPOTIFY.exec(text);
-  if (!m) return null;
-  const kind = m[1] || m[3];
-  return { kind, url: `https://open.spotify.com/${kind}/${m[2] || m[4]}` };
+function spotifyLinks(text) {
+  const out = new Map();
+  for (const m of text.matchAll(SPOTIFY)) {
+    const kind = m[1] || m[3], url = `https://open.spotify.com/${kind}/${m[2] || m[4]}`;
+    out.set(url, { kind, url });
+  }
+  return [...out.values()];
 }
 
 // Búsquedas recientes: solo en este navegador y por usuario.
@@ -213,8 +218,8 @@ function remember(q) {
 
 function searchView() {
   searching?.abort();
-  const link = spotifyLink(query);
-  if (link && !offline.active) return linkView(link); // descargar de Spotify necesita conexión
+  const links = spotifyLinks(query);
+  if (links.length && !offline.active) return linkView(links); // descargar de Spotify necesita conexión
   return query.length < 2 ? suggestView() : resultsView(query);
 }
 
@@ -240,7 +245,7 @@ async function suggestView() {
   return frag(
     recents.length > 0 && frag(heading('Búsquedas recientes'), el('ul', { className: 'list' }, recents.map(recentRow))),
     browse.length ? frag(heading('Explora por artista', browse.length), el('div', { className: 'cards compact' }, browse.map((a) => card(item.artist(a), songs(a.tracks)))))
-      : empty('search', 'Busca en tu música', 'Artistas, álbumes, canciones o tus playlists. Pega un enlace de Spotify para descargar lo que falta.'));
+      : empty('search', 'Busca en tu música', 'Artistas, álbumes, canciones o tus playlists. Pega uno o varios enlaces de Spotify para descargar lo que falta.'));
 }
 
 async function resultsView(q) {
@@ -272,11 +277,12 @@ async function resultsView(q) {
   return el('div', { onclick: (e) => e.target.closest('a, button') && remember(q) }, out);
 }
 
-// Un enlace pegado: la acción destacada es descargarlo, no buscarlo. downloads() solo dice si el servicio está
+// Uno o varios enlaces pegados: la acción destacada es descargarlo, no buscarlo. downloads() solo dice si el servicio está
 // activo; la lista con el avance queda en Tu biblioteca.
-async function linkView(link) {
+async function linkView(links) {
   const dl = await downloads();
-  const what = KINDS[link.kind];
+  const many = links.length > 1;
+  const what = many ? (links.every((l) => l.kind === 'track') ? `${links.length} canciones` : `${links.length} enlaces`) : KINDS[links[0].kind];
   if (!dl) {
     return empty('alert', 'No se puede descargar ahora', dl === false
       ? 'Las descargas de Spotify no están activadas en este servidor. Pídele al administrador que las active.'
@@ -285,16 +291,21 @@ async function linkView(link) {
   const btn = el('button', { className: 'btn primary dl-go' }, icon('download'), `Descargar ${what}`);
   btn.onclick = async () => {
     btn.disabled = true;
-    const r = await api('/api/spotdl', json('POST', { url: link.url })).catch(() => null);
+    let bad = 0, why = OFFLINE;
+    for (const l of links) { // de a uno: el servicio revisa el tope de la cola en cada pedido
+      const r = await api('/api/spotdl', json('POST', { url: l.url })).catch(() => null);
+      if (!r?.ok) { bad++; if (r) why = await r.text(); }
+    }
     btn.disabled = false;
-    if (!r?.ok) return toast(r ? await r.text() : OFFLINE, { kind: 'warn' });
-    toast('Quedó pedido. El avance lo ves aquí, en Tu biblioteca.', { kind: 'ok' });
+    if (bad === links.length) return toast(why, { kind: 'warn' });
+    if (bad) toast(`${plural(bad, 'enlace no se pudo', 'enlaces no se pudieron')} pedir: ${why}`, { kind: 'warn', sticky: true });
+    else toast(many ? 'Quedaron pedidos. El avance lo ves aquí, en Tu biblioteca.' : 'Quedó pedido. El avance lo ves aquí, en Tu biblioteca.', { kind: 'ok' });
     setQuery('');
     go('musica', 'biblioteca'); // el avance de las descargas solo se muestra ahí
   };
   return frag(el('section', { className: 'dl-card' },
     el('span', { className: 'type', style: '--tc: var(--t-audio)' }, icon('download')),
-    el('div', { className: 'row-text' }, el('p', { textContent: `Enlace de Spotify: ${what}` }),
+    el('div', { className: 'row-text' }, el('p', { textContent: many ? `Enlaces de Spotify: ${what}` : `Enlace de Spotify: ${what}` }),
       el('p', { className: 'muted', textContent: 'El avance se ve en Tu biblioteca; al terminar aparece en Inicio.' })),
     btn));
 }

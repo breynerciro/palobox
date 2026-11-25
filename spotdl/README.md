@@ -146,7 +146,8 @@ La base agrega sola al arrancar las columnas que le falten (`attempts`, `failed`
 | `THREADS` | `4` | canciones a la vez (el valor por defecto de spotDL); en compose sale de `SPOTDL_THREADS` |
 | `TOKEN_FILE` | `/run/secrets/spotdl_token` | token compartido con la app; sin él no arranca |
 | `MAX_ACTIVE` | `5` | trabajos en cola a la vez |
-| `MAX_PER_USER` | `2` | trabajos en cola a la vez por usuario |
+| `MAX_PER_USER` | `2` | álbumes, playlists y artistas en cola a la vez por usuario |
+| `MAX_TRACKS` | `20` | canciones sueltas en cola a la vez por usuario; no cuentan en los dos topes de arriba |
 | `JOB_TIMEOUT` | `43200` | segundos por trabajo |
 | `SPOTDL_OFFICIAL` | `1` | `1`: una canción se baja de un canal verificado o «Artista - Topic», y solo si no existe, del video que mejor coincida; `0`: siempre de ese (como hace spotDL) |
 | `SPOTDL_BIN` | `spotdl` | binario (los tests usan uno falso) |
