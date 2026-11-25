@@ -872,12 +872,12 @@ function paintRemote() {
     resume = Math.min(roomTime(), queue[pos].dur || Infinity); // para retomar aquí si la sala se cierra
     if (resume >= 30) count();
     if (Date.now() - stateAt > 5000) { stateAt = Date.now(); positionState(); saveAt(); }
-    // En segundo plano el flujo de eventos puede morir y nadie avisaría de un cambio hecho desde otro dispositivo.
-    // Mientras lleguen sus mensajes (el servidor manda uno cada 25 s) no hace falta preguntar; si callan, se pregunta
-    // cada 5 s y de a una petición (este código lo mueve timeupdate, que sí corre con la pantalla bloqueada).
-    // Una pregunta que lleva 30 s sin respuesta se da por perdida: en segundo plano la red puede dejarla colgada.
+    // En segundo plano el flujo de eventos puede morir y nadie avisaría de un cambio hecho desde otro dispositivo:
+    // se pregunta cada segundo (este código lo mueve timeupdate, que sí corre con la pantalla bloqueada), de a una
+    // petición. No se espera a que el flujo de eventos calle: su latido es de 25 s y el cambio se oiría medio minuto tarde.
+    // Una pregunta que lleva 5 s sin respuesta se da por perdida: en segundo plano la red puede dejarla colgada.
     const since = Date.now() - askedAt;
-    if (document.visibilityState !== 'visible' && Date.now() - jam.heard() > 26000 && since > (asking ? 30000 : 5000)) {
+    if (document.visibilityState !== 'visible' && since > (asking ? 5000 : 1000)) {
       askedAt = Date.now();
       asking = true;
       jam.send('state', {}, true).finally(() => (asking = false));

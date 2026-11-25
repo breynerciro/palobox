@@ -18,8 +18,6 @@ let source = null;
 let handler = () => {};
 let lastSeq = 0; // las fotos llegan por dos caminos (flujo y respuesta a un comando): se descarta la que llega vieja
 let cache = { rev: 0, queue: [] }; // la cola solo viaja cuando cambia
-let heardAt = 0; // último mensaje del flujo de eventos: el servidor manda uno cada 25 s aunque nada cambie
-export const heard = () => heardAt;
 
 function take(s) {
   if (s.seq <= lastSeq) return;
@@ -39,7 +37,7 @@ export function connect(onState) {
   handler = onState;
   source = new EventSource(`/api/jam/events?device=${deviceId}&name=${encodeURIComponent(deviceName(navigator.userAgent))}`);
   source.onopen = () => (lastSeq = 0); // tras reconectar (o reiniciarse el servidor) la numeración empieza de nuevo
-  source.onmessage = (e) => { heardAt = Date.now(); take(JSON.parse(e.data)); };
+  source.onmessage = (e) => take(JSON.parse(e.data));
 }
 
 export const alive = () => !!source && source.readyState !== EventSource.CLOSED;
