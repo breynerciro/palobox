@@ -75,7 +75,8 @@ $('#upbar-show').onclick = () => minimize(false);
 
 export let uploading = false;
 async function upload(files, kind, dir) {
-  if (!files.length || uploading) return;
+  if (!files.length) return;
+  if (uploading) return void toast('Espera a que termine la subida en curso.', { kind: 'warn' });
   uploading = true;
   minimized = false;
   // Sin esto el celular apaga la pantalla y suspende la subida.

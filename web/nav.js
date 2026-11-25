@@ -18,7 +18,7 @@ export const go = (tab, path) => (location.hash = href(tab, path));
 
 const isLib = (tab) => tab === 'musica'; // biblioteca compartida, de solo lectura
 const q = (tab, path) => (isLib(tab) ? `lib=${tab}&` : '') + 'path=' + encodeURIComponent(path);
-export const rawUrl = (tab, path) => `/api/${isLib(tab) ? 'media' : 'files'}/raw?${q(tab, path)}`;
+export const rawUrl = (path) => '/api/files/raw?path=' + encodeURIComponent(path);
 export const thumbUrl = (tab, path) => `/api/media/thumb?${q(tab, path)}`;
 
 // Las vistas piden repintar con render(); app.js registra aquí la función que lo hace.

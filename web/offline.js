@@ -87,18 +87,27 @@ export function queue(tracks) {
   state.pending = [...state.pending.filter((t) => !has(t.path)), ...tracks.filter((t) => !known.has(t.path) && !has(t.path)).map(slim)];
   store();
 }
-// download guarda en el celular las pistas que falten y avisa el avance (hechas, total).
+// download guarda en el celular las pistas que falten y avisa el avance (hechas, total). Devuelve cuántas no se
+// pudieron bajar porque el servidor no las tiene o llegaron dañadas; esas no se reintentan.
 export async function download(tracks, onProgress = () => {}) {
   const c = await caches.open(AUDIO);
   let done = 0;
+  let bad = 0;
   queue(tracks);
   for (const t of tracks) {
     if (!state.tracks[t.path]) {
       const r = await fetch(audioUrl(t.path));
-      if (!r.ok) throw new Error(`No se pudo descargar «${t.title}».`);
-      const buf = await r.arrayBuffer();
+      // Sesión vencida o servidor caído detrás del túnel: pasa con todas, así que se reintenta después como un fallo de red.
+      if (r.status === 401 || r.status > 500) throw new Error(`No se pudo descargar «${t.title}».`);
+      const buf = r.ok ? await r.arrayBuffer() : new ArrayBuffer(0);
       const frames = countFrames(new Uint8Array(buf));
-      if (!frames) throw new Error(`«${t.title}» llegó dañada.`);
+      if (!frames) { // el servidor ya no la tiene o llegó dañada: se suelta para que no frene a las demás en cada reintento
+        state.pending = state.pending.filter((x) => x.path !== t.path);
+        store();
+        bad++;
+        onProgress(++done, tracks.length);
+        continue;
+      }
       await c.put(audioUrl(t.path), new Response(buf, { headers: { 'Content-Type': 'audio/mpeg' } }));
       if (t.albumPath && !(await c.match(thumb(t.albumPath)))) { // la carátula, para verla sin conexión (sw.js la sirve)
         const img = await fetch(thumb(t.albumPath)).catch(() => null);
@@ -115,6 +124,7 @@ export async function download(tracks, onProgress = () => {}) {
     onProgress(++done, tracks.length);
   }
   try { navigator.storage?.persist?.(); } catch {} // que el sistema no lo borre por su cuenta, si lo permite
+  return bad;
 }
 export async function remove(paths) {
   const c = await caches.open(AUDIO);
@@ -141,7 +151,7 @@ export function remember(lib) {
   if (active || !count()) return;
   const dirs = new Set(Object.values(state.tracks).map((x) => x.t.albumPath));
   state.albums = Object.fromEntries(lib.albums.filter((a) => dirs.has(a.path)).map((a) => [a.path, a]));
-  state.artists = Object.fromEntries(lib.artists.map((a) => [a.path, a.saved]));
+  state.artists = Object.fromEntries(lib.artists.filter((a) => a.saved).map((a) => [a.path, a.saved])) // solo los guardados: el catálogo entero no cabe bien en localStorage;
   state.likes = lib.likes;
   state.top = lib.top.map((t) => t.path);
   state.recent = (lib.recent || []).map((t) => t.path);

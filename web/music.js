@@ -198,9 +198,11 @@ async function fetchOffline(tracks, playlist) {
   const missing = tracks.filter((t) => !offline.has(t.path)).length;
   let failed = false;
   try {
-    await offline.download(tracks, (done, total) => total > 1 && toast(`Descargando ${done} de ${total}… Puedes salir de la app, sin cerrarla.`, { sticky: true }));
+    const bad = await offline.download(tracks, (done, total) => total > 1 && toast(`Descargando ${done} de ${total}… Puedes salir de la app, sin cerrarla.`, { sticky: true }));
     offline.remember(lib ?? { albums: [], artists: [], playlists: [], likes: [], top: [] });
-    toast(missing ? `${plural(missing, 'canción lista', 'canciones listas')} para escuchar sin conexión.` : 'Ya estaba todo descargado.', { kind: 'ok' });
+    const ok = missing - bad;
+    const msg = [ok ? `${plural(ok, 'canción lista', 'canciones listas')} para escuchar sin conexión.` : !bad && 'Ya estaba todo descargado.', bad && `${plural(bad, 'canción no se pudo', 'canciones no se pudieron')} descargar.`];
+    toast(msg.filter(Boolean).join(' '), { kind: bad ? 'warn' : 'ok', sticky: bad > 0 });
   } catch (e) {
     failed = true; // lo pendiente queda anotado y se retoma al volver a la app, no en bucle
     toast(e.name === 'QuotaExceededError' ? 'No hay espacio en este celular para descargar más.' : e.message || OFFLINE, { kind: 'warn', sticky: true });

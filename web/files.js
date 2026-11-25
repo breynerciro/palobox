@@ -28,7 +28,7 @@ function fileRow(it, path) {
   const main = it.dir
     ? el('a', { className: 'row', href: href('archivos', path) }, typeBadge(t),
         el('div', { className: 'row-text' }, el('p', { textContent: it.name }), el('p', { className: 'muted', textContent: info })), icon('next'))
-    : el('a', { className: 'row', href: rawUrl('archivos', path) }, typeBadge(t),
+    : el('a', { className: 'row', href: rawUrl(path) }, typeBadge(t),
         el('div', { className: 'row-text' }, el('p', { textContent: it.name }), el('p', { className: 'muted', textContent: info })));
   const del = el('button', { className: 'icon-btn' }, icon('trash'));
   del.setAttribute('aria-label', `Eliminar ${it.name}`);

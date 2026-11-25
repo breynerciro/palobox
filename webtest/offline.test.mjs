@@ -98,6 +98,23 @@ test('si no cabe la anotación, la descarga falla y no deja audio huérfano', as
   assert.equal(await (await caches.open('palobox-offline-audio')).match(off.audioUrl(A.path)), undefined);
 });
 
+test('una pista que el servidor no tiene o llega dañada no frena a las demás; sin red todo queda pendiente', async () => {
+  const net = globalThis.fetch;
+  const gone = track(5, 'Borrada', 'Otro', 'Disco');
+  const broken = track(6, 'Dañada', 'Otro', 'Disco');
+  globalThis.fetch = async (url) => (String(url) === off.audioUrl(gone.path) ? new Response('', { status: 404 }) : String(url) === off.audioUrl(broken.path) ? new Response('nada') : net(url));
+  assert.equal(await off.download([gone, broken, A]), 2);
+  assert.equal(off.has(A.path), true);
+  assert.deepEqual(off.pending(), []);
+  globalThis.fetch = async () => { throw new TypeError('sin red'); };
+  await assert.rejects(off.download([gone, C]));
+  assert.deepEqual(off.pending().map((t) => t.title), ['Borrada', 'Biya']);
+  globalThis.fetch = async () => new Response('', { status: 502 }); // el túnel responde, el servidor no
+  await assert.rejects(off.download([C]));
+  assert.deepEqual(off.pending().map((t) => t.title), ['Borrada', 'Biya']);
+  globalThis.fetch = net;
+});
+
 test('entra sin conexión quien inició sesión, pero no si pasó demasiado tiempo ni otro usuario', async () => {
   assert.equal(off.saved().name, 'ana');
   disk.set(KEY, JSON.stringify({ ...JSON.parse(disk.get(KEY)), seen: Date.now() - 31 * 24 * 3600 * 1000 }));

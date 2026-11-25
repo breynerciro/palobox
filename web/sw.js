@@ -11,7 +11,7 @@ self.addEventListener('install', (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(FILES)).then(() => self.skipWaiting()));
 });
 self.addEventListener('activate', (e) => {
-  e.waitUntil(caches.delete('palobox-prueba-sin-conexion').then(() => self.clients.claim())); // la caché de la prueba de la etapa 1
+  e.waitUntil(self.clients.claim());
 });
 self.addEventListener('fetch', (e) => {
   const url = new URL(e.request.url);
