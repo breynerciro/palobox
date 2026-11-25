@@ -676,6 +676,7 @@ function applyJam(s) {
   devices = s.devices.map((d) => ({ ...d, me: !d.user && d.id === s.me })); // en un jam vienen también los de los demás (user)
   const was = room;
   room = s.room;
+  skipMark = s.skip || null;
   here = !room || devices.some((d) => d.me && d.active);
   document.body.classList.toggle('in-room', !!room);
   document.body.classList.toggle('own-stream', !!room && !room.open); // sala propia: no es «compartida»
@@ -756,7 +757,11 @@ function syncStream(t) {
   // no deja moverse dentro de un audio en vivo, pero sí abrir otro: ahí se reabre como con la app a la vista.
   if (stream && audio.src && !audio.paused && document.visibilityState !== 'visible' && (apple || seekable())) {
     stream = mark;
-    return void skipBuffer();
+    // El servidor ya reinició el flujo por este cambio y dice dónde empieza lo nuevo (skip): se salta hasta ahí sin
+    // pedirle nada. Si ese punto ya quedó atrás o no vino, se le pide «cut» como antes.
+    const k = skipMark && skipMark.n !== skipDone && skipMark.at >= audio.currentTime ? skipMark : null;
+    if (k) skipDone = k.n;
+    return void skipBuffer(k?.at);
   }
   stream = mark;
   openStream();
@@ -801,10 +806,12 @@ function streamDo(op, arg = {}) {
 // se oye al acabarse el colchón, como antes.
 const edge = () => (audio.buffered.length ? audio.buffered.end(audio.buffered.length - 1) : NaN);
 let skipping = false;
-async function skipBuffer() {
+let skipMark = null; // último reinicio del flujo que anunció el servidor en una foto: { n, at }
+let skipDone = 0; // el n del último reinicio ya atendido
+async function skipBuffer(known) {
   if (skipping) return;
   skipping = true;
-  const r = await jam.send('cut', {}, true);
+  const r = known == null ? await jam.send('cut', {}, true) : { cut: known };
   // Dónde empieza lo nuevo: el servidor lo dice (r.cut), porque lo viejo puede seguir en camino por la red. Si
   // no lo dice, o no cuadra con lo que suena, se toma lo recibido hasta la respuesta, como antes.
   const got = edge();
@@ -857,6 +864,8 @@ function streamLost() {
 let stateAt = 0;
 let askedAt = 0;
 let asking = false; // hay una pregunta «state» sin responder
+let edgeAt = 0, edgeWas = 0; // cuándo y hasta dónde había llegado el audio en la última medida
+let edgeTop = 0, grewAt = 0; // lo más lejos que ha llegado y cuándo creció por última vez
 function paintRemote() {
   if (!room || pos < 0) return;
   if (streaming() && room.playing) {
@@ -872,13 +881,23 @@ function paintRemote() {
     resume = Math.min(roomTime(), queue[pos].dur || Infinity); // para retomar aquí si la sala se cierra
     if (resume >= 30) count();
     if (Date.now() - stateAt > 5000) { stateAt = Date.now(); positionState(); saveAt(); }
-    // En segundo plano el flujo de eventos puede morir y nadie avisaría de un cambio hecho desde otro dispositivo:
-    // se pregunta cada segundo (este código lo mueve timeupdate, que sí corre con la pantalla bloqueada), de a una
-    // petición. No se espera a que el flujo de eventos calle: su latido es de 25 s y el cambio se oiría medio minuto tarde.
+    // En segundo plano el flujo de eventos puede morir y nadie avisaría de un cambio hecho desde otro dispositivo.
+    // El aviso es el audio mismo: si alguien salta de canción, el servidor reinicia este flujo y rellena el colchón
+    // de golpe (stream.go), y si pausa, deja de mandar. Cuando el audio llega así de raro se pregunta al servidor
+    // qué pasó, en vez de preguntar cada segundo por si acaso; cada 15 s se pregunta de todos modos, por si un
+    // navegador no deja ver cómo llega. Lo mueve timeupdate, que sí corre con la pantalla bloqueada.
     // Una pregunta que lleva 5 s sin respuesta se da por perdida: en segundo plano la red puede dejarla colgada.
-    const since = Date.now() - askedAt;
-    if (document.visibilityState !== 'visible' && since > (asking ? 5000 : 1000)) {
-      askedAt = Date.now();
+    const now = Date.now(), e = edge(), dt = (now - edgeAt) / 1000;
+    // Ráfaga: llegaron más de 3 s de audio de más desde la última medida (normalmente llega 1 s por segundo).
+    // dt grande es la primera medida o que el navegador durmió la página: ahí no se puede saber.
+    const burst = e - edgeWas - dt > 3 && dt < 10;
+    if (burst || dt >= 2) { edgeAt = now; edgeWas = e; }
+    // Corte: lleva más de 1,5 s sin llegar nada. Un flujo recién abierto empieza de nuevo desde cero: no es un corte.
+    if (!(e <= edgeTop) || e < edgeTop - 1) { edgeTop = e; grewAt = now; }
+    const odd = burst || (now - grewAt > 1500 && !audio.paused);
+    const since = now - askedAt;
+    if (document.visibilityState !== 'visible' && since > (asking ? 5000 : odd ? 1000 : 15000)) {
+      askedAt = now;
       asking = true;
       jam.send('state', {}, true).finally(() => (asking = false));
     }

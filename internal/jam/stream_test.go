@@ -285,3 +285,33 @@ func TestJamPicksDevices(t *testing.T) {
 		t.Fatalf("sumar el teléfono de ana dejó sonando %v", got)
 	}
 }
+
+// Un salto hecho desde otro dispositivo reinicia solo el flujo del teléfono: lo nuevo empieza en el punto que dice la
+// foto (skip) y llega de golpe, sin que el teléfono mande «cut»; si lo manda después, recibe ese mismo punto.
+func TestStreamRestartsOnJump(t *testing.T) {
+	h := &Hub{}
+	room, _, got := streamHub(t, h, []music.Track{{Path: "a.mp3", Dur: 60}, {Path: "b.mp3", Dur: 60}}, 0, "")
+	time.Sleep(300 * time.Millisecond) // que el flujo ya lleve algo de «a»
+	if v := cmdView(t, h, `{"device":"anatelefono","op":"state"}`); v.Skip != nil {
+		t.Fatalf("sin saltos no hay reinicio que anunciar: %+v", v.Skip)
+	}
+	h.mu.Lock()
+	room.set(1, 0, true) // otro dispositivo saltó a «b»
+	h.mu.Unlock()
+	var b []byte
+	for end := time.Now().Add(5 * time.Second); time.Now().Before(end) && !bytes.Contains(b, []byte("b")); time.Sleep(20 * time.Millisecond) {
+		b = got()
+	}
+	v := cmdView(t, h, `{"device":"anatelefono","op":"state"}`)
+	start := bytes.IndexByte(b, 'b')
+	if start < 0 || v.Skip == nil || math.Abs(float64(start)/1000-v.Skip.At) > 0.001 {
+		t.Fatalf("lo nuevo empieza en el byte %d y la foto dice %+v", start, v.Skip)
+	}
+	if cut := cmdView(t, h, `{"device":"anatelefono","op":"cut"}`); cut.Cut == nil || *cut.Cut != v.Skip.At {
+		t.Fatalf("«cut» tras el reinicio debía repetir %.3f s: %+v", v.Skip.At, cut.Cut)
+	}
+	time.Sleep(300 * time.Millisecond)
+	if b = got(); bytes.Count(b[start:], []byte("b")) != len(b)-start {
+		t.Fatal("«cut» volvió a reiniciar el flujo: después de «b» llegó otra cosa")
+	}
+}

@@ -79,6 +79,7 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		u.wake = map[string]chan struct{}{}
 	}
 	u.wake[device] = wake
+	delete(u.skips, device) // los reinicios del flujo anterior se miden en su propio audio
 	cuts := u.cuts[device]
 	if op, n := q.Get("op"), q.Get("n"); op != "" && n != "" && u.nonce != n {
 		u.nonce = n
@@ -112,6 +113,7 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		h.mu.Lock()
 		if u.wake[device] == wake {
 			delete(u.wake, device)
+			delete(u.skips, device)
 		}
 		room.streams--
 		h.sweep()
@@ -295,6 +297,22 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 				ended(idx, path, false, at-cur)
 			}
 		default: // primera vez, o alguien saltó o adelantó: se empieza donde toca
+			// Saltó o adelantó otro dispositivo: el flujo vuelve a empezar en lo que la sala suena ahora y rellena el
+			// colchón de golpe, igual que con «cut» pero sin esperar a que el teléfono lo pida. Esa ráfaga es el aviso
+			// para el teléfono en segundo plano (player.js): no tiene que preguntar cada segundo si algo cambió.
+			if !fresh && src != nil {
+				h.mu.Lock()
+				if u.wake[device] == wake && u.room == room { // sigue siendo el flujo de este dispositivo
+					if u.skips == nil {
+						u.skips = map[string]restart{}
+					}
+					h.seq++
+					u.skips[device] = restart{h.seq, sent, room.pos, room.stamp}
+				}
+				h.mu.Unlock()
+				first = true
+				continue
+			}
 			if !open(want, ti, tat) {
 				if !skip(ti, want.Path) { // ya no está en disco: se pasa a la siguiente, por la espera del tick
 					return nil

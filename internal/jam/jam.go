@@ -65,6 +65,16 @@ type user struct {
 	wake map[string]chan struct{}
 	// Dónde empieza lo nuevo tras un «cut», en segundos del flujo: el flujo lo anota y Cmd lo devuelve.
 	marks map[string]chan float64
+	// Último reinicio que el flujo de cada dispositivo hizo por su cuenta, al ver un salto hecho desde otro (stream.go).
+	skips map[string]restart
+}
+
+// restart: el flujo volvió a empezar en el segundo at de lo enviado, con la sala en esa pista y ese instante.
+type restart struct {
+	n     int64
+	at    float64
+	pos   int
+	stamp time.Time
 }
 
 type jamRoom struct {
@@ -171,6 +181,13 @@ type view struct {
 	Devices []deviceView `json:"devices"`
 	Room    *roomView    `json:"room"`
 	Cut     *float64     `json:"cut,omitempty"` // respuesta a «cut»: segundo del flujo en que empieza lo nuevo
+	// El flujo de este dispositivo volvió a empezar solo (alguien saltó desde otro): n cambia con cada reinicio y at
+	// es el segundo del flujo donde empieza lo nuevo. El teléfono en segundo plano se adelanta hasta ahí.
+	Skip *skipView `json:"skip,omitempty"`
+}
+type skipView struct {
+	N  int64   `json:"n"`
+	At float64 `json:"at"`
 }
 
 func (h *Hub) get(name string) *user {
@@ -190,6 +207,9 @@ func (h *Hub) snapshot(u *user, device string, have int) view {
 	h.seq++
 	now := time.Now()
 	v := view{Seq: h.seq, Now: now.UnixMilli(), Me: device, Devices: []deviceView{}}
+	if s, ok := u.skips[device]; ok {
+		v.Skip = &skipView{s.n, s.at}
+	}
 	for _, c := range u.conns {
 		v.Devices = append(v.Devices, deviceView{c.id, c.name, u.active[c.id], ""})
 	}
@@ -564,6 +584,12 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 		case "cut":
 			// El dispositivo va a saltarse su colchón (stream.go): su flujo vuelve a empezar en lo que la sala suena
 			// ahora mismo, y lo que llegue después de esta respuesta ya es eso.
+			// El flujo ya volvió a empezar solo por este mismo cambio: se contesta con ese punto, sin reiniciarlo otra vez.
+			if s, ok := u.skips[in.Device]; ok && room != nil && s.pos == room.pos && s.stamp.Equal(room.stamp) {
+				v := h.snapshot(u, in.Device, in.Qrev)
+				v.Cut = &s.at
+				return v, nil
+			}
 			if u.cuts == nil {
 				u.cuts = map[string]int{}
 			}
