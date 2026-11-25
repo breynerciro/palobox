@@ -14,6 +14,12 @@ services:
     restart: unless-stopped
     ports: ["127.0.0.1:8080:8080"] # solo para tailscale serve; el túnel de Cloudflare entra por la red de compose, no por aquí
     volumes: ["${DATA_PATH:-/srv/data}:/data"]
+    # Si alguien lograra ejecutar algo dentro: sin capacidades del kernel, sin subir de privilegios y sin poder
+    # escribir fuera de /data y /tmp (vips y ffmpeg dejan ahí sus temporales). e2e.sh corre la copia de prueba igual.
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    read_only: true
+    tmpfs: [/tmp]
     environment:
       ADMIN: ${ADMIN:-admin} # usuario que ve el panel de administrador
       TZ: ${TZ:-America/Bogota}
@@ -45,6 +51,8 @@ services:
     # servidor); si nadie más lo pide, las descargas van igual de rápido.
     cpu_shares: 128
     user: "1000:1000" # mismos dueños que la app y Samba
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     # DNS fijo: si Tailscale cambia el DNS del servidor, el contenedor viejo deja de resolver YouTube.
     dns: [1.1.1.1, 8.8.8.8]
     # Solo la biblioteca y su propio estado: no ve la base de la app ni los archivos de los usuarios.
@@ -74,10 +82,13 @@ services:
   # Opcional: se enciende con COMPOSE_PROFILES=tunnel en .env. En el panel de Cloudflare, el hostname
   # público apunta a http://palobox:8080 (la red de compose), así clientIP toma la IP real de X-Forwarded-For.
   cloudflared:
-    image: cloudflare/cloudflared:latest
+    # Versión fija y no :latest: se sabe qué corre y se sube a propósito (cámbiala aquí y vuelve a desplegar).
+    image: cloudflare/cloudflared:2026.11.1
     logging: *logs
     profiles: [tunnel]
     restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
     # http2 (TCP) y no quic: por UDP el túnel se caía a diario («failed to dial to edge with quic: timeout», 55 reconexiones en 6 días).
     command: tunnel --no-autoupdate --protocol http2 run --token-file /run/secrets/cloudflared_token
     secrets: [cloudflared_token]

@@ -39,7 +39,7 @@ $SSH "$HOST" "set -e
   docker rm -f palobox-e2e >/dev/null 2>&1 || true; rm -rf $T; mkdir -p $T/.palobox $T/media/musica # el punto de montaje ya creado: si lo crea Docker queda de root
   python3 -c \"import sqlite3; s = sqlite3.connect('file:$DATA/.palobox/db.sqlite?mode=ro', uri=True); d = sqlite3.connect('$T/.palobox/db.sqlite'); s.backup(d); d.close()\"
   docker run --rm -v $T:/data palobox:e2e adduser $USER_E2E $E2E_PASS >/dev/null
-  docker run -d --name palobox-e2e -p 127.0.0.1:$PORT:8080 -v $T:/data -v $DATA/media/musica:/data/media/musica:ro \
+  docker run -d --name palobox-e2e --cap-drop ALL --security-opt no-new-privileges:true --read-only --tmpfs /tmp -p 127.0.0.1:$PORT:8080 -v $T:/data -v $DATA/media/musica:/data/media/musica:ro \
     -v $DIR/secrets/gemini.key:/run/secrets/gemini_key:ro -e GEMINI_KEY_FILE=/run/secrets/gemini_key -e ADMIN=$USER_E2E -e TZ=${TZ:-America/Bogota} palobox:e2e >/dev/null
   for i in \$(seq 1 60); do wget -qO- http://127.0.0.1:$PORT/api/version >/dev/null 2>&1 && exit 0; sleep 1; done
   echo 'e2e: la copia de prueba no arrancó' >&2; docker logs --tail 20 palobox-e2e >&2; exit 1"

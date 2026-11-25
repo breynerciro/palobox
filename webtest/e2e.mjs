@@ -504,6 +504,9 @@ try {
       must((await out(u)).status === 401, `${u} respondió sin sesión`);
     }
     must((await out('/api/version')).status === 200, '/api/version debe ser pública');
+    const h = (await fetch(base)).headers; // cabeceras de seguridad en cada respuesta
+    must(h.get('x-frame-options') === 'DENY' && /frame-ancestors 'none'/.test(h.get('content-security-policy') || '') && h.get('x-content-type-options') === 'nosniff' && h.get('referrer-policy') === 'same-origin', 'faltan cabeceras de seguridad');
+    must((await fetch(base, { headers: { 'X-Forwarded-Proto': 'https' } })).headers.get('strict-transport-security'), 'por HTTPS falta la cabecera HSTS');
   });
 
   await step('sin errores en la consola del navegador', async () => {

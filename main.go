@@ -165,7 +165,17 @@ func (a *app) routes() http.Handler {
 	// de otro sitio (Sec-Fetch-Site, o Origin distinto del Host en navegadores viejos).
 	guarded := http.NewCrossOriginProtection().Handler(mux)
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Content-Type-Options", "nosniff")
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		// Nadie incrusta la app en otra página (clickjacking) y la interfaz solo carga lo suyo: sin scripts de terceros ni
+		// en línea. Los estilos en línea se permiten (colores por elemento); blob: y data: son las carátulas y el audio armados aquí.
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Content-Security-Policy", "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' blob: data:; media-src 'self' blob:; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'")
+		h.Set("Referrer-Policy", "same-origin")
+		h.Set("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" { // el navegador recuerda un año que este sitio solo va por HTTPS
+			h.Set("Strict-Transport-Security", "max-age=31536000")
+		}
 		guarded.ServeHTTP(w, r)
 	})
 }
