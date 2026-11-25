@@ -32,7 +32,7 @@ document.addEventListener('click', (e) => {
   location.replace(a.href);
 });
 
-// Menú de la cuenta: en el celular, dentro de Música, reúne lo que en escritorio son los botones de la barra de arriba.
+// Menú de la cuenta: en el celular reúne, igual en todas las secciones, lo que en escritorio son los botones de la barra de arriba.
 $('#me-btn').onclick = () => {
   const d = $('#me');
   const item = (glyph, label, run) => {
@@ -42,9 +42,11 @@ $('#me-btn').onclick = () => {
   };
   $('#me-avatar').textContent = $('#me-btn').textContent;
   $('#me-name').textContent = userName;
+  const music = document.body.classList.contains('music');
   $('#me-list').replaceChildren(...[
-    !offline.active && item('cast', 'Dispositivos y jam', () => $('#jam-link').click()),
-    !offline.active && !musicOnly && item('cloud', 'Fotos y archivos', () => location.replace(lastCloud)),
+    music && !offline.active && item('cast', 'Dispositivos y jam', () => $('#jam-link').click()),
+    music && !offline.active && !musicOnly && item('cloud', 'Fotos y archivos', () => location.replace(lastCloud)),
+    !music && item('music', 'Música', () => location.replace('#/musica')),
     !offline.active && isAdmin && item('activity', 'Administración', () => { location.hash = '#/admin'; }),
     item('logout', 'Cerrar sesión', () => $('#logout').click()),
   ].filter(Boolean));
@@ -81,6 +83,7 @@ async function renderView() {
   if (!music && (wasMusic ?? true)) document.body.classList.add('player-tucked');
   wasMusic = music;
   document.body.classList.toggle('music', music);
+  document.body.classList.toggle('flat', music || tab === 'archivos' || tab === 'fotos'); // listas sin caja en el celular
   $('#tabs').hidden = music;
   $('#mtabs').hidden = $('#side').hidden = !music;
   $('#mtabs-exit').href = $('#side-exit').href = musicOnly ? '#/musica' : lastCloud;
@@ -94,9 +97,9 @@ async function renderView() {
   $('#subtitle').textContent = '';
   $('#admin-link').hidden = !isAdmin || admin;
   $('#jam-link').hidden = !music;
-  $('#me-btn').hidden = !music || detail;
   $('#me-btn').textContent = userName.slice(0, 1).toUpperCase();
   $('#back').hidden = music ? !detail : !parts.length && !admin;
+  $('#me-btn').hidden = !$('#back').hidden; // en el celular, a la izquierda va el avatar o la flecha de volver
   $('#back-label').textContent = admin ? TABS[route(lastHash).tab].title : music ? 'Atrás' : parts.at(-2) ?? TABS[tab].title;
   $('#back').onclick = () => {
     if (admin) location.hash = lastHash || '#/musica';

@@ -503,6 +503,14 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 .stat-card.warn .stat-num { color: var(--danger); }
 .section-head.sub .section-title { font-size: .95rem; margin-top: 16px; margin-bottom: 8px; }
 .section-head.sub .btn { margin-top: 6px; }
+/* Sesiones plegadas por usuario (Actividad): la fila del usuario abre y cierra sus sesiones. */
+.acc + .acc { border-top: 1px solid var(--line); }
+.acc > summary { list-style: none; width: 100%; }
+.acc > summary::-webkit-details-marker { display: none; }
+.acc > summary > svg:last-child { transition: rotate var(--fast); }
+.acc[open] > summary > svg:last-child { rotate: 90deg; }
+.acc > .list { margin: 0 0 4px 28px; background: none; border-radius: 0; border-left: 1px solid var(--line); }
+.acc-foot { display: flex; justify-content: flex-end; padding: 0 12px 12px; }
 
 /* ---- Dispositivos y jam ---- */
 .icon-btn.on { color: var(--accent); } /* la reproducción es compartida; el panel dice con quién o dónde suena */
@@ -592,19 +600,22 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
 
 /* ---- Música en el celular: medidas tomadas de una app de música de referencia en un teléfono de 360 px de ancho
    (barra de 48, accesos de 48, filas de 64 con carátula de 48, mini reproductor de 56). Solo cambia tamaños y
-   disposición dentro de Música; Fotos y Archivos siguen igual. ---- */
+   disposición. La barra superior, el menú de la cuenta, las pestañas y las listas son iguales en Fotos y Archivos. ---- */
 @media (max-width: 899px) {
-  /* Barra superior: el título va en la misma fila que los botones, no debajo. */
-  body.music .topbar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; padding-bottom: 8px; }
-  body.music .topbar-row { grid-area: 1 / 3; min-height: 48px; }
-  body.music .topbar:has(#title[hidden]) .topbar-row { grid-column: 1 / -1; }
-  /* Jam, Administración y Cerrar sesión viven en el menú de la cuenta (el avatar). */
-  body.music #me-btn { display: grid; grid-area: 1 / 1; width: 32px; height: 32px; margin-right: 12px; font-size: .9rem; cursor: pointer; }
-  body.music #jam-link, body.music #admin-link, body.music #logout { display: none; }
-  body.music #title { grid-area: 1 / 2; font-size: 1.5rem; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  body.music #subtitle, body.music .searchbox { grid-column: 1 / -1; }
-  body.music #back { color: var(--text); min-width: 44px; padding: 0; justify-content: flex-start; }
-  body.music #back-label { display: none; }
+  /* Barra superior, igual en Fotos, Archivos y Música: a la izquierda el avatar (o la flecha de volver dentro de una
+     carpeta o página), el título en la misma fila y las acciones de la sección a la derecha. Administración y
+     Cerrar sesión viven en el menú de la cuenta (el avatar), no como botones sueltos. */
+  .topbar { display: grid; grid-template-columns: auto minmax(0, 1fr) repeat(4, auto); grid-template-rows: minmax(48px, auto); align-items: center; column-gap: 4px; padding-bottom: 8px; }
+  .topbar-row { display: contents; }
+  .topbar-row > * { grid-row: 1; }
+  .topbar-row > .spacer { display: none; }
+  #me-btn { display: grid; grid-area: 1 / 1; width: 32px; height: 32px; margin-right: 8px; font-size: .9rem; cursor: pointer; }
+  #jam-link, #admin-link, #logout { display: none; }
+  #title { grid-area: 1 / 2; font-size: 1.5rem; letter-spacing: -.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  #subtitle, .searchbox { grid-column: 1 / -1; }
+  #back { grid-area: 1 / 1; max-width: none; min-width: 40px; padding: 0; justify-content: flex-start; color: var(--text); }
+  #back-label { display: none; }
+  #add { margin-left: 4px; }
   body.music .searchbox { min-height: 48px; margin-top: 8px; border-radius: 6px; }
   body.music .searchbox svg { width: 24px; height: 24px; }
   body.music .searchbox input:not([type=range]) { min-height: 48px; }
@@ -616,8 +627,8 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
     background: var(--surface-2); }
   body.music.searching .searchbox #search-clear { color: var(--text); margin-left: -40px; }
 
-  body.music .section-title { font-size: 1.375rem; letter-spacing: -.015em; margin: 28px var(--gutter) 12px; }
-  body.music .section-title span, body.music .section-title .section-link { font-size: .8125rem; }
+  body.flat .section-title { font-size: 1.375rem; letter-spacing: -.015em; margin: 28px var(--gutter) 12px; }
+  body.flat .section-title span, body.flat .section-title .section-link { font-size: .8125rem; }
 
   /* Carátulas casi rectas; las redondas (artistas) siguen redondas. */
   body.music .cover:not(.round), #np .cover, #queue .cover, #player .cover { border-radius: 4px; }
@@ -640,20 +651,21 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
   body.music .lib-tools .btn.secondary { min-height: 32px; padding: 0 12px; font-size: .8125rem; white-space: nowrap; }
   body.music .lib-tools .icon-btn { order: 1; margin-right: -10px; }
 
-  /* Listas sin caja ni líneas: filas de 64 con carátula de 48; en Tu biblioteca, de 80 con carátula de 64. */
-  body.music .list, #queue .list { margin: 0; background: none; border-radius: 0; }
-  body.music .list > li + li, #queue .list > li + li { border-top: 0; }
-  body.music .row { min-height: 64px; padding: 8px 0 8px var(--gutter); gap: 12px; }
+  /* Listas sin caja ni líneas (Música y Archivos: body.flat): filas de 64 con carátula o ícono de 48; en Tu biblioteca, de 80 con carátula de 64. */
+  body.flat .list, #queue .list { margin: 0; background: none; border-radius: 0; }
+  body.flat .list > li + li, #queue .list > li + li { border-top: 0; }
+  body.flat .row { min-height: 64px; padding: 8px 0 8px var(--gutter); gap: 12px; }
   body.music .list > li > a.row, body.music .list > li > .row.static { padding-right: var(--gutter); }
-  body.music .row .cover.small, body.music .row .type { width: 48px; height: 48px; }
+  body.flat .row .cover.small, body.flat .row .type { width: 48px; height: 48px; }
+  body.flat .row .type svg { width: 24px; height: 24px; }
   body.music .list.lib .row { min-height: 80px; }
   body.music .list.lib .row .cover.small { width: 64px; height: 64px; }
   body.music .list.lib .row .cover.small > svg { width: 28px; height: 28px; }
-  body.music .row-text p:first-child { font-weight: 400; line-height: 22px; }
-  body.music .row-text .muted { font-size: .8125rem; line-height: 18px; }
+  body.flat .row-text p:first-child { font-weight: 400; line-height: 22px; }
+  body.flat .row-text .muted { font-size: .8125rem; line-height: 18px; }
   body.music .tracks .dur { display: none; } /* la duración se ve en el reproductor */
-  body.music .row-wrap .icon-btn { margin-right: 0; }
-  body.music .row-wrap .icon-btn:last-child { margin-right: 4px; }
+  body.flat .row-wrap .icon-btn { margin-right: 0; }
+  body.flat .row-wrap .icon-btn:last-child { margin-right: 4px; }
 
   /* Página de álbum, artista o playlist: carátula centrada, texto a la izquierda y Reproducir a la derecha. */
   body.music .hero { gap: 16px; padding: 4px var(--gutter) 12px; }
@@ -667,26 +679,26 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
   body.music .actions > .play-big { order: 3; width: 48px; min-height: 48px; margin: 0 4px 0 8px; }
   body.music .actions > .play-big svg { width: 24px; height: 24px; }
 
-  /* Mini reproductor: 56 de alto, a 8 del borde, con el avance como una línea de 2 pegada abajo. */
-  body.music #player { margin: 0 8px; min-height: 56px; padding: 8px 4px 8px 8px; gap: 0; border: 0; border-radius: 6px; }
-  body.music #player .cover.small { width: 40px; height: 40px; }
-  body.music .player-open { gap: 12px; }
-  body.music #now { font-size: .8125rem; font-weight: 700; line-height: 18px; }
-  body.music #now-sub { font-size: .8125rem; line-height: 18px; }
-  body.music #player .icon-btn { width: 40px; min-height: 40px; }
-  body.music #player .icon-btn svg { width: 24px; height: 24px; }
-  body.music .player-seek { left: 8px; right: 8px; bottom: -11px; } /* el control mide 24 para el dedo: su línea queda a 1 del borde */
-  body.music #player .seek::-webkit-slider-runnable-track { height: 2px; }
-  body.music #player .seek::-moz-range-track { height: 2px; }
-  body.music #player .seek::-webkit-slider-thumb { margin-top: -6px; }
+  /* Mini reproductor (el mismo en todas las secciones): 56 de alto, a 8 del borde, con el avance como una línea de 2 pegada abajo. */
+  #player { margin: 0 8px; min-height: 56px; padding: 8px 4px 8px 8px; gap: 0; border: 0; border-radius: 6px; }
+  #player .cover.small { width: 40px; height: 40px; }
+  .player-open { gap: 12px; }
+  #now { font-size: .8125rem; font-weight: 700; line-height: 18px; }
+  #now-sub { font-size: .8125rem; line-height: 18px; }
+  #player .icon-btn { width: 40px; min-height: 40px; }
+  #player .icon-btn svg { width: 24px; height: 24px; }
+  .player-seek { left: 8px; right: 8px; bottom: -11px; } /* el control mide 24 para el dedo: su línea queda a 1 del borde */
+  #player .seek::-webkit-slider-runnable-track { height: 2px; }
+  #player .seek::-moz-range-track { height: 2px; }
+  #player .seek::-webkit-slider-thumb { margin-top: -6px; }
   body.music #dock { gap: 0; }
   body.music.has-player #view { padding-bottom: calc(var(--tabs-h) + var(--safe-b) + 80px + var(--up-h, 0px)); }
 
   /* Pestañas: sin franja ni borde; el contenido se pierde en un degradado hacia el fondo. */
-  body.music .tabs { border-top: 0; backdrop-filter: none; -webkit-backdrop-filter: none; padding-top: 8px; height: calc(var(--tabs-h) + var(--tabs-b) + 8px);
+  .tabs { border-top: 0; backdrop-filter: none; -webkit-backdrop-filter: none; padding-top: 8px; height: calc(var(--tabs-h) + var(--tabs-b) + 8px);
     background: linear-gradient(transparent, color-mix(in srgb, var(--bg) 85%, transparent) 22%, var(--bg) 55%); }
-  body.music .tabs a { gap: 4px; font-size: .6875rem; font-weight: 500; }
-  body.music .tabs a[aria-current] { font-weight: 700; }
+  .tabs a { gap: 4px; font-size: .6875rem; font-weight: 500; }
+  .tabs a[aria-current] { font-weight: 700; }
 
   /* Cola: los separadores son rótulos pequeños, no títulos de sección. */
   body.music #queue .section-title, #queue .queue-sep { font-size: .8125rem; font-weight: 700; margin: 0; padding: 16px var(--gutter) 4px; background: none; color: var(--muted); }

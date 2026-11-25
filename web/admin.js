@@ -111,7 +111,11 @@ function userMenu(u, anchor) {
   const path = `/api/admin/users/${encodeURIComponent(u.name)}`;
   menu(anchor, `Acciones para ${u.name}`, [
     { icon: 'edit', label: u.pending ? 'Nuevo enlace de invitación' : 'Enlace para nueva contraseña', run: () => invite(`${path}/invite`, { method: 'POST' }, u.name) },
-    u.sessions > 0 && !u.admin && { icon: 'logout', label: `Cerrar ${plural(u.sessions, 'sesión', 'sesiones')}`, run: () => send(`${path}/sessions`, { method: 'DELETE' }, `${u.name} tendrá que volver a entrar.`) },
+    u.sessions > 0 && !u.admin && { icon: 'logout', label: `Cerrar ${plural(u.sessions, 'sesión', 'sesiones')}`, run: async () => {
+      if (await ask({ heading: `¿Cerrar ${u.sessions === 1 ? 'la sesión' : `las ${u.sessions} sesiones`} de ${u.name}?`, text: 'Tendrá que volver a entrar con su contraseña.', ok: u.sessions === 1 ? 'Cerrar sesión' : 'Cerrar todas', danger: true })) {
+        send(`${path}/sessions`, { method: 'DELETE' }, `${u.name} tendrá que volver a entrar.`);
+      }
+    } },
     !u.admin && (u.musicOnly
       ? { icon: 'folder', label: 'Dar acceso completo', run: () => send(`${path}/access`, json('PUT', { musicOnly: false }), `${u.name} ahora tiene fotos, archivos y música.`) }
       : { icon: 'music', label: 'Limitar a solo música', run: async () => {
@@ -149,40 +153,75 @@ function usersSection(s) {
   ];
 }
 
-// Sesiones agrupadas por usuario (las tuyas primero), cada grupo con su botón para cerrarlas todas.
+// Actividad: dos vistas (sesiones abiertas o entradas) en vez de una lista detrás de la otra, y las sesiones
+// plegadas por usuario: con varias cuentas se ve de un vistazo quién está y se abre solo lo que interesa.
+// La vista, el filtro y lo desplegado sobreviven al repintado que sigue a cada acción.
+let actView = 'sesiones';
+let onlyFailed = false;
+const openUsers = new Set();
+function activitySection(s) {
+  const chip = (text, on, run) => {
+    const b = el('button', { className: 'chip', textContent: text });
+    b.setAttribute('aria-pressed', on);
+    b.onclick = () => { run(); render(); };
+    return b;
+  };
+  const bar = el('div', { className: 'toolbar' },
+    chip(`Sesiones abiertas · ${s.sessions.length}`, actView === 'sesiones', () => { actView = 'sesiones'; }),
+    chip(s.failed24h ? `Entradas · ${plural(s.failed24h, 'fallida', 'fallidas')} en 24 h` : 'Entradas', actView === 'entradas', () => { actView = 'entradas'; }));
+  bar.setAttribute('role', 'group');
+  bar.setAttribute('aria-label', 'Qué ver de la actividad');
+  return [bar, ...(actView === 'sesiones' ? sessionsSection(s) : loginsSection(s, chip))];
+}
+
+// Sesiones agrupadas por usuario (las tuyas primero). Cerrar una sesión ajena siempre pide confirmación:
+// un toque por error saca a esa persona de la app.
 function sessionsSection(s) {
   const groups = new Map();
   for (const x of s.sessions) groups.set(x.user, [...(groups.get(x.user) ?? []), x]);
   const mine = s.sessions.find((x) => x.current)?.user;
   const users = [...groups.keys()].sort((a, b) => (b === mine) - (a === mine) || groups.get(b)[0].seen - groups.get(a)[0].seen);
-  const out = [heading('Sesiones abiertas', `${s.sessions.length} de ${plural(users.length, 'usuario', 'usuarios')}`)];
-  if (!users.length) out.push(el('p', { className: 'muted note', textContent: 'No hay sesiones abiertas.' }));
-  for (const name of users) {
+  if (!users.length) return [el('p', { className: 'muted note', textContent: 'No hay sesiones abiertas.' })];
+  return [el('div', { className: 'list' }, users.map((name) => {
     const list = groups.get(name);
+    const last = Math.max(...list.map((x) => x.seen || 0));
+    const d = el('details', { className: 'acc', open: openUsers.has(name) });
+    d.ontoggle = () => (d.open ? openUsers.add(name) : openUsers.delete(name));
     const all = name !== mine && list.length > 1 && el('button', { className: 'btn secondary small' }, 'Cerrar todas');
-    if (all) all.onclick = () => send(`/api/admin/users/${encodeURIComponent(name)}/sessions`, { method: 'DELETE' }, `${name} tendrá que volver a entrar.`);
-    out.push(el('div', { className: 'section-head sub' }, el('h3', { className: 'section-title' }, name, el('span', { textContent: plural(list.length, 'sesión', 'sesiones') })), all),
+    if (all) all.onclick = async () => {
+      if (!(await ask({ heading: `¿Cerrar las ${list.length} sesiones de ${name}?`, text: 'Tendrá que volver a entrar con su contraseña en todos sus dispositivos.', ok: 'Cerrar todas', danger: true }))) return;
+      send(`/api/admin/users/${encodeURIComponent(name)}/sessions`, { method: 'DELETE' }, `${name} tendrá que volver a entrar.`);
+    };
+    d.append(
+      el('summary', { className: 'row' }, el('span', { className: 'type', style: '--tc: var(--t-image)' }, icon('user')),
+        el('div', { className: 'row-text' }, el('p', { textContent: name === mine ? `${name} · tú` : name }),
+          el('p', { className: 'muted', textContent: joinText(plural(list.length, 'sesión', 'sesiones'), last ? `última actividad ${since(last)}` : 'sin actividad registrada') })),
+        icon('next')),
       el('ul', { className: 'list' }, list.map((x) => el('li', { className: 'row-wrap' },
         usageRow('doc', 'user', device(x.agent),
           joinText(x.current ? 'Esta sesión' : x.seen ? `Activa ${since(x.seen)}` : 'Sin actividad registrada', x.ip, x.created && `desde ${fmtDate(x.created * 1000)}`)),
-        !x.current && iconBtn('x', `Cerrar la sesión de ${name} en ${device(x.agent)}`, (b) => {
+        !x.current && iconBtn('x', `Cerrar la sesión de ${name} en ${device(x.agent)}`, async (b) => {
+          if (!(await ask({ heading: `¿Cerrar la sesión de ${name}?`, text: `En ${device(x.agent)}. Tendrá que volver a entrar con su contraseña.`, ok: 'Cerrar sesión', danger: true }))) return;
           b.closest('li').remove(); // se va de una vez; el repintado confirma
           send(`/api/admin/sessions/${x.id}`, { method: 'DELETE' }, 'Sesión cerrada.');
-        })))));
-  }
-  return out;
+        })))),
+      ...(all ? [el('div', { className: 'acc-foot' }, all)] : []));
+    return d;
+  }))];
 }
 
-function loginsSection(s) {
+function loginsSection(s, chip) {
   const LIMIT = 30;
-  if (!s.logins.length) return [];
+  const rows = s.logins.filter((l) => !onlyFailed || !l.ok).slice(0, LIMIT);
+  const failed = s.logins.some((l) => !l.ok);
   return [
-    heading('Entradas recientes', s.failed24h ? `${plural(s.failed24h, 'fallida', 'fallidas')} en 24 h` : null),
-    el('ul', { className: 'list' }, s.logins.slice(0, LIMIT).map((l) => el('li', {}, el('div', { className: 'row static' },
+    (failed || onlyFailed) && el('div', { className: 'toolbar' }, chip('Solo las fallidas', onlyFailed, () => { onlyFailed = !onlyFailed; })),
+    rows.length ? el('ul', { className: 'list' }, rows.map((l) => el('li', {}, el('div', { className: 'row static' },
       el('span', { className: 'type', style: `--tc: var(${l.ok ? '--success' : '--danger'})` }, icon(l.ok ? 'check' : 'alert')),
       el('div', { className: 'row-text' }, el('p', { textContent: `${l.name || '(sin usuario)'} · ${l.ok ? 'entró' : 'falló'}` }),
-        el('p', { className: 'muted', textContent: joinText(since(l.at), device(l.agent), l.ip) })))))),
-  ];
+        el('p', { className: 'muted', textContent: joinText(since(l.at), device(l.agent), l.ip) }))))))
+      : el('p', { className: 'muted note', textContent: onlyFailed ? 'No hay entradas fallidas recientes.' : 'Aún no hay entradas registradas.' }),
+  ].filter(Boolean);
 }
 
 function musicSection(m) {
@@ -280,7 +319,7 @@ export async function adminView(path = '') {
   const days = Math.floor(s.uptime / 86400);
   $('#subtitle').textContent = `Servidor encendido hace ${days ? plural(days, 'día', 'días') : plural(Math.floor(s.uptime / 3600), 'hora', 'horas')}`;
   const body = key === 'usuarios' ? usersSection(s)
-    : key === 'actividad' ? [...sessionsSection(s), ...loginsSection(s)]
+    : key === 'actividad' ? activitySection(s)
     : key === 'musica' ? [...musicSection(s.music), ...(await downloadsSection(sp))]
     : key === 'almacenamiento' ? storageSection(s)
     : summary(s, sp);

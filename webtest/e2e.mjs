@@ -3,6 +3,7 @@
 // El usuario debe ser el administrador de esa instancia. Sale con código 1 si algo falla.
 // E2E_CDP=http://127.0.0.1:PUERTO corre lo mismo en un Chrome ya abierto (el del celular, por adb forward): usa la
 // pestaña que ya tenga abierta esta dirección y la cierra al terminar. E2E_SHOTS=carpeta guarda capturas de los pasos que las piden.
+// E2E_SIZE=390,844 corre en el navegador de aquí con tamaño de celular.
 import { spawn } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -12,7 +13,7 @@ const [base, user] = process.argv.slice(2);
 const pass = process.env.E2E_PASS;
 const profile = mkdtempSync(join(tmpdir(), 'palobox-e2e-'));
 const cdp = process.env.E2E_CDP;
-const chrome = cdp ? null : spawn(process.env.CHROMIUM || 'chromium', ['--headless=new', '--remote-debugging-port=9334', `--user-data-dir=${profile}`, '--no-first-run', '--window-size=1280,900', 'about:blank'], { stdio: 'ignore' });
+const chrome = cdp ? null : spawn(process.env.CHROMIUM || 'chromium', ['--headless=new', '--remote-debugging-port=9334', `--user-data-dir=${profile}`, '--no-first-run', `--window-size=${process.env.E2E_SIZE || '1280,900'}`, 'about:blank'], { stdio: 'ignore' });
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let ws, tab;
 for (let i = 0; cdp && i < 60 && !ws; i++) { // la pestaña ya la abrió e2e.sh con un intent: Chrome de Android no deja crearla por aquí
@@ -236,6 +237,7 @@ try {
       const dt = new DataTransfer(); dt.items.add(new File([blob], 'e2e-foto.jpg', { type: 'image/jpeg' }));
       const i = document.querySelector('#pick-media'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true }));`);
     await until(`document.querySelectorAll('#view .tile').length === ${before + 1}`, 'la foto en la galería', 60000);
+    await shot('fotos');
     const it = (await api('/api/photos')).data.find((p) => p.name === 'e2e-foto.jpg');
     must(it, 'la foto no quedó en /api/photos');
     for (const v of ['t', 'p', 'o']) { // miniatura, vista previa y original
@@ -256,6 +258,16 @@ try {
   await step('archivos: crear carpeta, subir, descargar y borrar', async () => {
     await js(`location.hash = '#/archivos'`);
     await until(`!${q('#mkdir')}.hidden`, 'la vista de archivos');
+    if (mobile) { // la barra y el menú de la cuenta son los mismos que en Música
+      must(await js(`return getComputedStyle(document.querySelector('#me-btn')).display !== 'none' && getComputedStyle(document.querySelector('#logout')).display === 'none' && getComputedStyle(document.querySelector('#admin-link')).display === 'none'`), 'en Archivos falta el avatar o sobran los botones de arriba');
+      await click('#me-btn');
+      await until(`${q('#me')}.open`, 'el menú de la cuenta en Archivos');
+      const items = await js(`return [...document.querySelectorAll('#me .menu-item')].map((b) => b.textContent)`);
+      must(items.join() === 'Música,Administración,Cerrar sesión', `menú de la cuenta en Archivos: ${items}`);
+      await shot('archivos-menu');
+      await js(`document.querySelector('#me').close()`);
+    }
+    await shot('archivos-raiz');
     await click('#mkdir');
     await answer('e2e carpeta');
     const row = (name) => `[...document.querySelectorAll('#view .row-text p:first-child')].some((p) => p.textContent === ${JSON.stringify(name)})`;
@@ -405,6 +417,30 @@ try {
       await until(`${q('#view .chip')} && !${q('#view .skeleton')}`, `la sección ${sec || 'resumen'}`);
       must(!(await js(`return !!document.querySelector('#view .empty .type[style*=danger]')`)), `la sección ${sec} mostró un error`);
     }
+    // Actividad: sesiones plegadas por usuario; cerrar una ajena pide confirmación y cancelar no la cierra.
+    await js(`location.hash = '#/admin/actividad'`);
+    await until(q('#view details.acc'), 'las sesiones por usuario');
+    must(!(await js(`return !!document.querySelector('#view details.acc[open]')`)), 'las sesiones debían llegar plegadas');
+    const n0 = (await api('/api/admin')).data.sessions.length;
+    const close = `document.querySelector('#view details.acc .row-wrap .icon-btn')`;
+    const other = await js(`for (const d of document.querySelectorAll('#view details.acc')) d.open = true; return !!${close}`);
+    await shot('admin-actividad');
+    if (other) { // la copia trae sesiones de otras cuentas
+      await js(`${close}.click()`);
+      await until(`${q('#ask')}.open`, 'la confirmación para cerrar una sesión');
+      must((await js(`return document.querySelector('#ask-title').textContent`)).startsWith('¿Cerrar la sesión de'), 'la confirmación no dice de quién es la sesión');
+      await click('#ask-cancel');
+      await sleep(400);
+      must((await api('/api/admin')).data.sessions.length === n0, 'cancelar cerró la sesión de todos modos');
+      await js(`${close}.click()`);
+      await answer();
+      await until(`(await (await fetch('/api/admin')).json()).sessions.length === ${n0 - 1}`, 'que la sesión confirmada se cierre');
+    }
+    await js(`[...document.querySelectorAll('#view .toolbar .chip')].find((c) => c.textContent.startsWith('Entradas')).click()`);
+    await until(`${q('#view .list .row.static')} && !${q('#view details.acc')}`, 'las entradas recientes');
+    await shot('admin-entradas');
+    await js(`[...document.querySelectorAll('#view .toolbar .chip')].find((c) => c.textContent.startsWith('Sesiones')).click()`);
+    await until(q('#view details.acc'), 'volver a las sesiones');
     await js(`location.hash = '#/admin/usuarios'`);
     await until(`[...document.querySelectorAll('#view .row-text p:first-child')].some((p) => p.textContent.includes(${JSON.stringify(user)}))`, 'la lista de usuarios');
     await shot('admin-usuarios');
