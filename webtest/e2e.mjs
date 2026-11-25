@@ -265,15 +265,22 @@ try {
     // Visor: tira de miniaturas, pasar a la siguiente y esconder las barras con un toque.
     await click('#view .tile');
     await until(`${q('#viewer')}.open && ${q('#stage img')} && ${q('#v-strip .v-thumb[aria-current]')}`, 'el visor con su tira');
-    const first = await js(`return document.querySelector('#v-sub').textContent`);
+    await until(`document.querySelector('#stage img').complete && document.querySelector('#stage img').naturalWidth > 0`, 'la foto cargada');
+    const first = await js(`return document.querySelector('#v-count').textContent`);
+    await sleep(450); // que termine la animación de entrada
     await shot('fotos-visor');
     await click('#v-next');
-    await until(`document.querySelector('#v-sub').textContent !== ${JSON.stringify(first)}`, 'pasar a la siguiente');
+    await until(`document.querySelector('#v-count').textContent !== ${JSON.stringify(first)}`, 'pasar a la siguiente');
     await js(`document.querySelector('#v-strip .v-thumb').click()`); // la primera de la tira: de vuelta
-    await until(`document.querySelector('#v-sub').textContent === ${JSON.stringify(first)}`, 'volver con la tira');
+    await until(`document.querySelector('#v-count').textContent === ${JSON.stringify(first)}`, 'volver con la tira');
     await click('#stage img');
     must(await js(`return document.querySelector('#viewer').classList.contains('bare')`), 'un toque no escondió las barras');
     await click('#stage img');
+    await click('#v-info'); // la información del archivo, en su tarjeta
+    must(await js(`return !document.querySelector('#v-details').hidden && document.querySelector('#v-name').textContent.startsWith('e2e-foto') && document.querySelector('#v-info').getAttribute('aria-expanded') === 'true'`), 'la información del archivo no abrió');
+    await sleep(450); // que termine la animación de entrada
+    await shot('fotos-visor-info');
+    await click('#v-info');
     await click('#v-del');
     await answer();
     await until(`document.querySelectorAll('#view .tile').length === ${before + 1}`, 'que la foto borrada desde el visor se vaya');
@@ -315,8 +322,9 @@ try {
     must(!(await js(`return document.querySelector('#stage video').controls`)), 'el video sigue con los controles del navegador');
     await until(`document.querySelector('#stage video').readyState >= 1`, 'los datos del video', 20000);
     // El video cabe entero entre la barra de arriba y sus controles: nada lo tapa.
-    const box = await js(`const v = document.querySelector('#stage').getBoundingClientRect(), f = document.querySelector('.viewer-foot .v-ctl').getBoundingClientRect(), b = document.querySelector('.viewer-bar .icon-btn').getBoundingClientRect(); return { top: v.top, bottom: v.bottom, ctl: f.top, bar: b.bottom };`);
+    const box = await js(`const v = document.querySelector('#stage').getBoundingClientRect(), f = document.querySelector('.viewer-foot .v-ctl').getBoundingClientRect(), b = document.querySelector('.viewer-bar .glass-btn').getBoundingClientRect(); return { top: v.top, bottom: v.bottom, ctl: f.top, bar: b.bottom };`);
     must(box.bottom <= box.ctl + 1 && box.top >= box.bar - 1, `el video queda bajo las barras: ${JSON.stringify(box)}`);
+    await sleep(450); // que termine la animación de entrada
     await shot('video-pausa');
     await js(`document.querySelector('#stage video').muted = true`); // sin gesto del usuario, el navegador solo deja reproducir en silencio
     await click('#v-play');
@@ -326,11 +334,12 @@ try {
     await until(`document.querySelector('#stage video').paused`, 'pausar con un toque');
     await js(`const s = document.querySelector('#v-seek'); s.value = 500; s.dispatchEvent(new Event('input', { bubbles: true }));`);
     must(await js(`const v = document.querySelector('#stage video'); return !isFinite(v.duration) || Math.abs(v.currentTime - v.duration / 2) < 0.6`), 'la barra de avance no movió el video');
+    await sleep(450); // que termine la animación de entrada
     await shot('video-controles');
     // Cambiar de elemento desde un video (antes no se podía) y volver.
-    const sub = await js(`return document.querySelector('#v-sub').textContent`);
+    const sub = await js(`return document.querySelector('#v-count').textContent`);
     await click(at === 0 ? '#v-next' : '#v-prev');
-    await until(`document.querySelector('#v-sub').textContent !== ${JSON.stringify(sub)}`, 'pasar del video a otro elemento');
+    await until(`document.querySelector('#v-count').textContent !== ${JSON.stringify(sub)}`, 'pasar del video a otro elemento');
     must(await js(`return document.querySelector('#v-ctl').hidden || !!document.querySelector('#stage video')`), 'los controles del video quedaron sobre una foto');
     await js(`document.querySelector('#viewer').close()`);
     for (const p of (await api('/api/photos')).data.filter((x) => x.name.startsWith('e2e-'))) await api('/api/photos/' + p.id, 'DELETE');

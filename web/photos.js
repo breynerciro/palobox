@@ -1,5 +1,5 @@
 // Galería de fotos y videos, y su visor.
-import { $, el, icon, setIcon, size, clock, fmtDate, plural, lazyImg, toast, ask, menu, empty, uploadButton } from './lib.js';
+import { $, el, icon, setIcon, sleep, size, clock, fmtDate, plural, lazyImg, toast, ask, menu, empty, uploadButton } from './lib.js';
 import { render } from './nav.js';
 import { api } from './session.js';
 
@@ -159,8 +159,14 @@ function showItem(dir = 0) {
     media.addEventListener('error', () => { view.classList.add('v-error'); $('#v-play').hidden = true; });
     paintVideo();
   }
-  $('#v-title').textContent = new Date(it.taken).toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' });
-  $('#v-sub').textContent = `${vIndex + 1} de ${photos.length} · ${size(it.size)}`;
+  const when = new Date(it.taken);
+  const hour = when.toLocaleTimeString('es-CO', { hour: 'numeric', minute: '2-digit' });
+  $('#v-title').textContent = when.toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' });
+  $('#v-sub').textContent = hour;
+  $('#v-count').textContent = `${vIndex + 1} de ${photos.length}`;
+  $('#v-name').textContent = it.name;
+  $('#v-meta').textContent = `${noun(it)} ${it.name.includes('.') ? it.name.split('.').pop().toUpperCase() : ''} · ${size(it.size)}`;
+  $('#v-when').textContent = `${when.toLocaleDateString('es-CO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}, ${hour}`;
   $('#v-dl').href = `${o}?dl`;
   $('#v-dl').download = it.name;
   $('#v-prev').hidden = vIndex === 0;
@@ -204,25 +210,62 @@ view.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowRight') step(1);
   if (e.key === ' ' && vid && e.target === view) { e.preventDefault(); playPause(); }
 });
-// Deslizar entre elementos, o hacia abajo para cerrar: igual en fotos y en videos (los controles van fuera del escenario).
-let touchX = null;
-let touchY = 0;
+// La información del archivo se abre y se cierra con su botón, y se queda así al pasar de una foto a otra.
+$('#v-info').onclick = () => {
+  const open = $('#v-details').hidden;
+  $('#v-details').hidden = !open;
+  $('#v-info').setAttribute('aria-expanded', open);
+};
+// Gestos con el dedo, iguales en fotos y videos (los controles van fuera del escenario): la foto acompaña al dedo.
+// A los lados pasa a la vecina; hacia abajo se encoge, deja ver la galería y al soltar cierra.
+let drag = null; // { x, y, axis: '' | 'x' | 'y' | 'n' }
 let moved = false;
+const shown = () => $('#stage').firstElementChild;
+const edge = (dx) => (dx > 0 && vIndex === 0) || (dx < 0 && vIndex === photos.length - 1);
 $('#stage').addEventListener('touchstart', (e) => {
-  touchX = e.touches.length === 1 ? e.touches[0].clientX : null;
-  touchY = e.touches[0].clientY;
+  drag = e.touches.length === 1 && !(visualViewport?.scale > 1) ? { x: e.touches[0].clientX, y: e.touches[0].clientY, axis: '' } : null; // con zoom, el dedo mueve la foto
   moved = false;
 }, { passive: true });
-$('#stage').addEventListener('touchend', (e) => {
-  if (touchX == null) return;
-  const dx = e.changedTouches[0].clientX - touchX;
-  const dy = e.changedTouches[0].clientY - touchY;
-  touchX = null;
-  if (visualViewport?.scale > 1) return; // con zoom, el dedo mueve la foto
-  moved = Math.hypot(dx, dy) > 10;
-  if (dy > 90 && dy > Math.abs(dx) * 1.5) view.close();
-  else if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) step(dx < 0 ? 1 : -1);
-});
+$('#stage').addEventListener('touchmove', (e) => {
+  const m = shown();
+  if (!drag || !m) return;
+  const dx = e.touches[0].clientX - drag.x;
+  const dy = e.touches[0].clientY - drag.y;
+  if (!drag.axis) {
+    if (Math.hypot(dx, dy) < 10) return; // todavía puede ser un toque
+    drag.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : dy > 0 ? 'y' : 'n';
+    moved = true;
+    m.style.animation = m.style.transition = 'none';
+  }
+  if (drag.axis === 'x') m.style.transform = `translateX(${edge(dx) ? dx / 3 : dx}px)`; // en los extremos se resiste
+  else if (drag.axis === 'y') {
+    m.style.transform = `translate(${dx / 3}px, ${dy}px) scale(${1 - Math.min(dy / 600, 0.4)})`;
+    view.style.setProperty('--fade', 1 - Math.min(dy / 300, 1));
+    view.classList.add('dragging');
+  }
+}, { passive: true });
+async function dragEnd(e) {
+  const m = shown();
+  if (!drag || !m) return;
+  const { axis, x, y } = drag;
+  drag = null;
+  const dx = e.changedTouches[0].clientX - x;
+  const dy = e.changedTouches[0].clientY - y;
+  const settle = () => { view.style.removeProperty('--fade'); view.classList.remove('dragging'); };
+  if (axis === 'y' && dy > 110 && e.type === 'touchend') { view.close(); return settle(); }
+  if (axis === 'x' && Math.abs(dx) > 60 && !edge(dx) && e.type === 'touchend') {
+    m.style.transition = 'transform 140ms ease-in, opacity 140ms';
+    m.style.transform = `translateX(${Math.sign(dx) * 100}%)`;
+    m.style.opacity = 0;
+    await sleep(140);
+    return step(dx < 0 ? 1 : -1);
+  }
+  m.style.transition = 'transform var(--med) var(--ease)'; // no alcanzó: vuelve a su sitio
+  m.style.transform = '';
+  settle();
+}
+$('#stage').addEventListener('touchend', dragEnd);
+$('#stage').addEventListener('touchcancel', dragEnd);
 // Un toque (no un arrastre): en una foto esconde o muestra las barras; en un video, si están escondidas las trae y
 // si están a la vista reproduce o pausa.
 $('#stage').onclick = () => {

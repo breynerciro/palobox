@@ -34,6 +34,7 @@
     <symbol id="i-next" viewBox="0 0 24 24"><path d="m9 18 6-6-6-6"/></symbol>
     <symbol id="i-x" viewBox="0 0 24 24"><path d="M18 6 6 18M6 6l12 12"/></symbol>
     <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6 9 17l-5-5"/></symbol>
+    <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></symbol>
     <symbol id="i-alert" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></symbol>
     <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/></symbol>
     <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></symbol>
@@ -226,17 +227,22 @@
   </div>
 </div>
 
+<!-- Visor de fotos y videos: el contenido ocupa la pantalla y los controles flotan encima, como en la fototeca del teléfono. -->
 <dialog autofocus id="viewer" aria-label="Visor">
-  <div class="viewer-bar">
-    <button id="v-close" class="icon-btn on-dark" aria-label="Cerrar"><svg><use href="#i-x"/></svg></button>
-    <div class="viewer-title"><p id="v-title" class="ellipsis"></p><p id="v-sub" class="ellipsis"></p></div>
-    <a id="v-dl" class="icon-btn on-dark" aria-label="Descargar original"><svg><use href="#i-download"/></svg></a>
-    <button id="v-del" class="icon-btn on-dark" aria-label="Eliminar"><svg><use href="#i-trash"/></svg></button>
-  </div>
   <div id="stage"></div>
+  <div class="viewer-bar">
+    <button id="v-close" class="glass-btn" aria-label="Volver a la galería"><svg><use href="#i-back"/></svg></button>
+    <div class="viewer-title"><p id="v-title" class="ellipsis"></p><p id="v-sub" class="ellipsis"></p></div>
+    <button id="v-info" class="glass-btn" aria-label="Información" aria-expanded="false" aria-controls="v-details"><svg><use href="#i-info"/></svg></button>
+  </div>
   <button id="v-play" class="icon-btn play-big v-play" aria-label="Reproducir" hidden><svg><use href="#i-play"/></svg></button>
-  <p class="v-msg">Este video no se puede reproducir en este navegador. Descárgalo con el botón de arriba para verlo.</p>
+  <p class="v-msg">Este video no se puede reproducir en este navegador. Descárgalo con el botón de abajo para verlo.</p>
   <div class="viewer-foot">
+    <section id="v-details" class="v-details" aria-label="Información del archivo" hidden>
+      <p id="v-name"></p>
+      <p id="v-meta"></p>
+      <p id="v-when"></p>
+    </section>
     <div id="v-ctl" class="v-ctl" hidden>
       <span id="v-cur">0:00</span>
       <input id="v-seek" class="seek" type="range" min="0" max="1000" value="0" aria-label="Posición del video">
@@ -245,9 +251,14 @@
       <button id="v-full" class="icon-btn on-dark" aria-label="Pantalla completa"><svg><use href="#i-expand"/></svg></button>
     </div>
     <div id="v-strip" class="v-strip" aria-label="Fotos y videos cercanos"></div>
+    <div class="v-tools">
+      <a id="v-dl" class="glass-btn" aria-label="Descargar original"><svg><use href="#i-download"/></svg></a>
+      <p id="v-count"></p>
+      <button id="v-del" class="glass-btn" aria-label="Eliminar"><svg><use href="#i-trash"/></svg></button>
+    </div>
   </div>
-  <button id="v-prev" class="icon-btn on-dark nav-arrow left" aria-label="Anterior"><svg><use href="#i-back"/></svg></button>
-  <button id="v-next" class="icon-btn on-dark nav-arrow right" aria-label="Siguiente"><svg><use href="#i-next"/></svg></button>
+  <button id="v-prev" class="glass-btn nav-arrow left" aria-label="Anterior"><svg><use href="#i-back"/></svg></button>
+  <button id="v-next" class="glass-btn nav-arrow right" aria-label="Siguiente"><svg><use href="#i-next"/></svg></button>
 </dialog>
 
 <dialog autofocus id="np" aria-label="Reproduciendo">
