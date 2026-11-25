@@ -4,9 +4,11 @@ package music
 
 import (
 	"database/sql"
+	"encoding/json"
 	"io/fs"
 	"log"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -131,6 +133,9 @@ func (l *Library) importPlaylist(owner, job, name string, paths []string) error 
 		return err
 	}
 	for _, p := range paths {
+		if t := twin(tx, p); t != "" {
+			p = t
+		}
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO playlist_tracks(playlist_id, path, pos)
 			VALUES(?, ?, (SELECT COALESCE(MAX(pos), -1) + 1 FROM playlist_tracks WHERE playlist_id = ?))`, id, p, id); err != nil {
 			return err
@@ -140,6 +145,44 @@ func (l *Library) importPlaylist(owner, job, name string, paths []string) error 
 		return err
 	}
 	return tx.Commit()
+}
+
+// twin devuelve, para una ruta que no está en el índice, la pista del mismo artista con el mismo nombre de archivo
+// ("" si no hay): la limpieza de duplicados pudo borrar justo la copia que spotDL anunció.
+func twin(q interface {
+	QueryRow(string, ...any) *sql.Row
+}, p string) string {
+	artist, _, ok := strings.Cut(p, "/")
+	if !ok {
+		return ""
+	}
+	var t string
+	// Igualdad sobre el final de la ruta y no LIKE: los nombres traen % y _.
+	q.QueryRow(`SELECT path FROM tracks WHERE artist_dir = ?1 AND substr(path, -length(?2)) = ?2
+		AND NOT EXISTS(SELECT 1 FROM tracks WHERE path = ?3) ORDER BY path LIMIT 1`, artist, "/"+path.Base(p), p).Scan(&t)
+	return t
+}
+
+// repairPlaylists pasa a su gemela las canciones de playlist que apuntan a una copia ya borrada; si la gemela ya
+// está en la playlist, la fila queda quieta (no se ve).
+func (l *Library) repairPlaylists() {
+	rows, err := l.DB.Query(`SELECT DISTINCT path FROM playlist_tracks WHERE path NOT IN (SELECT path FROM tracks)`)
+	if err != nil {
+		log.Print("limpieza de música: ", err)
+		return
+	}
+	var lost []string
+	for rows.Next() {
+		var p string
+		rows.Scan(&p)
+		lost = append(lost, p)
+	}
+	rows.Close()
+	for _, p := range lost {
+		if t := twin(l.DB, p); t != "" {
+			l.DB.Exec(`UPDATE OR IGNORE playlist_tracks SET path = ? WHERE path = ?`, t, p)
+		}
+	}
 }
 
 func (l *Library) PlaylistCreate(w http.ResponseWriter, r *http.Request, u httpx.User) error {
@@ -250,8 +293,9 @@ func (l *Library) PlaylistOrder(w http.ResponseWriter, r *http.Request, u httpx.
 		return err
 	}
 	var in struct{ Paths []string }
-	if err := httpx.ReadJSON(w, r, &in); err != nil {
-		return err
+	// 1 MiB y no los 64 KB de ReadJSON: el orden de una playlist de más de mil canciones no cabe.
+	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil {
+		return httpx.Error(400, "petición inválida")
 	}
 	tx, err := l.DB.Begin()
 	if err != nil {

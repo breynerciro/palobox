@@ -188,6 +188,7 @@ func TestMeGustaEHistorial(t *testing.T) {
 		if code, _, raw := ana.do("POST", "/api/music/plays", mustJSON(map[string]string{"path": p})); code != 200 {
 			t.Fatalf("escucha: %d %s", code, raw)
 		}
+		a.music.DB.Exec(`UPDATE plays SET at = at - 31000`) // la misma canción dentro de 30 s no vuelve a contar
 	}
 	_, m, raw = ana.do("GET", "/api/music?catalog=1", nil)
 	if titles(m["top"]) != "Amor de San Juan|suelta" {
