@@ -302,7 +302,9 @@ func (l *Library) Played(w http.ResponseWriter, r *http.Request, u httpx.User) e
 	if err != nil {
 		return err
 	}
-	_, err = l.DB.Exec(`INSERT INTO plays(user_id, path, at) VALUES(?, ?, ?)`, u.ID, rel, time.Now().UnixMilli())
+	// Con la música sonando en dos dispositivos de la cuenta llegan dos escuchas seguidas: cuenta una.
+	_, err = l.DB.Exec(`INSERT INTO plays(user_id, path, at) SELECT ?1, ?2, ?3
+		WHERE NOT EXISTS(SELECT 1 FROM plays WHERE user_id = ?1 AND path = ?2 AND at > ?3 - 30000)`, u.ID, rel, time.Now().UnixMilli())
 	return err
 }
 

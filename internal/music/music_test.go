@@ -2,11 +2,17 @@ package music
 
 import (
 	"bytes"
+	"encoding/json"
+	"fmt"
 	"io"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
+
+	"palobox/internal/httpx"
 )
 
 func TestEtiquetas(t *testing.T) {
@@ -92,5 +98,73 @@ func TestImportPlaylistAMedias(t *testing.T) {
 	}
 	if n := l.lista(t, `SELECT job FROM spotdl_done`); n != "trabajo" {
 		t.Fatalf("el trabajo debe quedar marcado: %q", n)
+	}
+}
+
+// Si la limpieza de duplicados ya borró la copia que anuncia spotDL, a la playlist entra la que quedó.
+func TestImportPlaylistCopiaBorrada(t *testing.T) {
+	const borrada, queda = "Feid/19/100%_Sígueme - Remix.mp3", "Feid/Sígueme (Remix)/100%_Sígueme - Remix.mp3"
+	l := biblioteca(t, map[string]time.Time{borrada: antes, queda: antes, "Feid/Otro/100%XSígueme - Remix.mp3": antes, "Otro/19/100%_Sígueme - Remix.mp3": antes})
+	l.Sync()
+	l.exec(t, `INSERT INTO users(name, pass) VALUES('ana', x'00')`)
+	l.exec(t, `DELETE FROM tracks WHERE path = ?`, borrada)
+	l.ImportPlaylist("ana", "trabajo", "Lista", []string{borrada, "Feid/sin indexar.mp3"})
+	// La que no tiene gemela entra tal cual: puede no estar indexada todavía.
+	if n := l.lista(t, `SELECT path FROM playlist_tracks ORDER BY pos`); n != queda+"|Feid/sin indexar.mp3" {
+		t.Fatalf("debía entrar la copia que quedó: %q", n)
+	}
+	// Lo ya dañado se repara en la limpieza, sin repetir la canción en la playlist que ya tiene la gemela.
+	l.exec(t, `INSERT INTO playlist_tracks VALUES(8, ?, 0), (9, ?, 0), (9, ?, 1)`, borrada, borrada, queda)
+	l.dedupe()
+	l.dedupe()
+	if n := l.lista(t, `SELECT playlist_id || ':' || path FROM playlist_tracks WHERE playlist_id > 7 ORDER BY playlist_id, pos`); n != "8:"+queda+"|9:"+borrada+"|9:"+queda {
+		t.Fatalf("reparación: %q", n)
+	}
+}
+
+// La misma canción sonando en dos dispositivos de la cuenta cuenta una sola escucha.
+func TestEscuchaRepetida(t *testing.T) {
+	l := biblioteca(t, map[string]time.Time{"a.mp3": antes})
+	oye := func(id int64) {
+		t.Helper()
+		r := httptest.NewRequest("POST", "/", strings.NewReader(`{"path":"a.mp3"}`))
+		if err := l.Played(httptest.NewRecorder(), r, httpx.User{ID: id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	oye(1)
+	oye(1)
+	oye(2)
+	if n := l.lista(t, `SELECT user_id FROM plays ORDER BY user_id`); n != "1|2" {
+		t.Fatalf("escuchas: %q", n)
+	}
+	l.exec(t, `UPDATE plays SET at = at - 31000`)
+	oye(1)
+	if n := l.lista(t, `SELECT COUNT(*) FROM plays WHERE user_id = 1`); n != "2" {
+		t.Fatalf("pasados 30 s vuelve a contar: %q", n)
+	}
+}
+
+// El orden de una playlist de 1.500 canciones no cabe en los 64 KB de ReadJSON.
+func TestOrdenPlaylistGrande(t *testing.T) {
+	l := biblioteca(t, nil)
+	l.exec(t, `INSERT INTO playlists VALUES(1, 1, 'Grande', 1)`)
+	paths := make([]string, 1500)
+	tx, _ := l.DB.Begin()
+	for i := range paths {
+		paths[i] = fmt.Sprintf("Artista de nombre largo/Álbum de nombre largo/%04d - Canción.mp3", i)
+		tx.Exec(`INSERT INTO playlist_tracks VALUES(1, ?, ?)`, paths[i], len(paths)-i)
+	}
+	if err := tx.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	body, _ := json.Marshal(map[string]any{"paths": paths})
+	r := httptest.NewRequest("PUT", "/", bytes.NewReader(body))
+	r.SetPathValue("id", "1")
+	if err := l.PlaylistOrder(httptest.NewRecorder(), r, httpx.User{ID: 1}); err != nil {
+		t.Fatalf("%d bytes: %v", len(body), err)
+	}
+	if n := l.lista(t, `SELECT path FROM playlist_tracks ORDER BY pos LIMIT 2`); n != paths[0]+"|"+paths[1] {
+		t.Fatalf("orden: %q", n)
 	}
 }

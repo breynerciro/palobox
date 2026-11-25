@@ -40,6 +40,7 @@ func (l *Library) dedupe() {
 		rows.Close()
 		step(all)
 	}
+	l.repairPlaylists()
 }
 
 // mergeAlbums une las carpetas hermanas cuyo nombre solo difiere en mayúsculas o tildes
