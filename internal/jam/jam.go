@@ -145,6 +145,14 @@ func (r *jamRoom) after(i, rep int) int {
 	return -1
 }
 
+// drop suelta las k pistas más viejas de la cola (ya escuchadas); cada flujo corre su índice con shift.
+func (r *jamRoom) drop(k int) {
+	r.queue = append([]music.Track(nil), r.queue[k:]...) // copia: una foto ya armada puede seguir usando la anterior
+	r.pos -= k
+	r.shift += k
+	r.qrev++
+}
+
 func (r *jamRoom) set(pos int, at float64, playing bool) {
 	r.pos, r.at, r.playing, r.stamp = pos, at, playing, time.Now()
 }
@@ -455,10 +463,7 @@ var errNoRoom = httpx.Error(409, "Esa sesión ya terminó.")
 func (h *Hub) extend(r *jamRoom) {
 	if r.repeat == 0 && len(r.queue)-(r.pos+1) < 3 && h.More != nil && len(r.queue) > 0 {
 		if cut := r.pos - 50; len(r.queue) >= maxQueue && cut > 0 {
-			r.queue = append([]music.Track(nil), r.queue[cut:]...) // copia: una foto ya armada puede seguir usando la anterior
-			r.pos -= cut
-			r.shift += cut
-			r.qrev++
+			r.drop(cut)
 		}
 		have := map[string]bool{}
 		for _, t := range r.queue {
@@ -648,6 +653,14 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			case "add":
 				if len(tracks) == 0 {
 					return view{}, httpx.Error(404, "Esa canción ya no está en la biblioteca.")
+				}
+				// Cola llena (una lista grande): primero se suelta lo ya escuchado (queda la anterior, que el flujo
+				// aún puede estar terminando) y, si no alcanza, el final de la cola, nunca lo agregado a mano.
+				if over := len(room.queue) + len(tracks) - maxQueue; over > 0 && room.pos > 1 {
+					room.drop(min(over, room.pos-1))
+				}
+				if keep := max(maxQueue-len(tracks), room.pos+1+room.manual); len(room.queue) > keep {
+					room.queue = room.queue[:keep]
 				}
 				if len(room.queue)+len(tracks) > maxQueue {
 					return view{}, httpx.Error(409, "La cola está llena.")

@@ -343,3 +343,30 @@ func TestStreamEndsWhenDeviceStops(t *testing.T) {
 	h.mu.Unlock()
 	waitRoom(t, h, func() bool { return room.streams == 0 })
 }
+
+// Con la cola llena, agregar suelta lo ya escuchado y, si no alcanza, el final de la cola.
+func TestAddToFullQueue(t *testing.T) {
+	h := &Hub{Lookup: func(p []string) ([]music.Track, error) { return []music.Track{{Path: p[0], Dur: 60}}, nil }}
+	q := make([]music.Track, maxQueue)
+	for i := range q {
+		q[i] = music.Track{Path: fmt.Sprintf("%03d.mp3", i), Dur: 60}
+	}
+	h.mu.Lock()
+	u := h.get("ana")
+	room := &jamRoom{code: "PRUEBA", queue: q, qrev: 1, members: []*user{u}}
+	room.set(10, 0, true)
+	h.rooms[room.code], u.room = room, room
+	h.mu.Unlock()
+	cmdView(t, h, `{"device":"anatelefono","op":"add","paths":["x.mp3"],"next":true}`)
+	if len(room.queue) != maxQueue || room.queue[0].Path != "001.mp3" || room.queue[room.pos+1].Path != "x.mp3" {
+		t.Fatalf("con escuchadas: %d pistas, primera %s, siguiente %s", len(room.queue), room.queue[0].Path, room.queue[room.pos+1].Path)
+	}
+	h.mu.Lock()
+	room.drop(room.pos - 1) // ya sin escuchadas que soltar
+	room.queue = append(room.queue, q[:maxQueue-len(room.queue)]...)
+	h.mu.Unlock()
+	cmdView(t, h, `{"device":"anatelefono","op":"add","paths":["y.mp3"]}`)
+	if len(room.queue) != maxQueue || room.queue[room.pos+2].Path != "y.mp3" {
+		t.Fatalf("sin escuchadas: %d pistas, tras la actual %s", len(room.queue), room.queue[room.pos+2].Path)
+	}
+}
