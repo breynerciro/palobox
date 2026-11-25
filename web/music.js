@@ -345,6 +345,7 @@ export function trackList(tracks, { covers = false, sub = (t) => t.artist, extra
     const b = el('button', { className: 'row' }, el('span', { className: 'num', textContent: i + 1 }), covers && cover(t.albumPath, { small: true }),
       el('div', { className: 'row-text' }, el('p', { className: 'ellipsis', textContent: t.title }), el('p', { className: 'muted ellipsis', textContent: sub(t) })));
     b.dataset.track = t.path;
+    b.dataset.n = i + 1; // markPlaying vuelve a poner el número sin contar filas
     b.setAttribute('aria-label', `Reproducir ${joinText(t.title, t.artist)}`);
     b.onclick = () => playAt(tracks, i);
     const more = el('button', { className: 'icon-btn more' }, icon('more'));

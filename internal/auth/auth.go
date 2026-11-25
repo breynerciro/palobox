@@ -364,6 +364,19 @@ func cut(s string, n int) string {
 	return s
 }
 
+// Alive dice si la sesión de r sigue vigente (la misma consulta de Wrap), sin renovarla ni anotar el uso: los
+// flujos largos de jam la vuelven a comprobar. Un fallo de la base no cuenta como sesión cerrada.
+func (s *Service) Alive(r *http.Request) bool {
+	c, err := r.Cookie("s")
+	if err != nil {
+		return false
+	}
+	var one int
+	err = s.DB.QueryRow(`SELECT 1 FROM sessions s JOIN users u ON u.id = s.user_id
+		WHERE s.token = ? AND s.expires > ? AND u.disabled = 0`, c.Value, time.Now().Unix()).Scan(&one)
+	return !errors.Is(err, sql.ErrNoRows)
+}
+
 // Wrap exige una sesión válida y pasa el usuario a h.
 func (s *Service) Wrap(h httpx.Handler) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {

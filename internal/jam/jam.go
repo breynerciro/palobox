@@ -36,6 +36,9 @@ type Hub struct {
 	// Audio abre una pista desde el segundo at para el flujo continuo (stream.go) y dice sus bytes por segundo.
 	Audio func(path string, dur, at float64) (io.ReadCloser, float64, error)
 	Lead  time.Duration // colchón del flujo continuo; 0 = streamLead (las pruebas lo acortan)
+	// Alive dice si la sesión de la petición sigue vigente: los flujos duran horas y solo se validan al abrirse.
+	// nil = no se vuelve a comprobar.
+	Alive func(r *http.Request) bool
 
 	mu    sync.Mutex
 	seq   int64 // crece con cada foto enviada: el cliente descarta las que llegan en desorden
@@ -155,8 +158,10 @@ type roomView struct {
 	At      float64        `json:"at"`
 	Stamp   int64          `json:"stamp"`
 	Qrev    int            `json:"qrev"`
-	Manual  int            `json:"manual"`          // cuántas de las que siguen las agregó alguien a mano; el resto es la lista o sugerencias
+	Manual  int            `json:"manual"` // cuántas de las que siguen las agregó alguien a mano; el resto es la lista o sugerencias
+	Repeat  int            `json:"repeat"`
 	Queue   *[]music.Track `json:"queue,omitempty"` // solo cuando el dispositivo no tiene esta versión
+	Auto    []int          `json:"auto,omitempty"`  // puestos de Queue que son sugerencias (extend); viaja con ella
 	Members []memberView   `json:"members"`
 }
 type view struct {
@@ -202,13 +207,18 @@ func (h *Hub) snapshot(u *user, device string, have int) view {
 		return a.User+"\x00"+a.Name+a.ID < b.User+"\x00"+b.Name+b.ID
 	})
 	if r := u.room; r != nil {
-		rv := &roomView{Code: r.code, Open: r.open, Pos: r.pos, Playing: r.playing, At: r.cur(now), Stamp: now.UnixMilli(), Qrev: r.qrev, Manual: r.manual}
+		rv := &roomView{Code: r.code, Open: r.open, Pos: r.pos, Playing: r.playing, At: r.cur(now), Stamp: now.UnixMilli(), Qrev: r.qrev, Manual: r.manual, Repeat: r.repeat}
 		if have != r.qrev {
 			q := r.queue
 			if q == nil {
 				q = []music.Track{}
 			}
 			rv.Queue = &q
+			for i, t := range q {
+				if r.sugg[t.Path] {
+					rv.Auto = append(rv.Auto, i)
+				}
+			}
 		}
 		for _, m := range r.members {
 			mv := memberView{Name: m.name, Online: len(m.conns) > 0}
@@ -388,6 +398,9 @@ func (h *Hub) Events(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 		select {
 		case <-c.wake:
 		case <-tick.C:
+			if h.Alive != nil && !h.Alive(r) { // sesión cerrada o cuenta desactivada
+				return nil
+			}
 			h.mu.Lock()
 			h.sweep()
 			h.mu.Unlock()
@@ -601,7 +614,7 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 				if len(tracks) == 0 {
 					return view{}, httpx.Error(404, "Esa música ya no está en la biblioteca.")
 				}
-				room.queue, room.manual = tracks, 0
+				room.queue, room.manual, room.sugg = tracks, 0, nil // lista nueva: nada en ella es sugerencia
 				room.qrev++
 				room.set(clampPos(len(tracks)), 0, true)
 			case "add":
@@ -672,7 +685,9 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			}
 		}
 		h.sweep()
-		notify(u)
+		if in.Op != "state" { // preguntar no cambia nada: no hay por qué despertar a los demás dispositivos
+			notify(u)
+		}
 		return h.snapshot(u, in.Device, in.Qrev), nil
 	}()
 	if err != nil {

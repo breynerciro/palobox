@@ -147,6 +147,11 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 	// open deja lista la pista t desde el segundo from; falso si ya no se puede leer.
 	open := func(t music.Track, i int, from float64) bool {
 		closeSrc()
+		// La sesión solo se validó al abrir el flujo: se vuelve a mirar con cada pista, no en cada tick.
+		if h.Alive != nil && !h.Alive(r) {
+			gone = true
+			return false
+		}
 		f, br, err := h.Audio(t.Path, t.Dur, from)
 		if err != nil || br <= 0 {
 			return false
@@ -202,7 +207,7 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 	// saltar sin fin cargaría el servidor y a todos los miembros; se cierra el flujo como antes.
 	missing := 0
 	skip := func(i int, p string) bool {
-		if missing++; missing >= 3 {
+		if missing++; missing >= 3 || gone { // gone: la sesión ya no vale (open)
 			return false
 		}
 		ended(i, p, true, 0)
