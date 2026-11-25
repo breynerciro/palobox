@@ -86,6 +86,7 @@ type jamRoom struct {
 	shift   int             // pistas ya escuchadas que extend recortó del principio: cada flujo corre su índice lo mismo
 	manual  int             // pistas agregadas justo después de la actual: «agregar a la cola» va detrás de ellas
 	sugg    map[string]bool // pistas que puso extend: no sirven de semilla para las siguientes sugerencias
+	jumps   int             // saltos hechos a mano (siguiente, anterior, saltar, adelantar, otra lista): stream.go
 	repeat  int             // 0 apagado, 1 toda la cola, 2 solo la pista actual; solo en la sala propia del flujo continuo
 	pos     int
 	playing bool
@@ -585,7 +586,8 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			// El dispositivo va a saltarse su colchón (stream.go): su flujo vuelve a empezar en lo que la sala suena
 			// ahora mismo, y lo que llegue después de esta respuesta ya es eso.
 			// El flujo ya volvió a empezar solo por este mismo cambio: se contesta con ese punto, sin reiniciarlo otra vez.
-			if s, ok := u.skips[in.Device]; ok && room != nil && s.pos == room.pos && s.stamp.Equal(room.stamp) {
+			// Si ya pasó un rato el teléfono pudo haber dejado atrás ese punto: se reinicia otra vez, como antes.
+			if s, ok := u.skips[in.Device]; ok && room != nil && s.pos == room.pos && s.stamp.Equal(room.stamp) && time.Since(s.stamp).Seconds() < streamSlip {
 				v := h.snapshot(u, in.Device, in.Qrev)
 				v.Cut = &s.at
 				return v, nil
@@ -662,6 +664,9 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 					room.queue = append(room.queue[:i:i], append(tracks, room.queue[i:]...)...)
 					room.manual += len(tracks)
 				}
+				for _, t := range tracks {
+					delete(room.sugg, t.Path) // pudo haber sido sugerida antes: ahora la puso alguien
+				}
 				room.qrev++
 			case "remove":
 				i := in.Index
@@ -708,6 +713,10 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 				room.set(room.pos, at, room.playing)
 			default:
 				return view{}, httpx.Error(400, "petición inválida")
+			}
+			switch in.Op {
+			case "queue", "jump", "next", "prev", "seek":
+				room.jumps++
 			}
 		}
 		h.sweep()

@@ -8,7 +8,9 @@ import (
 	"io/fs"
 	"log"
 	"net/http"
+	"os"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -133,7 +135,7 @@ func (l *Library) importPlaylist(owner, job, name string, paths []string) error 
 		return err
 	}
 	for _, p := range paths {
-		if t := twin(tx, p); t != "" {
+		if t := l.twin(tx, p); t != "" {
 			p = t
 		}
 		if _, err := tx.Exec(`INSERT OR IGNORE INTO playlist_tracks(playlist_id, path, pos)
@@ -148,10 +150,14 @@ func (l *Library) importPlaylist(owner, job, name string, paths []string) error 
 }
 
 // twin devuelve, para una ruta que no está en el índice, la pista del mismo artista con el mismo nombre de archivo
-// ("" si no hay): la limpieza de duplicados pudo borrar justo la copia que spotDL anunció.
-func twin(q interface {
+// ("" si no hay): la limpieza de duplicados pudo borrar justo la copia que spotDL anunció. Si el archivo sigue en
+// disco es que aún no se indexó, y la del mismo nombre puede ser otra canción (otro álbum): se deja la anunciada.
+func (l *Library) twin(q interface {
 	QueryRow(string, ...any) *sql.Row
 }, p string) string {
+	if _, err := os.Stat(filepath.Join(l.musicRoot(), p)); err == nil {
+		return ""
+	}
 	artist, _, ok := strings.Cut(p, "/")
 	if !ok {
 		return ""
@@ -179,7 +185,7 @@ func (l *Library) repairPlaylists() {
 	}
 	rows.Close()
 	for _, p := range lost {
-		if t := twin(l.DB, p); t != "" {
+		if t := l.twin(l.DB, p); t != "" {
 			l.DB.Exec(`UPDATE OR IGNORE playlist_tracks SET path = ? WHERE path = ?`, t, p)
 		}
 	}

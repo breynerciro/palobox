@@ -840,6 +840,7 @@ function needTap() {
   toast('Toca reproducir para escuchar en este dispositivo.', { kind: 'warn' });
 }
 function streamBlocked(e) {
+  pausedAt = Date.now(); // un play() rechazado no dispara pause: sin esto cada foto reabriría el flujo
   warnPlay(e);
   if (e.name !== 'NotAllowedError' || warned || document.visibilityState !== 'visible') return;
   warned = true; // el navegador exige un toque antes de sonar: el botón de reproducir lo destraba

@@ -93,21 +93,29 @@ export async function download(tracks, onProgress = () => {}) {
   const c = await caches.open(AUDIO);
   let done = 0;
   let bad = 0;
+  // Fallos aún sin soltar: 5 seguidos no son canciones perdidas sino el servidor sin música (disco desmontado).
+  let lost = [];
+  const drop = () => {
+    state.pending = state.pending.filter((x) => !lost.includes(x.path));
+    store();
+    bad += lost.length;
+    lost = [];
+  };
   queue(tracks);
   for (const t of tracks) {
     if (!state.tracks[t.path]) {
       const r = await fetch(audioUrl(t.path));
       // Sesión vencida o servidor caído detrás del túnel: pasa con todas, así que se reintenta después como un fallo de red.
-      if (r.status === 401 || r.status > 500) throw new Error(`No se pudo descargar «${t.title}».`);
+      if (r.status === 401 || r.status >= 500) throw new Error(`No se pudo descargar «${t.title}».`);
       const buf = r.ok ? await r.arrayBuffer() : new ArrayBuffer(0);
       const frames = countFrames(new Uint8Array(buf));
       if (!frames) { // el servidor ya no la tiene o llegó dañada: se suelta para que no frene a las demás en cada reintento
-        state.pending = state.pending.filter((x) => x.path !== t.path);
-        store();
-        bad++;
+        lost.push(t.path);
+        if (lost.length >= 5) throw new Error('El servidor no está entregando la música.');
         onProgress(++done, tracks.length);
         continue;
       }
+      drop();
       await c.put(audioUrl(t.path), new Response(buf, { headers: { 'Content-Type': 'audio/mpeg' } }));
       if (t.albumPath && !(await c.match(thumb(t.albumPath)))) { // la carátula, para verla sin conexión (sw.js la sirve)
         const img = await fetch(thumb(t.albumPath)).catch(() => null);
@@ -123,6 +131,7 @@ export async function download(tracks, onProgress = () => {}) {
     }
     onProgress(++done, tracks.length);
   }
+  drop();
   try { navigator.storage?.persist?.(); } catch {} // que el sistema no lo borre por su cuenta, si lo permite
   return bad;
 }

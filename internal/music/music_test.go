@@ -108,6 +108,11 @@ func TestImportPlaylistCopiaBorrada(t *testing.T) {
 	l.Sync()
 	l.exec(t, `INSERT INTO users(name, pass) VALUES('ana', x'00')`)
 	l.exec(t, `DELETE FROM tracks WHERE path = ?`, borrada)
+	// Aún en disco es una pista sin indexar, no una copia borrada: puede ser otra canción con el mismo nombre.
+	if g := l.twin(l.DB, borrada); g != "" {
+		t.Fatalf("el archivo sigue en disco y se cambió por %q", g)
+	}
+	os.Remove(filepath.Join(l.musicRoot(), borrada))
 	l.ImportPlaylist("ana", "trabajo", "Lista", []string{borrada, "Feid/sin indexar.mp3"})
 	// La que no tiene gemela entra tal cual: puede no estar indexada todavía.
 	if n := l.lista(t, `SELECT path FROM playlist_tracks ORDER BY pos`); n != queda+"|Feid/sin indexar.mp3" {

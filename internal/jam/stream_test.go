@@ -44,6 +44,7 @@ func streamHub(t *testing.T, h *Hub, q []music.Track, pos int, missing string) (
 	room := &jamRoom{code: "PRUEBA", queue: q, qrev: 1, members: []*user{u}}
 	room.set(pos, 0, true)
 	h.rooms[room.code], u.room = room, room
+	u.listen("anatelefono", false)
 	h.mu.Unlock()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h.Stream(w, r, httpx.User{Name: "ana"})
@@ -166,6 +167,7 @@ func TestCutMark(t *testing.T) {
 	time.Sleep(300 * time.Millisecond) // que el flujo ya lleve algo de «a»
 	h.mu.Lock()
 	room.set(1, 0, true) // otro dispositivo saltó a «b»
+	room.jumps++
 	h.mu.Unlock()
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest("POST", "/api/jam", strings.NewReader(`{"device":"anatelefono","op":"cut"}`))
@@ -297,6 +299,7 @@ func TestStreamRestartsOnJump(t *testing.T) {
 	}
 	h.mu.Lock()
 	room.set(1, 0, true) // otro dispositivo saltó a «b»
+	room.jumps++
 	h.mu.Unlock()
 	var b []byte
 	for end := time.Now().Add(5 * time.Second); time.Now().Before(end) && !bytes.Contains(b, []byte("b")); time.Sleep(20 * time.Millisecond) {
@@ -314,4 +317,29 @@ func TestStreamRestartsOnJump(t *testing.T) {
 	if b = got(); bytes.Count(b[start:], []byte("b")) != len(b)-start {
 		t.Fatal("«cut» volvió a reiniciar el flujo: después de «b» llegó otra cosa")
 	}
+}
+
+// Un desfase que nadie pidió (aquí, la sala corrida sin salto) no reinicia el flujo ni se anuncia como salto.
+func TestStreamNoRestartWithoutJump(t *testing.T) {
+	h := &Hub{}
+	room, _, _ := streamHub(t, h, []music.Track{{Path: "a.mp3", Dur: 60}, {Path: "b.mp3", Dur: 60}}, 0, "")
+	time.Sleep(300 * time.Millisecond)
+	h.mu.Lock()
+	room.set(1, 0, true) // sin room.jumps++
+	h.mu.Unlock()
+	time.Sleep(500 * time.Millisecond)
+	if v := cmdView(t, h, `{"device":"anatelefono","op":"state"}`); v.Skip != nil {
+		t.Fatalf("se reinició sin un salto hecho a mano: %+v", v.Skip)
+	}
+}
+
+// Si la música pasa a otro dispositivo, el flujo de este se cierra.
+func TestStreamEndsWhenDeviceStops(t *testing.T) {
+	h := &Hub{}
+	room, _, _ := streamHub(t, h, []music.Track{{Path: "a.mp3", Dur: 60}}, 0, "")
+	waitRoom(t, h, func() bool { return room.streams == 1 })
+	h.mu.Lock()
+	h.get("ana").listen("anaportatil", false)
+	h.mu.Unlock()
+	waitRoom(t, h, func() bool { return room.streams == 0 })
 }

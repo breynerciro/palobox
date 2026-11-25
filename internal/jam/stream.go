@@ -102,10 +102,12 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 			}
 			room.set(room.pos, max(at, 0), true)
 		}
+		room.jumps++
 		for _, m := range room.members {
 			m.poke()
 		}
 	}
+	jumps := room.jumps
 	room.streams++
 	shift := room.shift // con qué recorte de la cola cuenta idx (abajo)
 	h.mu.Unlock()
@@ -219,7 +221,8 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 	for !gone {
 		h.mu.Lock()
 		now := time.Now()
-		if u.room != room || len(room.queue) == 0 {
+		// Pasaron la música a otro dispositivo: se corta, y el corte le avisa al teléfono bloqueado (player.js).
+		if u.room != room || len(room.queue) == 0 || !u.active[device] {
 			h.mu.Unlock()
 			return nil
 		}
@@ -274,6 +277,8 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 			idx, shift = idx-d, room.shift
 		}
 		want, after := room.queue[ti], room.after(idx, room.repeat)
+		jumped := room.jumps != jumps
+		jumps = room.jumps
 		cur := room.cur(now) // para una pista sin duración en el índice, que solo se sabe terminada al acabarse su archivo
 		h.mu.Unlock()
 
@@ -300,7 +305,9 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 			// Saltó o adelantó otro dispositivo: el flujo vuelve a empezar en lo que la sala suena ahora y rellena el
 			// colchón de golpe, igual que con «cut» pero sin esperar a que el teléfono lo pida. Esa ráfaga es el aviso
 			// para el teléfono en segundo plano (player.js): no tiene que preguntar cada segundo si algo cambió.
-			if !fresh && src != nil {
+			// Solo ante un salto hecho a mano: otro desfase (repetir cambiado al final, la red trabada, una pista
+			// más corta que el colchón) se arregla abriendo donde toca, sin reiniciar una y otra vez.
+			if !fresh && src != nil && jumped {
 				h.mu.Lock()
 				if u.wake[device] == wake && u.room == room { // sigue siendo el flujo de este dispositivo
 					if u.skips == nil {
