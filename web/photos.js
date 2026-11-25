@@ -317,6 +317,7 @@ $('#stage').addEventListener('touchstart', (e) => {
 $('#stage').addEventListener('touchmove', (e) => {
   const m = shown();
   if (!drag || !m) return;
+  if (e.cancelable) e.preventDefault(); // el gesto es del visor: sin esto, Safari desplaza la galería que está detrás
   const dx = e.touches[0].clientX - drag.x;
   const dy = e.touches[0].clientY - drag.y;
   if (!drag.axis) {
@@ -331,7 +332,7 @@ $('#stage').addEventListener('touchmove', (e) => {
     view.style.setProperty('--fade', 1 - Math.min(dy / 300, 1));
     view.classList.add('dragging');
   }
-}, { passive: true });
+}, { passive: false });
 async function dragEnd(e) {
   const m = shown();
   if (!drag || !m) return;
