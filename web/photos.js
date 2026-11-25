@@ -1,5 +1,5 @@
 // Galería de fotos y videos, y su visor.
-import { $, el, icon, size, fmtDate, plural, lazyImg, toast, ask, menu, empty, uploadButton } from './lib.js';
+import { $, el, icon, setIcon, size, clock, fmtDate, plural, lazyImg, toast, ask, menu, empty, uploadButton } from './lib.js';
 import { render } from './nav.js';
 import { api } from './session.js';
 
@@ -103,31 +103,66 @@ async function remove(items) {
   return bad < items.length; // false: se canceló o no se borró ninguno
 }
 
-// Visor: deslizar a los lados cambia de foto o de video y hacia abajo lo cierra; un toque sobre la foto esconde o
-// muestra las barras; abajo, una tira de miniaturas para saltar a las vecinas.
+// Visor. Deslizar a los lados cambia de foto o de video y hacia abajo lo cierra; un toque sobre la foto esconde o
+// muestra las barras. Los videos tienen controles propios (no los del navegador, que tapaban la tira y cambian de
+// un sistema a otro): botón central, barra de avance, sonido y pantalla completa. Abajo, la tira de miniaturas.
 
 let vIndex = 0;
+let vid = null; // el <video> a la vista, o null si es una foto
+let hideT; // esconde las barras a los pocos segundos de estar reproduciendo
 const STRIP = 15; // miniaturas a cada lado de la actual: con miles de fotos la tira no las crea todas
+const view = $('#viewer');
 function openViewer(i) {
   vIndex = i;
-  $('#viewer').classList.remove('bare');
   showItem(0);
-  $('#viewer').showModal();
+  view.showModal();
+}
+// wake muestra las barras; si el video está sonando, las vuelve a esconder solas.
+function wake() {
+  clearTimeout(hideT);
+  view.classList.remove('bare');
+  if (vid && !vid.paused) hideT = setTimeout(() => view.classList.add('bare'), 3000);
+}
+function paintVideo() {
+  if (!vid) return;
+  const d = vid.duration || 0;
+  const p = d ? vid.currentTime / d : 0;
+  $('#v-cur').textContent = clock(vid.currentTime);
+  $('#v-dur').textContent = clock(d);
+  if (!$('#v-seek').matches(':active')) $('#v-seek').value = Math.round(p * 1000); // mientras se arrastra manda el dedo
+  $('#v-seek').style.setProperty('--p', `${p * 100}%`);
+  setIcon($('#v-play'), vid.paused ? 'play' : 'pause');
+  $('#v-play').setAttribute('aria-label', vid.paused ? 'Reproducir' : 'Pausar');
+  view.classList.toggle('playing', !vid.paused);
+  setIcon($('#v-mute'), vid.muted ? 'mute' : 'volume');
+  $('#v-mute').setAttribute('aria-pressed', vid.muted);
 }
 function showItem(dir = 0) {
   const it = photos[vIndex];
   const o = `/api/photos/${it.id}/o`;
   const video = it.kind === 'video';
   const media = video
-    ? el('video', { src: o, controls: true, playsInline: true, poster: `/api/photos/${it.id}/t?v=${it.v}` })
+    ? el('video', { src: o, playsInline: true, preload: 'metadata', poster: `/api/photos/${it.id}/t?v=${it.v}` })
     : el('img', { src: `/api/photos/${it.id}/p?v=${it.v}`, alt: it.name, draggable: false });
   media.style.setProperty('--dx', `${dir * 32}px`); // entra desde el lado hacia el que se avanzó
   $('#stage').replaceChildren(media);
-  $('#viewer').classList.toggle('is-video', video); // los controles del video no quedan bajo la tira
-  if (video) $('#viewer').classList.remove('bare');
+  vid = video ? media : null;
+  clearTimeout(hideT);
+  view.classList.remove('bare', 'playing', 'v-error');
+  view.classList.toggle('is-video', video); // el escenario deja libre la franja de los controles
+  $('#v-ctl').hidden = $('#v-play').hidden = !video;
+  if (video) {
+    for (const ev of ['timeupdate', 'durationchange', 'play', 'pause', 'volumechange', 'ended']) media.addEventListener(ev, paintVideo);
+    media.addEventListener('play', wake);
+    media.addEventListener('pause', wake);
+    // Un .mov del iPhone (HEVC) no siempre se puede ver en otro navegador: se dice, y descargar sigue arriba.
+    media.addEventListener('error', () => { view.classList.add('v-error'); $('#v-play').hidden = true; });
+    paintVideo();
+  }
   $('#v-title').textContent = new Date(it.taken).toLocaleDateString('es-CO', { day: 'numeric', month: 'long', year: 'numeric' });
-  $('#v-sub').textContent = `${it.name} · ${size(it.size)} · ${vIndex + 1} de ${photos.length}`;
+  $('#v-sub').textContent = `${vIndex + 1} de ${photos.length} · ${size(it.size)}`;
   $('#v-dl').href = `${o}?dl`;
+  $('#v-dl').download = it.name;
   $('#v-prev').hidden = vIndex === 0;
   $('#v-next').hidden = vIndex === photos.length - 1;
   const from = Math.max(0, vIndex - STRIP);
@@ -149,24 +184,33 @@ function step(d) {
   vIndex = n;
   showItem(d);
 }
+const playPause = () => vid && (vid.paused ? vid.play().catch(() => {}) : vid.pause());
+$('#v-play').onclick = playPause;
+$('#v-seek').oninput = (e) => {
+  if (!vid?.duration) return;
+  vid.currentTime = (e.target.value / 1000) * vid.duration;
+  paintVideo();
+  wake();
+};
+$('#v-mute').onclick = () => { if (vid) vid.muted = !vid.muted; wake(); };
+// Pantalla completa: en el iPhone solo el propio video puede pedirla (webkitEnterFullscreen).
+$('#v-full').onclick = () => vid && (vid.webkitEnterFullscreen ? vid.webkitEnterFullscreen() : vid.requestFullscreen?.());
 $('#v-prev').onclick = () => step(-1);
 $('#v-next').onclick = () => step(1);
-$('#v-close').onclick = () => $('#viewer').close();
-$('#viewer').onclose = () => $('#stage').replaceChildren(); // detiene el video
-$('#viewer').addEventListener('keydown', (e) => {
+$('#v-close').onclick = () => view.close();
+view.onclose = () => { clearTimeout(hideT); vid = null; $('#stage').replaceChildren(); }; // detiene el video
+view.addEventListener('keydown', (e) => {
   if (e.key === 'ArrowLeft') step(-1);
   if (e.key === 'ArrowRight') step(1);
+  if (e.key === ' ' && vid && e.target === view) { e.preventDefault(); playPause(); }
 });
-// Deslizar entre elementos, o hacia abajo para cerrar. En un video el gesto no empieza sobre sus controles
-// (la franja de abajo), para no chocar con la barra de avance.
+// Deslizar entre elementos, o hacia abajo para cerrar: igual en fotos y en videos (los controles van fuera del escenario).
 let touchX = null;
 let touchY = 0;
 let moved = false;
 $('#stage').addEventListener('touchstart', (e) => {
-  const t = e.touches[0];
-  const v = e.target.closest('video');
-  touchX = e.touches.length === 1 && !(v && t.clientY > v.getBoundingClientRect().bottom - 72) ? t.clientX : null;
-  touchY = t.clientY;
+  touchX = e.touches.length === 1 ? e.touches[0].clientX : null;
+  touchY = e.touches[0].clientY;
   moved = false;
 }, { passive: true });
 $('#stage').addEventListener('touchend', (e) => {
@@ -176,16 +220,21 @@ $('#stage').addEventListener('touchend', (e) => {
   touchX = null;
   if (visualViewport?.scale > 1) return; // con zoom, el dedo mueve la foto
   moved = Math.hypot(dx, dy) > 10;
-  if (dy > 90 && dy > Math.abs(dx) * 1.5) $('#viewer').close();
+  if (dy > 90 && dy > Math.abs(dx) * 1.5) view.close();
   else if (Math.abs(dx) > 50 && Math.abs(dx) > Math.abs(dy)) step(dx < 0 ? 1 : -1);
 });
-// Un toque sobre la foto (no un arrastre) esconde o muestra las barras; en un video el toque es de su reproductor.
-$('#stage').onclick = (e) => { if (!moved && !e.target.closest('video')) $('#viewer').classList.toggle('bare'); moved = false; };
+// Un toque (no un arrastre): en una foto esconde o muestra las barras; en un video, si están escondidas las trae y
+// si están a la vista reproduce o pausa.
+$('#stage').onclick = () => {
+  if (moved) return void (moved = false);
+  if (!vid) return void view.classList.toggle('bare');
+  if (view.classList.contains('bare')) wake(); else playPause();
+};
 $('#v-del').onclick = async () => {
   const it = photos[vIndex];
   if (!(await remove([it])) || photos[vIndex] !== it) return;
   photos.splice(vIndex, 1);
-  if (!photos.length) $('#viewer').close();
+  if (!photos.length) view.close();
   else { vIndex = Math.min(vIndex, photos.length - 1); showItem(0); }
   render();
 };

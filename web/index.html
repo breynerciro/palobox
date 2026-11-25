@@ -53,6 +53,8 @@
     <symbol id="i-more" viewBox="0 0 24 24"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></symbol>
     <symbol id="i-queue" viewBox="0 0 24 24"><path d="M21 15V6M12 12H3M16 6H3M12 18H3"/><circle cx="18.5" cy="15.5" r="2.5"/></symbol>
     <symbol id="i-list-plus" viewBox="0 0 24 24"><path d="M11 12H3M16 6H3M16 18H3M18 9v6M21 12h-6"/></symbol>
+    <symbol id="i-mute" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4Z"/><path d="m22 9-6 6M16 9l6 6"/></symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></symbol>
     <symbol id="i-volume" viewBox="0 0 24 24"><path d="M11 5 6 9H2v6h4l5 4Z"/><path d="M15.54 8.46a5 5 0 0 1 0 7.07M19.07 4.93a10 10 0 0 1 0 14.14"/></symbol>
     <symbol id="i-up" viewBox="0 0 24 24"><path d="m18 15-6-6-6 6"/></symbol>
     <symbol id="i-edit" viewBox="0 0 24 24"><path d="M21.17 6.81a1 1 0 0 0-3.98-3.98L3.84 16.17a2 2 0 0 0-.5.83l-1.32 4.36a.5.5 0 0 0 .62.62L7 20.66a2 2 0 0 0 .83-.5Z"/></symbol>
@@ -232,7 +234,18 @@
     <button id="v-del" class="icon-btn on-dark" aria-label="Eliminar"><svg><use href="#i-trash"/></svg></button>
   </div>
   <div id="stage"></div>
-  <div class="viewer-foot"><div id="v-strip" class="v-strip" aria-label="Fotos y videos cercanos"></div></div>
+  <button id="v-play" class="icon-btn play-big v-play" aria-label="Reproducir" hidden><svg><use href="#i-play"/></svg></button>
+  <p class="v-msg">Este video no se puede reproducir en este navegador. Descárgalo con el botón de arriba para verlo.</p>
+  <div class="viewer-foot">
+    <div id="v-ctl" class="v-ctl" hidden>
+      <span id="v-cur">0:00</span>
+      <input id="v-seek" class="seek" type="range" min="0" max="1000" value="0" aria-label="Posición del video">
+      <span id="v-dur">0:00</span>
+      <button id="v-mute" class="icon-btn on-dark" aria-label="Silenciar" aria-pressed="false"><svg><use href="#i-volume"/></svg></button>
+      <button id="v-full" class="icon-btn on-dark" aria-label="Pantalla completa"><svg><use href="#i-expand"/></svg></button>
+    </div>
+    <div id="v-strip" class="v-strip" aria-label="Fotos y videos cercanos"></div>
+  </div>
   <button id="v-prev" class="icon-btn on-dark nav-arrow left" aria-label="Anterior"><svg><use href="#i-back"/></svg></button>
   <button id="v-next" class="icon-btn on-dark nav-arrow right" aria-label="Siguiente"><svg><use href="#i-next"/></svg></button>
 </dialog>

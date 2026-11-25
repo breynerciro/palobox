@@ -291,6 +291,52 @@ try {
     must((await api(`/api/photos/${it.id}/o`)).status === 404, 'el original sigue disponible después de borrar');
   });
 
+  await step('fotos: un video con los controles de la app (reproducir, avanzar, cambiar de elemento)', async () => {
+    await js(`location.hash = '#/fotos'`);
+    await until(`${q('#view .empty')} || ${q('#view .tile')}`, 'la galería');
+    const before = (await api('/api/photos')).data.length;
+    // Un video corto grabado aquí mismo (un lienzo animado) y una foto, para tener a dónde pasar.
+    await js(`const c = document.createElement('canvas'); c.width = 360; c.height = 640; const g = c.getContext('2d');
+      const rec = new MediaRecorder(c.captureStream(15), { mimeType: 'video/webm' }); const parts = []; rec.ondataavailable = (e) => parts.push(e.data);
+      rec.start(); const t0 = performance.now();
+      await new Promise((done) => { const draw = () => { const t = (performance.now() - t0) / 1000; g.fillStyle = '#090d16'; g.fillRect(0, 0, 360, 640);
+        g.fillStyle = '#14b8a6'; g.fillRect(40 + t * 60, 200, 80, 240); if (t < 3) requestAnimationFrame(draw); else done(); }; draw(); });
+      await new Promise((r) => { rec.onstop = r; rec.stop(); });
+      g.fillStyle = '#b98aff'; g.fillRect(0, 0, 360, 640);
+      const dt = new DataTransfer(); dt.items.add(new File(parts, 'e2e-video.webm', { type: 'video/webm' }));
+      dt.items.add(new File([await new Promise((r) => c.toBlob(r, 'image/jpeg', 0.9))], 'e2e-foto3.jpg', { type: 'image/jpeg' }));
+      const i = document.querySelector('#pick-media'); i.files = dt.files; i.dispatchEvent(new Event('change', { bubbles: true }));`);
+    await until(`document.querySelectorAll('#view .tile').length === ${before + 2}`, 'el video y la foto en la galería', 90000);
+    const list = (await api('/api/photos')).data;
+    const at = list.findIndex((p) => p.name === 'e2e-video.webm');
+    must(at >= 0 && list[at].kind === 'video', 'el video no quedó como video');
+    await js(`document.querySelectorAll('#view .tile')[arg].click()`, at);
+    await until(`${q('#viewer')}.open && ${q('#stage video')} && !${q('#v-ctl')}.hidden`, 'el visor con los controles del video');
+    must(!(await js(`return document.querySelector('#stage video').controls`)), 'el video sigue con los controles del navegador');
+    await until(`document.querySelector('#stage video').readyState >= 1`, 'los datos del video', 20000);
+    // El video cabe entero entre la barra de arriba y sus controles: nada lo tapa.
+    const box = await js(`const v = document.querySelector('#stage').getBoundingClientRect(), f = document.querySelector('.viewer-foot .v-ctl').getBoundingClientRect(), b = document.querySelector('.viewer-bar .icon-btn').getBoundingClientRect(); return { top: v.top, bottom: v.bottom, ctl: f.top, bar: b.bottom };`);
+    must(box.bottom <= box.ctl + 1 && box.top >= box.bar - 1, `el video queda bajo las barras: ${JSON.stringify(box)}`);
+    await shot('video-pausa');
+    await js(`document.querySelector('#stage video').muted = true`); // sin gesto del usuario, el navegador solo deja reproducir en silencio
+    await click('#v-play');
+    await until(`!document.querySelector('#stage video').paused && document.querySelector('#stage video').currentTime > 0.3 && document.querySelector('#viewer').classList.contains('playing')`, 'que el video avance');
+    must((await js(`return document.querySelector('#v-cur').textContent`)) !== '', 'no pinta el tiempo');
+    await click('#stage video'); // un toque con las barras a la vista: pausa
+    await until(`document.querySelector('#stage video').paused`, 'pausar con un toque');
+    await js(`const s = document.querySelector('#v-seek'); s.value = 500; s.dispatchEvent(new Event('input', { bubbles: true }));`);
+    must(await js(`const v = document.querySelector('#stage video'); return !isFinite(v.duration) || Math.abs(v.currentTime - v.duration / 2) < 0.6`), 'la barra de avance no movió el video');
+    await shot('video-controles');
+    // Cambiar de elemento desde un video (antes no se podía) y volver.
+    const sub = await js(`return document.querySelector('#v-sub').textContent`);
+    await click(at === 0 ? '#v-next' : '#v-prev');
+    await until(`document.querySelector('#v-sub').textContent !== ${JSON.stringify(sub)}`, 'pasar del video a otro elemento');
+    must(await js(`return document.querySelector('#v-ctl').hidden || !!document.querySelector('#stage video')`), 'los controles del video quedaron sobre una foto');
+    await js(`document.querySelector('#viewer').close()`);
+    for (const p of (await api('/api/photos')).data.filter((x) => x.name.startsWith('e2e-'))) await api('/api/photos/' + p.id, 'DELETE');
+    must(!(await api('/api/photos')).data.some((x) => x.name.startsWith('e2e-')), 'quedaron archivos de prueba');
+  });
+
   await step('archivos: crear carpeta, subir, descargar y borrar', async () => {
     await js(`location.hash = '#/archivos'`);
     await until(`!${q('#mkdir')}.hidden`, 'la vista de archivos');
