@@ -9,8 +9,9 @@
   --line: #263145;
   --text: #f8fafc;
   --muted: #94a3b8;          /* 7,6:1 sobre --bg */
-  --accent: #00f3cf;         /* el punto medio del degradado, para texto e íconos de un solo color; 13:1 sobre --bg */
-  --grad: linear-gradient(135deg, #00f5a0, #00f2fe); /* el degradado de la marca: botones principales, avatar, filtro elegido */
+  /* En la interfaz el verde→cian va con menos luz que en el logo («marca serena»): a pleno brillo encandilaba. */
+  --accent: #14b8a6;         /* texto e íconos de un solo color; 7,7:1 sobre --bg */
+  --grad: linear-gradient(135deg, #00b886, #00a6c8); /* botones principales, avatar, filtro elegido */
   --on-accent: #090D16;
   --glass: rgb(255 255 255 / .06); /* superficies sobre el fondo: dejan pasar el color de atrás */
   --danger: #ff8a8a;
@@ -19,7 +20,7 @@
   --t-folder: #b98aff;
   --t-image: #ff86a2;
   --t-video: #fb923c;
-  --t-audio: #00f3cf; /* igual al acento: dos cyan parecidos se verían como un error */
+  --t-audio: #14b8a6; /* igual al acento: dos cyan parecidos se verían como un error */
   --t-doc: #60a5fa;
 
   --radius: 14px;
@@ -87,7 +88,7 @@ dialog:focus-visible { outline: none; }
 /* ---- Login ---- */
 .login { min-height: 100dvh; display: grid; place-items: center; padding: 24px var(--gutter); }
 .login-card { width: 100%; max-width: 360px; text-align: center; }
-.logo { display: block; width: 96px; height: 96px; margin: 0 auto 14px; filter: drop-shadow(0 12px 28px rgb(0 243 207 / .35)); }
+.logo { display: block; width: 96px; height: 96px; margin: 0 auto 14px; filter: drop-shadow(0 12px 28px rgb(20 184 166 / .35)); }
 .login h1 { font-size: 1.75rem; letter-spacing: -.02em; }
 .login .muted { margin: 6px 0 28px; }
 .login form { display: grid; gap: 8px; text-align: left; }
