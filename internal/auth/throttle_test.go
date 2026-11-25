@@ -113,6 +113,32 @@ func TestWrapDBErrorIsNot401(t *testing.T) {
 	}
 }
 
+// Alive deja de valer al desactivar la cuenta o cerrar la sesión: con eso los flujos de jam ya abiertos terminan.
+func TestAlive(t *testing.T) {
+	s := newService(t)
+	w := httptest.NewRecorder()
+	s.Login(w, httptest.NewRequest("POST", "/api/login", strings.NewReader(`{"name":"ana","pass":"clave-segura"}`)))
+	r := httptest.NewRequest("GET", "/api/jam/stream", nil)
+	for _, c := range w.Result().Cookies() {
+		r.AddCookie(c)
+	}
+	if !s.Alive(r) {
+		t.Fatal("sesión recién abierta: no vigente")
+	}
+	if s.Alive(httptest.NewRequest("GET", "/", nil)) {
+		t.Fatal("sin cookie: vigente")
+	}
+	s.DB.Exec(`UPDATE users SET disabled = 1`)
+	if s.Alive(r) {
+		t.Fatal("cuenta desactivada: sigue vigente")
+	}
+	s.DB.Exec(`UPDATE users SET disabled = 0`)
+	s.DB.Exec(`DELETE FROM sessions`)
+	if s.Alive(r) {
+		t.Fatal("sesión cerrada: sigue vigente")
+	}
+}
+
 // Si poner la clave falla, la invitación no queda gastada.
 func TestAcceptAtomic(t *testing.T) {
 	s := newService(t)

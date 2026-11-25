@@ -43,8 +43,7 @@ let user = ''; // dueño de la cola guardada en este navegador
 let counted = false; // la pista actual ya se anotó en el historial
 let savedAt = 0;
 let resume = 0; // posición restaurada que el audio aún no ha cargado
-let epoch = 0; // cambia al reemplazar la cola: descarta sugerencias pedidas para lo anterior
-let filling = false;
+let pausedAt = 0; // cuándo se pausó el audio: un flujo que lleva rato en pausa pudo cerrarse sin avisar
 
 // Sala de reproducción (jam.js): con sala, la cola y la posición son las del servidor y este reproductor
 // las refleja; cada acción se manda como comando en vez de cambiar el estado local. Hay sala cuando elijo
@@ -119,7 +118,6 @@ function keepDownloaded(at, play) {
   if (!now) return;
   queue = queue.filter((t) => offline.has(t.path));
   order = order.filter((t) => offline.has(t.path));
-  epoch++;
   const i = queue.indexOf(now);
   if (queue.length) return load(Math.max(0, i), { play: play && i >= 0, at: i < 0 ? 0 : at });
   audio.pause(); // nada de la cola está descargado: el reproductor se guarda
@@ -179,7 +177,7 @@ function deckTick() {
   }
   const at = deckTime();
   if (!audio.paused && at >= 30) count();
-  if (Date.now() - savedAt > 5000) { save(); positionState(); } // y se corrige la deriva cada 5 s
+  if (Date.now() - savedAt > 5000) { saveAt(); positionState(); } // y se corrige la deriva cada 5 s
   if (seeking) return;
   for (const s of seeks) setSeek(s, deck.lens[pos] ? at / deck.lens[pos] : 0);
   paintTimes(at, deck.lens[pos]);
@@ -246,39 +244,10 @@ function present(t, at) {
   syncPlayButton();
   paintQueue();
   save();
-  refill();
 }
 
-// Sugerencias: cuando a la cola le quedan menos de 6 pistas, el servidor propone qué sigue y la música no se detiene.
-async function refill() {
-  // En una sala las sugerencias las pone el servidor; sin conexión se agregan al armar la cola (playAt), porque
-  // cambiarla después obliga a rearmar el audio unido.
-  if (local || room || filling || repeat || pos < 0 || queue.length - pos > 6) return;
-  filling = true;
-  const e = epoch;
-  let add = [];
-  // El servidor propone parecidas a la que suena; sin semilla salen al azar, por si todas ya están en la cola.
-  // La semilla es lo último que alguien puso a mano, no la sugerencia que suena: así la cola no se va alejando
-  // del género con el que empezó. Se toma antes de esperar: la cola puede cambiar entre un intento y otro.
-  const playing = (queue.findLast((t) => !t.auto) || queue[pos]).path;
-  for (const seed of [playing, '']) {
-    try {
-      const r = await api(`/api/music/radio?path=${encodeURIComponent(seed)}`);
-      const more = r.ok ? await r.json() : [];
-      const have = new Set(queue.map((t) => t.path)); // después de esperar: la cola pudo crecer
-      add = more.filter((t) => !have.has(t.path)).slice(0, 20).map((t) => ({ ...t, auto: true }));
-    } catch {} // sin conexión: la cola termina como antes
-    if (add.length) break;
-  }
-  filling = false;
-  if (e !== epoch) return refill();
-  if (!add.length) return;
-  queue.push(...add);
-  order.push(...add);
-  paintQueue();
-  save();
-  if (audio.ended) next(); // la cola se acabó mientras llegaban
-}
+// Las sugerencias cuando la cola se acaba las pone el servidor en la sala (extend, jam.go) y llegan marcadas (auto)
+// con la foto; sin conexión se agregan al armar la cola (playAt).
 
 // playAt reemplaza la cola por tracks y empieza en la pista i.
 export function playAt(tracks, i) {
@@ -297,7 +266,6 @@ export function playAt(tracks, i) {
   }
   order = tracks.map((t) => ({ ...t })); // copias: la misma pista puede estar dos veces en la cola
   manual = 0;
-  epoch++;
   if (shuffle) {
     const first = order[i];
     queue = [first, ...mix(order.filter((t) => t !== first))];
@@ -404,8 +372,10 @@ document.addEventListener('click', (e) => {
     repeat = (repeat + 1) % 3;
     syncToggles();
     save();
-    if (room) jam.send('repeat', { repeat }); // sala propia del flujo: el servidor decide qué suena al terminar
-    else refill();
+    if (room) { // sala propia del flujo: el servidor decide qué suena al terminar
+      room.repeat = repeat; // syncRoom toma el de la sala: que no lo devuelva mientras llega la respuesta
+      jam.send('repeat', { repeat });
+    }
   }
   else if (act === 'queue') openQueue();
 });
@@ -440,9 +410,10 @@ export function markPlaying() {
   const current = queue[pos]?.path;
   for (const r of document.querySelectorAll('[data-track]')) {
     const on = r.dataset.track === current;
+    if (!on && !r.classList.contains('playing')) continue; // ni estaba ni queda marcada: una lista larga no se reescribe entera
     r.classList.toggle('playing', on);
     if (on) r.setAttribute('aria-current', 'true'); else r.removeAttribute('aria-current');
-    r.querySelector('.num')?.replaceChildren(on ? icon(playing() ? 'play' : 'pause') : String([...r.closest('ul').children].indexOf(r.parentElement) + 1));
+    r.querySelector('.num')?.replaceChildren(on ? icon(playing() ? 'play' : 'pause') : r.dataset.n); // el número lo dejó trackList (music.js)
   }
   syncToggles();
 }
@@ -463,7 +434,7 @@ function syncPlayButton() {
   markPlaying();
 }
 audio.onplay = syncPlayButton;
-audio.onpause = () => { syncPlayButton(); save(); };
+audio.onpause = () => { pausedAt = Date.now(); syncPlayButton(); save(); };
 audio.onended = () => {
   if (deck) { // se acabó el audio unido: toda la cola
     count();
@@ -539,7 +510,8 @@ export function toggle() {
     }
     // El flujo en pausa pudo cerrarse (Cloudflare corta una conexión que pasa un rato sin datos): se abre otro
     // aquí mismo, dentro del toque. Si se abriera al llegar la respuesta del servidor, Safari no lo dejaría sonar.
-    if (!stream || !audio.src || audio.ended || audio.error) return streamDo('seek', { at: roomTime() });
+    // Un cierre limpio no deja rastro en el audio (sonaría el colchón y se callaría): tras 60 s en pausa se da por cerrado.
+    if (!stream || !audio.src || audio.ended || audio.error || Date.now() - pausedAt > 60000) return streamDo('seek', { at: roomTime() });
     audio.play().catch(warnPlay);
     return void jam.send('play');
   }
@@ -615,12 +587,19 @@ export function setTail(list, m) {
 // Cola, pista y posición se recuerdan en este navegador para retomar al volver a abrir la app.
 
 const KEEP = 500; // pistas guardadas alrededor de la actual: localStorage tiene cupo
-function save() {
+// saveAt guarda solo el segundo de la pista actual, en su propia clave: es lo único que cambia mientras suena, y
+// reescribir la cola (hasta 500 pistas) cada 5 s es mucho para un celular. Falso si no hay nada que guardar.
+function saveAt() {
   savedAt = Date.now();
-  // Con conexión siempre hay sala: se guarda su cola para retomarla al volver a abrir la app.
-  if (pos < 0 || !user) return;
+  if (pos < 0 || !user) return false;
   // Sin conexión, un cambio en la cola (agregar, quitar, barajar) obliga a rearmar el audio unido donde iba.
   if (deck && !deckBusy && deck.key !== deckKey()) deckOpen(deckTime(), !audio.paused);
+  try { localStorage.setItem('palobox.player.at', JSON.stringify({ path: queue[pos].path, at: deck ? deckTime() : resume })); } catch {}
+  return true;
+}
+function save() {
+  // Con conexión siempre hay sala: se guarda su cola para retomarla al volver a abrir la app.
+  if (!saveAt()) return;
   const from = Math.max(0, pos - 50);
   try {
     localStorage.setItem('palobox.player', JSON.stringify({
@@ -648,6 +627,8 @@ export function restore(name) {
   let s;
   try { s = JSON.parse(localStorage.getItem('palobox.player')); } catch {}
   if (!s || s.user !== name || !Array.isArray(s.queue) || !s.queue[s.pos]?.path) return;
+  // El segundo se guarda aparte (saveAt) y es más reciente; si no está o es de otra pista, vale el de la cola.
+  try { const p = JSON.parse(localStorage.getItem('palobox.player.at')); if (p?.path === s.queue[s.pos].path && p.at >= 0) s.at = p.at; } catch {}
   setVolume(s.volume ?? 1);
   document.body.classList.add('paused'); // la cola restaurada empieza en pausa: que no asome fuera de Música
   queue = s.queue;
@@ -681,7 +662,6 @@ export function reset() {
   document.body.classList.remove('in-room');
   queue = order = [];
   pos = -1;
-  epoch++;
   user = '';
   for (const d of [$('#np'), $('#queue'), $('#jam')]) d.close();
   $('#player').hidden = true;
@@ -722,9 +702,11 @@ export function startRoom(extra = {}) {
 }
 
 // syncRoom deja este reproductor igual a la sala: misma cola, misma pista y, si suena aquí, misma posición.
+let savedRev = ''; // sala y versión de la cola ya guardadas en este navegador
 function syncRoom() {
   queue = order = room.queue;
   manual = room.manual || 0;
+  repeat = room.repeat ?? repeat; // el de la sala: así dos dispositivos no discrepan sobre qué sigue
   const t = queue[room.pos];
   if (!t) { // sala recién creada sin música
     audio.pause();
@@ -732,7 +714,11 @@ function syncRoom() {
     $('#player').hidden = true;
     document.body.classList.remove('has-player');
   } else {
-    if (pos !== room.pos || curPath !== t.path) load(room.pos, { play: false, at: roomTime() });
+    const rev = room.code + room.qrev;
+    if (pos !== room.pos || curPath !== t.path) load(room.pos, { play: false, at: roomTime() }); // y guarda la cola
+    // La cola cambió sin cambiar de pista (alguien agregó, llegaron sugerencias): el tic de 5 s ya solo guarda el segundo.
+    else if (rev !== savedRev) save();
+    savedRev = rev;
     if (!here) {
       audio.pause();
       stream = null;
@@ -758,7 +744,7 @@ function syncStream(t) {
   const mark = { pos: room.pos, origin, end: origin + (t.dur || 0) * 1000 };
   const steady = stream && audio.src && (
     (room.pos === stream.pos && Math.abs(origin - stream.origin) < 1500) // la misma pista, sin saltos
-    || (room.pos === stream.pos + 1 && Math.abs(origin - stream.end) < 3000) // pasó sola a la siguiente
+    || (room.pos === after(stream.pos) && Math.abs(origin - stream.end) < 3000) // pasó sola a la que sigue (con repetir: la misma o la primera)
     || (stream.held != null && room.pos === stream.pos && Math.abs(room.at - stream.held) < 1.5)); // se reanudó donde estaba
   if (steady) {
     stream = mark;
@@ -774,6 +760,8 @@ function syncStream(t) {
   stream = mark;
   openStream();
 }
+// after: qué pista suena cuando termina la i, o -1 si la cola se acaba ahí. La misma regla que after() en jam.go.
+const after = (i) => (repeat === 2 ? i : i + 1 < queue.length ? i + 1 : repeat === 1 && queue.length ? 0 : -1);
 function openStream() {
   audio.src = `/api/jam/stream?device=${jam.deviceId}&t=${Date.now()}`;
   audio.play().then(() => (warned = false)).catch(streamBlocked);
@@ -867,6 +855,7 @@ function streamLost() {
 // sabe en qué pista va: en los dos casos el avance se calcula con el reloj de la sala.
 let stateAt = 0;
 let askedAt = 0;
+let asking = false; // hay una pregunta «state» sin responder
 function paintRemote() {
   if (!room || pos < 0) return;
   if (streaming() && room.playing) {
@@ -874,16 +863,24 @@ function paintRemote() {
     // deduce aquí con su mismo reloj (el servidor avanza justo al final), para que la pantalla de bloqueo
     // muestre la canción que suena. La foto que llegue después dirá lo mismo.
     const length = queue[pos].dur || 0;
-    if (length > 0 && roomTime() >= length && room.pos === pos && queue[pos + 1]) {
-      room = { ...room, pos: pos + 1, at: 0, stamp: room.stamp + (length - room.at) * 1000 };
+    const n = after(pos);
+    if (length > 0 && roomTime() >= length && room.pos === pos && n >= 0) {
+      room = { ...room, pos: n, at: 0, stamp: room.stamp + (length - room.at) * 1000 };
       return syncRoom();
     }
     resume = Math.min(roomTime(), queue[pos].dur || Infinity); // para retomar aquí si la sala se cierra
     if (resume >= 30) count();
-    if (Date.now() - stateAt > 5000) { stateAt = Date.now(); positionState(); save(); }
-    // En segundo plano el flujo de eventos puede morir y nadie avisaría de un cambio hecho desde otro dispositivo:
-    // se pregunta cada segundo (este código lo mueve timeupdate, que sí corre con la pantalla bloqueada).
-    if (document.visibilityState !== 'visible' && Date.now() - askedAt > 1000) { askedAt = Date.now(); jam.send('state', {}, true); }
+    if (Date.now() - stateAt > 5000) { stateAt = Date.now(); positionState(); saveAt(); }
+    // En segundo plano el flujo de eventos puede morir y nadie avisaría de un cambio hecho desde otro dispositivo.
+    // Mientras lleguen sus mensajes (el servidor manda uno cada 25 s) no hace falta preguntar; si callan, se pregunta
+    // cada 5 s y de a una petición (este código lo mueve timeupdate, que sí corre con la pantalla bloqueada).
+    // Una pregunta que lleva 30 s sin respuesta se da por perdida: en segundo plano la red puede dejarla colgada.
+    const since = Date.now() - askedAt;
+    if (document.visibilityState !== 'visible' && Date.now() - jam.heard() > 26000 && since > (asking ? 30000 : 5000)) {
+      askedAt = Date.now();
+      asking = true;
+      jam.send('state', {}, true).finally(() => (asking = false));
+    }
   }
   if (seeking) return;
   const d = queue[pos].dur || 0;

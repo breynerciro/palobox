@@ -66,7 +66,7 @@ func open(data string) (*app, error) {
 		uploads: uploads.New(db, data, cloudThumbs),
 		music:   lib,
 		spotdl:  &spotdl.Handler{Full: lib.Full, Playlist: lib.ImportPlaylist},
-		jam:     &jam.Hub{Lookup: lib.ByPaths, More: lib.Random, Audio: lib.OpenStream},
+		jam:     &jam.Hub{Lookup: lib.ByPaths, More: lib.Random, Audio: lib.OpenStream, Alive: au.Alive},
 	}, nil
 }
 

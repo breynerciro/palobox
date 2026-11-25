@@ -186,6 +186,71 @@ func TestCutMark(t *testing.T) {
 	}
 }
 
+// cmdView manda un comando de ana desde su teléfono y devuelve la foto.
+func cmdView(t *testing.T, h *Hub, body string) view {
+	t.Helper()
+	w := httptest.NewRecorder()
+	if err := h.Cmd(w, httptest.NewRequest("POST", "/api/jam", strings.NewReader(body)), httpx.User{Name: "ana"}); err != nil {
+		t.Fatal(err)
+	}
+	var v view
+	json.Unmarshal(w.Body.Bytes(), &v)
+	return v
+}
+
+// «state» solo devuelve la foto: el teléfono que pregunta en segundo plano no despierta a los demás dispositivos.
+func TestStateDoesNotNotify(t *testing.T) {
+	h := &Hub{Lookup: func(p []string) ([]music.Track, error) { return []music.Track{{Path: p[0], Dur: 60}}, nil }}
+	other := &conn{id: "anaparlante", name: "parlante", wake: make(chan struct{}, 1)}
+	h.mu.Lock()
+	h.get("ana").conns[other.id] = other
+	h.mu.Unlock()
+	cmdView(t, h, `{"device":"anatelefono","op":"start","paths":["a.mp3"],"playing":true}`)
+	<-other.wake
+	if v := cmdView(t, h, `{"device":"anatelefono","op":"state"}`); v.Room == nil || !v.Room.Playing {
+		t.Fatalf("«state» no devolvió la sala: %+v", v)
+	}
+	select {
+	case <-other.wake:
+		t.Fatal("«state» despertó a otro dispositivo")
+	default:
+	}
+	cmdView(t, h, `{"device":"anatelefono","op":"pause"}`)
+	select {
+	case <-other.wake:
+	default:
+		t.Fatal("«pause» no avisó al otro dispositivo")
+	}
+}
+
+// La foto dice el modo de repetir y cuáles pistas de la cola son sugerencias.
+func TestViewRepeatAndAuto(t *testing.T) {
+	h := &Hub{
+		Lookup: func(p []string) ([]music.Track, error) { return []music.Track{{Path: p[0], Dur: 60}}, nil },
+		More:   func(int, string) ([]music.Track, error) { return []music.Track{{Path: "sug.mp3", Dur: 60}}, nil },
+	}
+	if v := cmdView(t, h, `{"device":"anatelefono","op":"start","paths":["a.mp3"],"playing":true,"repeat":2}`); v.Room.Repeat != 2 || v.Room.Auto != nil {
+		t.Fatalf("repeat %d, sugerencias %v; quería 2 y ninguna", v.Room.Repeat, v.Room.Auto)
+	}
+	cmdView(t, h, `{"device":"anatelefono","op":"repeat","repeat":0}`)
+	v := cmdView(t, h, `{"device":"anatelefono","op":"next"}`)
+	if v.Room.Repeat != 0 || v.Room.Queue == nil || len(*v.Room.Queue) != 2 || !slices.Equal(v.Room.Auto, []int{1}) {
+		t.Fatalf("repeat %d, sugerencias %v; quería 0 y [1]", v.Room.Repeat, v.Room.Auto)
+	}
+}
+
+// Con la sesión cerrada o la cuenta desactivada el flujo termina al cambiar de pista, sin abrir la siguiente.
+func TestStreamEndsWhenSessionDies(t *testing.T) {
+	var mu sync.Mutex
+	calls := 0
+	h := &Hub{Alive: func(*http.Request) bool { mu.Lock(); defer mu.Unlock(); calls++; return calls == 1 }}
+	room, opened, _ := streamHub(t, h, []music.Track{{Path: "a.mp3", Dur: 0.5}, {Path: "b.mp3", Dur: 5}}, 0, "")
+	waitRoom(t, h, func() bool { return room.streams == 0 })
+	if got := opened(); !slices.Equal(got, []string{"a.mp3"}) {
+		t.Fatalf("abrió %v; quería solo a.mp3", got)
+	}
+}
+
 // En un jam cualquiera elige dónde suena entre los dispositivos de todos: solo en uno, o sumando otro.
 func TestJamPicksDevices(t *testing.T) {
 	h := &Hub{Lookup: func(p []string) ([]music.Track, error) { return []music.Track{{Path: p[0], Dur: 60}}, nil }}
