@@ -30,6 +30,32 @@ const store = () => { try { localStorage.setItem(KEY, JSON.stringify(state)); re
 const held = new Map(); // ruta → Blob ya leído de la caché: rearmar el audio unido no vuelve a consultarla
 
 export let active = false; // la app está funcionando sin servidor
+// Versión compacta: lo descargado va en Opus a 64 kbps (la mitad del espacio, con una pérdida pequeña). Esas pistas no
+// se pueden unir en un solo archivo: el reproductor las agrega una tras otra al mismo audio con MediaSource, así que
+// solo se usa donde eso existe y está probado. En el iPhone (que solo trae ManagedMediaSource) queda apagada salvo
+// que se active a mano para probarla: localStorage['palobox.opus'] = '1'.
+const OPUS = 'audio/webm; codecs="opus"';
+const canOpus = () => {
+  try {
+    const MS = globalThis.MediaSource || (localStorage.getItem('palobox.opus') === '1' && globalThis.ManagedMediaSource);
+    return !!MS && MS.isTypeSupported(OPUS);
+  } catch { return false; }
+};
+// compact: lo que hay descargado en este celular está en la versión compacta. Todo lo descargado va en un mismo formato.
+export const compact = () => state.fmt === 'opus';
+// canCompact: hay descargas en el formato original y este celular podría tenerlas en el compacto.
+export const canCompact = () => !compact() && count() > 0 && canOpus();
+// toCompact suelta el audio descargado y deja todas las pistas pendientes de bajar en la versión compacta; las devuelve.
+export async function toCompact() {
+  const ts = all().map(slim);
+  try { await caches.delete(AUDIO); } catch {}
+  held.clear();
+  state.tracks = {};
+  state.fmt = 'opus';
+  state.pending = ts;
+  store();
+  return ts;
+}
 export const audioUrl = (path) => `/api/music/offline?path=${encodeURIComponent(path)}`;
 const thumb = (dir) => `/api/media/thumb?lib=musica&path=${encodeURIComponent(dir)}`;
 export const enabled = () => !!state.user; // quién puede descargar: cualquiera que inició sesión en este celular
@@ -101,14 +127,18 @@ export async function download(tracks, onProgress = () => {}) {
     bad += lost.length;
     lost = [];
   };
+  if (!count()) state.fmt = canOpus() ? 'opus' : ''; // con el celular vacío se elige el formato; después todo va igual
+  const small = compact();
   queue(tracks);
   for (const t of tracks) {
     if (!state.tracks[t.path]) {
-      const r = await fetch(audioUrl(t.path));
+      const r = await fetch(audioUrl(t.path) + (small ? '&fmt=opus' : ''));
       // Sesión vencida o servidor caído detrás del túnel: pasa con todas, así que se reintenta después como un fallo de red.
       if (r.status === 401 || r.status >= 500) throw new Error(`No se pudo descargar «${t.title}».`);
       const buf = r.ok ? await r.arrayBuffer() : new ArrayBuffer(0);
-      const frames = countFrames(new Uint8Array(buf));
+      // El compacto es un WebM: se reconoce por su marca; su duración es la del índice del servidor.
+      const head = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
+      const frames = small ? +(buf.byteLength > 1000 && head[0] === 0x1A && head[1] === 0x45 && head[2] === 0xDF && head[3] === 0xA3) : countFrames(new Uint8Array(buf));
       if (!frames) { // el servidor ya no la tiene o llegó dañada: se suelta para que no frene a las demás en cada reintento
         lost.push(t.path);
         if (lost.length >= 5) throw new Error('El servidor no está entregando la música.');
@@ -116,12 +146,12 @@ export async function download(tracks, onProgress = () => {}) {
         continue;
       }
       drop();
-      await c.put(audioUrl(t.path), new Response(buf, { headers: { 'Content-Type': 'audio/mpeg' } }));
+      await c.put(audioUrl(t.path), new Response(buf, { headers: { 'Content-Type': small ? 'audio/webm' : 'audio/mpeg' } }));
       if (t.albumPath && !(await c.match(thumb(t.albumPath)))) { // la carátula, para verla sin conexión (sw.js la sirve)
         const img = await fetch(thumb(t.albumPath)).catch(() => null);
         if (img?.ok) await c.put(thumb(t.albumPath), img);
       }
-      state.tracks[t.path] = { t: slim(t), frames, bytes: buf.byteLength, dur: frames * FRAME };
+      state.tracks[t.path] = { t: slim(t), frames, bytes: buf.byteLength, dur: small ? t.dur || 0 : frames * FRAME };
       state.pending = state.pending.filter((x) => x.path !== t.path);
       if (!store()) { // no cupo la anotación: sin ella el audio quedaría ocupando espacio sin poderse usar
         delete state.tracks[t.path];
