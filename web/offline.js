@@ -1,7 +1,7 @@
 // Modo sin conexión (todas las cuentas): descargar música al celular y usar la app sin servidor. Sin conexión toda
 // cuenta queda como de solo música: Fotos, Archivos y Administración necesitan el servidor.
 //
-// - El audio se guarda ya «limpio» (/api/music/offline: solo cuadros MP3, sin etiquetas) en la caché del
+// - El audio se guarda ya «limpio» (/api/music/offline: solo cuadros AAC con cabecera ADTS, sin etiquetas) en la caché del
 //   navegador. Así varias canciones se unen una tras otra en un solo audio (player.js), que es lo que deja pasar
 //   de canción con la pantalla bloqueada en iPhone sin cargar nada.
 // - Los datos (qué está descargado, sus álbumes, playlists y me gusta) van en localStorage.
@@ -10,9 +10,9 @@
 // Jam, Connect, descargas de Spotify y cualquier cambio (me gusta, playlists) necesitan conexión.
 const AUDIO = 'palobox-offline-audio';
 const KEY = 'palobox.offline';
-const HZ = 48000; // todo lo descargado es MPEG-1 capa III a 48 kHz en estéreo (StreamHz en el servidor)
-const FRAME = 1152 / HZ; // segundos de cada cuadro MP3
-const VERSION = 2; // formato de lo guardado: si cambia, lo descargado antes no se puede unir con lo nuevo
+const HZ = 44100; // todo lo descargado es AAC-LC a 44,1 kHz en estéreo (StreamHz en el servidor)
+const FRAME = 1024 / HZ; // segundos de cada cuadro AAC
+const VERSION = 3; // formato de lo guardado: si cambia, lo descargado antes no se puede unir con lo nuevo
 const MAX_AWAY = 30 * 24 * 3600 * 1000; // sin pasar por el servidor en este tiempo (lo que dura una sesión), ya no se entra
 const blank = () => ({ v: VERSION, user: '', seen: 0, tracks: {}, albums: {}, artists: {}, playlists: {}, likes: [], top: [], recent: [], pending: [] });
 let state = blank();
@@ -64,14 +64,14 @@ export async function wipe() {
   try { await caches.delete(AUDIO); } catch {}
 }
 
-// countFrames cuenta los cuadros de un MP3 ya limpio: con eso se sabe su duración exacta dentro del audio unido.
+// countFrames cuenta los cuadros de un audio ya limpio (AAC con cabecera ADTS): con eso se sabe su duración exacta
+// dentro del audio unido. Cada cabecera dice cuánto mide su cuadro; lo que no empiece por una cabecera se salta.
 export function countFrames(b) {
-  const kbps = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
   let n = 0;
-  for (let i = 0; i + 4 <= b.length;) {
-    const k = b[i] === 0xFF && (b[i + 1] & 0xFE) === 0xFA && ((b[i + 2] >> 2) & 3) === 1 ? kbps[b[i + 2] >> 4] : 0;
-    if (!k) { i++; continue; }
-    i += Math.floor(144000 * k / HZ) + ((b[i + 2] >> 1) & 1);
+  for (let i = 0; i + 7 <= b.length;) {
+    const size = b[i] === 0xFF && (b[i + 1] & 0xF6) === 0xF0 ? ((b[i + 3] & 3) << 11) | (b[i + 4] << 3) | (b[i + 5] >> 5) : 0;
+    if (size < 7) { i++; continue; }
+    i += size;
     n++;
   }
   return n;
@@ -116,7 +116,7 @@ export async function download(tracks, onProgress = () => {}) {
         continue;
       }
       drop();
-      await c.put(audioUrl(t.path), new Response(buf, { headers: { 'Content-Type': 'audio/mpeg' } }));
+      await c.put(audioUrl(t.path), new Response(buf, { headers: { 'Content-Type': 'audio/aac' } }));
       if (t.albumPath && !(await c.match(thumb(t.albumPath)))) { // la carátula, para verla sin conexión (sw.js la sirve)
         const img = await fetch(thumb(t.albumPath)).catch(() => null);
         if (img?.ok) await c.put(thumb(t.albumPath), img);
