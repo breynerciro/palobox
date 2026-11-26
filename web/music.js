@@ -3,7 +3,7 @@ import { $, el, icon, json, joinText, plural, size, clock, lazyImg, toast, ask, 
 import { withCatalog } from './catalog.js';
 import { route, href, go, thumbUrl, render } from './nav.js';
 import { api, hasAI, takeWarm } from './session.js';
-import { playAt, playNext, enqueue, audio, purge } from './player.js';
+import { playAt, playNext, enqueue, audio, purge, isLocal } from './player.js';
 import * as offline from './offline.js';
 
 const OFFLINE = 'Sin conexión con el servidor.';
@@ -183,7 +183,19 @@ let downloading = false;
 // resumeDownloads retoma lo que quedó a medias si la app se cerró o el sistema la detuvo.
 export function resumeDownloads() {
   const left = offline.pending();
-  if (!downloading && left.length && canDownload() && document.visibilityState === 'visible') fetchOffline(left);
+  if (downloading || !canDownload() || document.visibilityState !== 'visible') return;
+  if (left.length) fetchOffline(left);
+  else if (offline.needsCompact() && !isLocal()) compactAll();
+}
+// compactAll pasa lo ya descargado al formato compacto, solo y sin avisos: el usuario no pierde nada mientras dura
+// (offline.toCompact) y, si se interrumpe, sigue la próxima vez que abra la app con conexión. No arranca mientras
+// suena desde lo descargado: el cambio suelta los archivos de los que ese audio está hecho.
+async function compactAll() {
+  downloading = true;
+  try { await offline.toCompact(); } catch (e) { console.warn('El paso al formato compacto sigue después:', e?.message); }
+  downloading = false;
+  const queued = offline.pending(); // lo que se pidió mientras tanto
+  if (queued.length && canDownload()) fetchOffline(queued);
 }
 document.addEventListener('visibilitychange', resumeDownloads);
 // fetchOffline baja las pistas al celular mostrando el avance; playlist: la lista que se descarga, para recordarla.

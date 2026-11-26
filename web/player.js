@@ -79,6 +79,7 @@ export const playing = () => (room && !here ? room.playing : !audio.paused);
 // local: el reproductor suena desde lo descargado. Sigue así un rato después de volver la conexión (goOnline)
 // para no cortar la canción; por eso es distinto de offline.active, que es el modo de la app.
 let local = false;
+export const isLocal = () => local; // suena desde lo descargado
 export function goOffline() {
   if (local) return void keepDownloaded(deckTime(), !audio.paused); // ya sonaba desde lo descargado
   local = true;
