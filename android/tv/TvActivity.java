@@ -38,6 +38,7 @@ public class TvActivity extends WebViewFallbackActivity {
     private String artUrl = "";
     private Bitmap art;
     private MediaMetadata.Builder meta;
+    private boolean wasPlaying;
 
     private final Intent service() { return new Intent(this, PlaybackService.class); }
 
@@ -95,6 +96,10 @@ public class TvActivity extends WebViewFallbackActivity {
                                 | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_SEEK_TO)
                         .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED, o.optLong("pos"), playing ? 1f : 0f)
                         .build());
+                // Android avisa a quien muestra lo que suena (el inicio del televisor) cuando una sesión se activa, no
+                // cuando empieza a sonar: al arrancar se vuelve a activar para que pase a mostrar esta y no la de otra app.
+                if (playing && !wasPlaying) session.setActive(false);
+                wasPlaying = playing;
                 session.setActive(true);
             } catch (Exception ignored) { // un aviso mal formado no tumba la app
             }
