@@ -173,6 +173,8 @@ export function remember(lib) {
 // blobs entrega el audio guardado de cada ruta y lo que dura, para unirlo en un solo audio.
 export async function blobs(paths) {
   const c = await caches.open(AUDIO);
+  const want = new Set(paths);
+  for (const p of held.keys()) if (!want.has(p)) held.delete(p); // lo que ya no entra en el audio unido no se queda en memoria
   return Promise.all(paths.map(async (p) => {
     if (!held.has(p)) {
       const r = await c.match(audioUrl(p));
@@ -185,6 +187,15 @@ export async function blobs(paths) {
     }
     return { blob: held.get(p), secs: state.tracks[p].dur };
   }));
+}
+
+// span dice qué tramo [from, to) de una cola entra en el audio unido si se arma para la pista i: una antes (para
+// devolverse sin rearmar) y las que sigan hasta completar max segundos. durs: la duración de cada pista de la cola.
+export function span(durs, i, max) {
+  const from = Math.max(0, i - 1);
+  let to = from;
+  for (let secs = 0; to < durs.length && (to <= i || secs + (durs[to] || 240) <= max); to++) secs += durs[to] || 240;
+  return [from, to];
 }
 
 // Búsqueda con la misma tolerancia del servidor (internal/music/search.go): ortografía distinta que suena igual

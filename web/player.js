@@ -144,39 +144,51 @@ let stream = null; // { pos, origin, end, held }: qué traía la sala cuando se 
 const streaming = () => !local && !!room && here;
 const dur = () => (deck ? deck.lens[pos] : 0) || queue[pos]?.dur || 0; // el flujo no tiene duración: vale la de la pista
 
-// Sin conexión toda la cola es un solo audio: las canciones descargadas, ya limpias, unidas una tras otra. El
-// teléfono nunca carga un audio nuevo al pasar de canción (lo que iOS no siempre deja con la pantalla bloqueada),
-// y saltar es moverse dentro del mismo audio. deck guarda dónde empieza y cuánto dura cada pista en ese audio.
-let deck = null; // { key, url, starts, lens }
+// Sin conexión la cola suena como un solo audio: las canciones descargadas, ya limpias, unidas una tras otra. El
+// teléfono no carga un audio nuevo al pasar de canción (lo que iOS no siempre deja con la pantalla bloqueada), y
+// saltar es moverse dentro del mismo audio. Se une un tramo de la cola y no toda: con 167 canciones (545 MB en
+// un solo audio) el iPhone no lo abría. deck guarda qué tramo es, y dónde empieza y cuánto dura cada pista en él.
+const DECK_SECS = 9000; // 2 h 30 min por tramo: unos 145 MB a 128 kbps
+let deck = null; // { key, url, from, to, starts, lens }: cubre queue[from..to); starts y lens van por índice de la cola
 let deckBusy = false;
-const deckKey = () => queue.map((t) => t.path).join('\n');
+const deckSpan = (i) => offline.span(queue.map((t) => t.dur), i, DECK_SECS);
+const spanKey = (from, to) => queue.slice(from, to).map((t) => t.path).join('\n');
+// deckHas: el audio unido que hay sirve para la pista i (la cubre, y ese tramo de la cola no cambió).
+const deckHas = (i) => !!deck && i >= deck.from && i < deck.to && spanKey(deck.from, deck.to) === deck.key;
 const deckTime = () => Math.max(0, audio.currentTime - (deck?.starts[pos] ?? 0)); // segundo dentro de la pista actual
-async function deckOpen(at, play) {
-  const key = deckKey();
-  if (deck?.key === key) audio.currentTime = deck.starts[pos] + at;
+// fresh: rearmar el tramo desde esta pista aunque el que hay todavía sirva.
+async function deckOpen(at, play, fresh = false) {
+  if (!fresh && deckHas(pos)) audio.currentTime = deck.starts[pos] + at;
   else {
+    const [from, to] = deckSpan(pos);
+    const key = spanKey(from, to);
     deckBusy = true;
     let parts;
-    try { parts = await offline.blobs(queue.map((t) => t.path)); } catch (e) { deckBusy = false; return void toast(e.message, { kind: 'warn', sticky: true }); }
+    try { parts = await offline.blobs(queue.slice(from, to).map((t) => t.path)); } catch (e) { deckBusy = false; return void toast(e.message, { kind: 'warn', sticky: true }); }
     deckBusy = false;
-    if (deckKey() !== key) return; // la cola cambió mientras se leía: ya viene otra apertura
+    if (deckSpan(pos)[0] !== from || spanKey(from, to) !== key) return; // la cola o la pista cambiaron mientras se leía: ya viene otra apertura
     if (deck) URL.revokeObjectURL(deck.url);
-    const starts = [];
+    const starts = [], lens = [];
     let total = 0;
-    for (const p of parts) { starts.push(total); total += p.secs; }
-    deck = { key, url: URL.createObjectURL(new Blob(parts.map((p) => p.blob), { type: 'audio/mpeg' })), starts, lens: parts.map((p) => p.secs) };
+    parts.forEach((p, k) => { starts[from + k] = total; lens[from + k] = p.secs; total += p.secs; });
+    deck = { key, from, to, url: URL.createObjectURL(new Blob(parts.map((p) => p.blob), { type: 'audio/mpeg' })), starts, lens };
     audio.src = deck.url;
     const target = deck.starts[pos] + at;
-    if (target > 0) audio.addEventListener('loadedmetadata', () => (audio.currentTime = target), { once: true });
+    // moving: el audio nuevo arranca en cero y solo después salta a su sitio; mientras tanto deckTick no debe
+    // creer que la música se devolvió a la primera pista del tramo.
+    const d = deck;
+    d.moving = target > 0;
+    if (target > 0) audio.addEventListener('loadedmetadata', () => { audio.currentTime = target; d.moving = false; }, { once: true });
   }
   if (play) audio.play().catch(warnPlay);
 }
 // deckTick sigue al audio unido: cuando pasa solo a la pista siguiente, aquí solo hay que pintarla.
 function deckTick() {
+  if (deck.moving) return;
   const now = audio.currentTime;
   let k = pos;
-  while (k + 1 < queue.length && now >= deck.starts[k + 1] - 0.02) k++;
-  while (k > 0 && now < deck.starts[k] - 0.02) k--;
+  while (k + 1 < deck.to && now >= deck.starts[k + 1] - 0.02) k++;
+  while (k > deck.from && now < deck.starts[k] - 0.02) k--;
   if (k !== pos) {
     if (repeat === 2 && k === pos + 1 && !audio.seeking) return void (audio.currentTime = deck.starts[pos]); // repetir esta canción
     if (k === pos + 1) count();
@@ -186,6 +198,10 @@ function deckTick() {
     curPath = queue[k].path;
     present(queue[k], 0);
     positionState(); // el audio unido no avisa el cambio de pista: sin esto la pantalla de bloqueo sigue con la anterior
+    // Con la app a la vista y el tramo ya por la mitad, se arma el siguiente desde esta pista: con la pantalla
+    // bloqueada el iPhone no siempre deja cargarlo, y así queda música para rato antes de bloquearla.
+    const left = deck.starts[deck.to - 1] + deck.lens[deck.to - 1] - now;
+    if (left < DECK_SECS / 2 && deckSpan(k)[1] > deck.to && document.visibilityState === 'visible') return void deckOpen(0, !audio.paused, true);
   }
   const at = deckTime();
   if (!audio.paused && at >= 30) count();
@@ -453,8 +469,13 @@ function syncPlayButton() {
 audio.onplay = syncPlayButton;
 audio.onpause = () => { pausedAt = Date.now(); syncPlayButton(); save(); };
 audio.onended = () => {
-  if (deck) { // se acabó el audio unido: toda la cola
+  if (deck) { // se acabó el audio unido: el tramo, o toda la cola
     count();
+    if (repeat === 2) return void load(pos); // repetir esta canción: era la última del tramo
+    if (deck.to < queue.length) { // sigue el tramo siguiente
+      manual = Math.max(0, manual - 1);
+      return void load(deck.to);
+    }
     return void (repeat === 1 && queue.length && load(0));
   }
   streamLost(); // el flujo no termina con cada pista: si se acabó es que se cortó
@@ -614,7 +635,7 @@ function saveAt() {
   savedAt = Date.now();
   if (pos < 0 || !user) return false;
   // Sin conexión, un cambio en la cola (agregar, quitar, barajar) obliga a rearmar el audio unido donde iba.
-  if (deck && !deckBusy && deck.key !== deckKey()) deckOpen(deckTime(), !audio.paused);
+  if (deck && !deckBusy && !deckHas(pos)) deckOpen(deckTime(), !audio.paused);
   try { localStorage.setItem('palobox.player.at', JSON.stringify({ path: queue[pos].path, at: deck ? deckTime() : resume })); } catch {}
   return true;
 }

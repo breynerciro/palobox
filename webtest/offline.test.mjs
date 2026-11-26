@@ -131,3 +131,12 @@ test('lo guardado con un formato anterior se descarta y la cuenta sigue', async 
   assert.equal(v1.count(), 0);
   assert.equal(JSON.parse(disk.get(KEY)).user, 'ana');
 });
+
+test('el audio unido cubre un tramo de la cola: una antes, la actual y lo que quepa', () => {
+  const durs = Array(10).fill(100);
+  assert.deepEqual(off.span(durs, 0, 350), [0, 3]); // 100 + 100 + 100 caben; la cuarta ya no
+  assert.deepEqual(off.span(durs, 5, 350), [4, 7]); // empieza una antes de la actual
+  assert.deepEqual(off.span(durs, 9, 350), [8, 10]); // al final de la cola no se pasa
+  assert.deepEqual(off.span([5000, 5000], 1, 100), [0, 2]); // la actual entra aunque sola ya supere el tope
+  assert.deepEqual(off.span([0, 0, 0], 0, 500), [0, 2]); // sin duración conocida cada pista cuenta como 4 minutos
+});
