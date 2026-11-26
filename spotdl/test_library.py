@@ -11,11 +11,11 @@ import library
 
 
 def biblioteca(music_dir, canciones):
-    """Crea <Artista>/<Álbum>/<Título>.mp3 vacíos y devuelve sus etiquetas por ruta, para
-    sustituir read_tags: (artista TPE1, álbum, título, duración, total de pistas)."""
+    """Crea <Artista>/<Álbum>/<Título>.m4a vacíos y devuelve sus etiquetas por ruta, para
+    sustituir read_tags: (artista, álbum, título, duración, total de pistas)."""
     tags = {}
     for artista, album, titulo, dur, total in canciones:
-        ruta = os.path.join(music_dir, artista.split("/")[0], album, titulo + ".mp3")
+        ruta = os.path.join(music_dir, artista.split("/")[0], album, titulo + ".m4a")
         os.makedirs(os.path.dirname(ruta), exist_ok=True)
         open(ruta, "wb").close()
         tags[ruta] = {"artists": artista.split("/"), "title": titulo, "duration": dur, "total": total}
@@ -44,7 +44,7 @@ class FiltroTest(unittest.TestCase):
         biblioteca(self.music, [("Penyair", "Nada", "Nada", 180, 1), ("Otra Banda", "Disco", "Canción Dos", 200, 9)])
         songs = [[["Otra Banda", "Invitado"], "Canción dos"], [["Nadie"], "No bajó"], [["Invitado", "Penyair"], "Nada"]]
         self.assertEqual(library.playlist_tracks(songs, library.index_library(self.music), self.music),
-                         ["Otra Banda/Disco/Canción Dos.mp3", "Penyair/Nada/Nada.mp3"])
+                         ["Otra Banda/Disco/Canción Dos.m4a", "Penyair/Nada/Nada.m4a"])
 
     def test_sencillo_en_disco_y_llega_el_album(self):
         self.assertEqual(self.filtrar([("Penyair", "Nada", "Nada", 180, 1)], self.cancion(pistas=12)), "baja")
@@ -86,19 +86,31 @@ class FiltroTest(unittest.TestCase):
         self.assertEqual(self.filtrar([("Penyair/Invitado", "La Ley del Todo", "Nada", 180, 12)], c), "salta")
 
     def test_lee_artistas_con_barra(self):
-        frame = lambda *t: mock.Mock(text=list(t))
-        audio = mock.Mock(tags={"TPE1": frame("AC/DC"), "TIT2": frame("Thunderstruck"), "TRCK": frame("1/10")})
+        audio = mock.Mock(tags={"\xa9ART": ["AC/DC"], "\xa9nam": ["Thunderstruck"], "trkn": [(1, 10)]})
         audio.info.length = 292.0
-        mp3 = mock.Mock(MP3=mock.Mock(return_value=audio))
-        with mock.patch.dict(sys.modules, {"mutagen": mock.Mock(), "mutagen.mp3": mp3}):
-            tags = library.read_tags("x.mp3")
+        mp4 = mock.Mock(MP4=mock.Mock(return_value=audio))
+        with mock.patch.dict(sys.modules, {"mutagen": mock.Mock(), "mutagen.mp4": mp4}):
+            tags = library.read_tags("x.m4a")
         self.assertEqual(tags, {"artists": ["AC/DC", "AC", "DC"], "title": "Thunderstruck", "duration": 292.0, "total": 10})
 
-    def test_borra_solo_mp3_a_medias_del_trabajo(self):
-        disco = {"vieja.mp3": "", "a_medias.mp3": "", "buena.mp3": "Buena", "danada.mp3": None, "nota.txt": "", "de_samba.mp3": ""}
+    def test_une_los_artistas_de_lo_nuevo(self):
+        for name in ("nueva.m4a", "vieja.m4a", "sola.m4a"):
+            open(os.path.join(self.music, name), "w").close()
+        os.utime(os.path.join(self.music, "vieja.m4a"), (1, 1))
+        audios = {n: mock.Mock(tags={"\xa9ART": a}) for n, a in {"nueva.m4a": ["Eminem", "Rihanna"], "vieja.m4a": ["A", "B"], "sola.m4a": ["Juanes"]}.items()}
+        mp4 = mock.Mock(MP4=lambda path: audios[os.path.basename(path)])
+        with mock.patch.dict(sys.modules, {"mutagen": mock.Mock(), "mutagen.mp4": mp4}):
+            library.join_artists(self.music, 5000)
+        self.assertEqual(audios["nueva.m4a"].tags["\xa9ART"], ["Eminem/Rihanna"])
+        audios["nueva.m4a"].save.assert_called_once()
+        audios["vieja.m4a"].save.assert_not_called()  # anterior al trabajo
+        audios["sola.m4a"].save.assert_not_called()  # un solo artista: nada que unir
+
+    def test_borra_solo_m4a_a_medias_del_trabajo(self):
+        disco = {"vieja.m4a": "", "a_medias.m4a": "", "buena.m4a": "Buena", "danada.m4a": None, "nota.txt": "", "de_samba.m4a": ""}
         for nombre in disco:
             open(os.path.join(self.music, nombre), "wb").close()
-        os.utime(os.path.join(self.music, "vieja.mp3"), (1, 1))  # anterior al trabajo: no es suya
+        os.utime(os.path.join(self.music, "vieja.m4a"), (1, 1))  # anterior al trabajo: no es suya
 
         def leer(path):
             titulo = disco[os.path.basename(path)]
@@ -108,10 +120,10 @@ class FiltroTest(unittest.TestCase):
 
         with mock.patch("library.read_tags", side_effect=leer):
             library.drop_partial(self.music, 1000 * 1000, ["Vieja", "A medias", "Buena", "Dañada", "Nota"])
-        # de_samba.mp3 tampoco tiene título, pero no es una canción del trabajo
-        self.assertEqual(sorted(os.listdir(self.music)), ["buena.mp3", "danada.mp3", "de_samba.mp3", "nota.txt", "vieja.mp3"])
+        # de_samba.m4a tampoco tiene título, pero no es una canción del trabajo
+        self.assertEqual(sorted(os.listdir(self.music)), ["buena.m4a", "danada.m4a", "de_samba.m4a", "nota.txt", "vieja.m4a"])
 
-    def test_mp3_ilegible_no_frena(self):
+    def test_m4a_ilegible_no_frena(self):
         biblioteca(self.music, [("Penyair", "La Ley del Todo", "Nada", 180, 12)])
         with mock.patch("library.read_tags", side_effect=ValueError("dañado")):
             todo, saltadas = library.filter_plan([self.cancion()], library.index_library(self.music))

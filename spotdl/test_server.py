@@ -175,9 +175,9 @@ for i in range(1, 4):
         self.assertEqual(args[0], "download")
         self.assertIn("--overwrite", args)
         self.assertEqual(args[args.index("--overwrite") + 1], "skip")
-        self.assertEqual(args[args.index("--format") + 1], "mp3")
-        self.assertEqual(args[args.index("--bitrate") + 1], "128k")
-        self.assertEqual(args[args.index("--ffmpeg-args") + 1], "-ar 48000 -ac 2")
+        self.assertEqual(args[args.index("--format") + 1], "m4a")
+        self.assertEqual(args[args.index("--bitrate") + 1], "disable")
+        self.assertNotIn("--ffmpeg-args", args)  # remuestrear obligaría a recodificar
         self.assertEqual(args[args.index("--threads") + 1], "2")
         self.assertIn("{artist}/{album}/{title}.{output-ext}", args[args.index("--output") + 1])
         self.assertTrue(llamada["home"].startswith(self.settings.state_dir))
@@ -275,13 +275,13 @@ if lines:
 
     def test_playlist_terminada_trae_sus_canciones_en_orden(self):
         for n in ("03", "01"):  # lo que quedó en disco (el spotDL de mentira no escribe archivos)
-            ruta = os.path.join(self.settings.music_dir, "Artista", "Tomá", f"Canción {n}.mp3")
+            ruta = os.path.join(self.settings.music_dir, "Artista", "Tomá", f"Canción {n}.m4a")
             os.makedirs(os.path.dirname(ruta), exist_ok=True)
             open(ruta, "wb").close()
         self.lista({})
         _, job = self.request("POST", "/jobs", {"url": self.PLAYLIST})
         fin = self.esperar(job["id"], ("finished",))
-        self.assertEqual(fin["tracks"], ["Artista/Tomá/Canción 01.mp3", "Artista/Tomá/Canción 03.mp3"])
+        self.assertEqual(fin["tracks"], ["Artista/Tomá/Canción 01.m4a", "Artista/Tomá/Canción 03.m4a"])
         self.assertIn("Quedó como playlist en Tu biblioteca.", fin["notice"])
 
     def test_plan_en_el_orden_de_la_playlist(self):
