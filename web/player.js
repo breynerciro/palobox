@@ -1,4 +1,5 @@
 // Reproductor de música: cola, aleatorio, repetir y la barra que sigue sonando al cambiar de sección.
+import { tv } from './tv.js';
 import { $, icon, setIcon, json, joinText, lazyImg, toast, clock, menu, coverColor } from './lib.js';
 import { thumbUrl, go } from './nav.js';
 import { api } from './session.js';
@@ -13,6 +14,17 @@ import './player-gestures.js';
 export { joinJam } from './player-jam.js';
 
 export const audio = new Audio();
+// Televisor: con música sonando la pantalla no se apaga. El protector de pantalla manda la app al fondo y la corta.
+let lock;
+if (tv && navigator.wakeLock) {
+  const hold = async () => {
+    if (audio.paused || document.visibilityState !== 'visible' || (lock && !lock.released)) return;
+    lock = await navigator.wakeLock.request('screen').catch(() => null);
+  };
+  audio.addEventListener('playing', hold);
+  document.addEventListener('visibilitychange', hold); // el sistema lo suelta al salir de la app
+  audio.addEventListener('pause', () => lock?.release());
+}
 audio.preload = 'metadata';
 audio.hidden = true;
 // Dentro de la página y no suelto: así lo tenía la versión que sí mostraba la reproducción en la
@@ -252,6 +264,7 @@ function present(t, at) {
 // playAt reemplaza la cola por tracks y empieza en la pista i.
 export function playAt(tracks, i) {
   if (i < 0 || i >= tracks.length) return;
+  if (tv && !$('#np').open) $('#np').showModal(); // en el televisor elegir una canción lleva a «Reproduciendo»; atrás vuelve a la lista
   toNormal(null, false); // volvió la conexión y se elige música nueva: ya suena por el camino normal
   if (local && !repeat && tracks.length - i < 6) tracks = [...tracks, ...offline.more(tracks)]; // que la música siga
   if (room) {
@@ -570,7 +583,11 @@ export function jumpTo(i) {
 
 // Atajos de escritorio: espacio pausa, flechas adelantan 5 s, Mayús + flechas cambian de pista.
 document.addEventListener('keydown', (e) => {
-  if (pos < 0 || e.ctrlKey || e.metaKey || e.altKey || e.target.closest?.('input, textarea, select')) return;
+  // En el televisor las flechas mueven el foco (tv.js): solo adelantan sobre la barra de posición, donde el paso
+  // propio del deslizador (una milésima de la canción) no sirve con un control remoto.
+  const onSeek = tv && e.target.matches?.('#seek, #np-seek') && (e.key === 'ArrowRight' || e.key === 'ArrowLeft');
+  if (pos < 0 || e.ctrlKey || e.metaKey || e.altKey || (tv ? !onSeek : e.target.closest?.('input, textarea, select'))) return;
+  if (onSeek) e.preventDefault();
   if (document.querySelector('dialog[open]:not(#np)')) return; // el visor de fotos y los menús usan las mismas teclas
   if (e.key === ' ' && !e.target.closest?.('button, a')) { e.preventDefault(); toggle(); }
   else if (e.key === 'ArrowRight') e.shiftKey ? next() : seekTo((room ? roomTime() : deck ? deckTime() : resume) + 5);
@@ -648,6 +665,7 @@ export function restore(name) {
   shuffle = !!s.shuffle;
   repeat = [0, 1, 2].includes(s.repeat) ? s.repeat : 0;
   load(at, { play: false, at: s.at });
+  if (tv && !$('#np').open) $('#np').showModal(); // en el televisor «Reproduciendo» es la pantalla principal
   ensureLib().catch(() => {}); // para pintar el me gusta de la pista restaurada
 }
 

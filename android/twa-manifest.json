@@ -12,7 +12,7 @@
   "navigationDividerColorDark": "#090D16",
   "backgroundColor": "#090D16",
   "enableNotifications": false,
-  "startUrl": "/",
+  "startUrl": "/?tv",
   "iconUrl": "https://palobox.dpdns.org/icon-512.png",
   "maskableIconUrl": "https://palobox.dpdns.org/maskable-512.png",
   "splashScreenFadeOutDuration": 300,

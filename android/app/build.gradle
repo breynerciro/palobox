@@ -23,7 +23,7 @@ plugins {
 def twaManifest = [
     applicationId: 'org.dpdns.palobox.twa',
     hostName: 'palobox.dpdns.org', // The domain being opened in the TWA.
-    launchUrl: '/', // The start path for the TWA. Must be relative to the domain.
+    launchUrl: '/?tv', // The start path for the TWA. Must be relative to the domain.
     name: 'PaloBox', // The application name.
     launcherName: 'PaloBox', // The name shown on the Android Launcher.
     themeColor: '#090D16', // The color used for the status bar.

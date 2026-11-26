@@ -147,7 +147,7 @@
 
         <activity android:name="com.google.androidbrowserhelper.trusted.FocusActivity" />
 
-        <activity android:name="com.google.androidbrowserhelper.trusted.WebViewFallbackActivity"
+        <activity android:name="com.google.androidbrowserhelper.trusted.WebViewFallbackActivity" android:launchMode="singleTask"
             android:configChanges="orientation|screenSize" />
 
         <provider

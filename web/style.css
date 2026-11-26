@@ -56,6 +56,8 @@ a { color: inherit; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+.tv :focus-visible { outline-offset: -3px; } /* televisor (tv.js): por fuera lo recortan las listas con desplazamiento y no se ve dónde está el foco */
+.tv #volume, .tv .player-right > svg { display: none; } /* el volumen es el del televisor */
 /* Los paneles se enfocan a sí mismos al abrir (autofocus): sin esto Safari pinta un anillo en la X de cerrar */
 dialog:focus-visible { outline: none; }
 
