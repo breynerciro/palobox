@@ -31,15 +31,11 @@ const held = new Map(); // ruta → Blob ya leído de la caché: rearmar el audi
 
 export let active = false; // la app está funcionando sin servidor
 // Versión compacta: lo descargado va en Opus a 64 kbps (la mitad del espacio, con una pérdida pequeña). Esas pistas no
-// se pueden unir en un solo archivo: el reproductor las agrega una tras otra al mismo audio con MediaSource, así que
-// solo se usa donde eso existe y está probado. En el iPhone (que solo trae ManagedMediaSource) queda apagada salvo
-// que se active a mano para probarla: localStorage['palobox.opus'] = '1'.
+// se pueden unir en un solo archivo: el reproductor las agrega una tras otra al mismo audio con MediaSource (en el
+// iPhone, ManagedMediaSource), así que solo se usa donde eso existe.
 const OPUS = 'audio/webm; codecs="opus"';
 const canOpus = () => {
-  try {
-    const MS = globalThis.MediaSource || (localStorage.getItem('palobox.opus') === '1' && globalThis.ManagedMediaSource);
-    return !!MS && MS.isTypeSupported(OPUS);
-  } catch { return false; }
+  try { return !!(globalThis.MediaSource || globalThis.ManagedMediaSource)?.isTypeSupported(OPUS); } catch { return false; }
 };
 // compact: lo que hay descargado en este celular está en la versión compacta. Todo lo descargado va en un mismo
 // formato: quien ya tenía descargas en el original las conserva así, y lo nuevo que baje va igual.
