@@ -6,7 +6,11 @@ package music
 // canción para ir en medio de ese flujo: solo cuadros AAC (ADTS), todos del mismo tipo.
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha1"
+	"encoding/hex"
+	"fmt"
 	"io"
 	"net/http"
 	"os"
@@ -103,6 +107,9 @@ func (l *Library) Offline(w http.ResponseWriter, r *http.Request, u httpx.User) 
 	if err != nil {
 		return err
 	}
+	if r.URL.Query().Get("fmt") == "opus" {
+		return l.offlineOpus(w, r, rel)
+	}
 	var dur float64
 	if err := l.DB.QueryRow(`SELECT dur FROM tracks WHERE path = ?`, rel).Scan(&dur); err != nil {
 		return err
@@ -117,5 +124,62 @@ func (l *Library) Offline(w http.ResponseWriter, r *http.Request, u httpx.User) 
 	w.Header().Set("Content-Type", "audio/aac")
 	w.Header().Set("Cache-Control", "private, no-store")
 	_, err = io.Copy(w, src)
+	return err
+}
+
+// opusSlots limita las conversiones a Opus que corren a la vez: cada una ocupa un hilo unos segundos y el servidor
+// tiene cuatro, que también atienden el flujo de quienes están oyendo. Las demás descargas esperan su turno.
+var opusSlots = make(chan struct{}, 2)
+
+// offlineOpus entrega la pista en Opus a 64 kbps (WebM), la versión compacta para guardar en el celular: pesa la
+// mitad que el original con una pérdida pequeña. Varias pistas así no se pueden unir en un solo audio; el
+// reproductor las va agregando una tras otra al mismo audio (MSE, player.js). La conversión se hace una vez y
+// queda en disco: las descargas siguientes de la misma canción no cuestan procesador.
+func (l *Library) offlineOpus(w http.ResponseWriter, r *http.Request, rel string) error {
+	full := httpx.Safe(l.musicRoot(), rel)
+	st, err := os.Stat(full)
+	if err != nil || st.IsDir() {
+		return os.ErrNotExist
+	}
+	// La llave lleva tamaño y fecha: si el archivo cambia, se convierte de nuevo.
+	// shortcut: la copia vieja de un archivo que cambió o se borró se queda en disco; si llega a pesar, borrar las que lleven meses sin leerse.
+	sum := sha1.Sum([]byte(rel + "|" + strconv.FormatInt(st.Size(), 10) + "|" + strconv.FormatInt(st.ModTime().UnixNano(), 10)))
+	dir := filepath.Join(l.Data, ".palobox", "offline-opus")
+	out := filepath.Join(dir, hex.EncodeToString(sum[:])+".webm")
+	if _, err := os.Stat(out); err != nil {
+		select {
+		case opusSlots <- struct{}{}:
+			defer func() { <-opusSlots }()
+		case <-r.Context().Done():
+			return r.Context().Err()
+		}
+		if _, err := os.Stat(out); err != nil { // otra descarga pudo dejarla lista mientras esta esperaba
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				return err
+			}
+			tmp, err := os.CreateTemp(dir, "*.parcial")
+			if err != nil {
+				return err
+			}
+			tmp.Close()
+			defer os.Remove(tmp.Name())
+			cmd := exec.CommandContext(r.Context(), "ffmpeg", "-v", "error", "-nostdin", "-y", "-i", full,
+				"-vn", "-map_metadata", "-1", "-c:a", "libopus", "-b:a", "64k", "-f", "webm", tmp.Name())
+			if b, err := cmd.CombinedOutput(); err != nil {
+				return fmt.Errorf("convertir %s a Opus: %w: %s", rel, err, bytes.TrimSpace(b))
+			}
+			if err := os.Rename(tmp.Name(), out); err != nil {
+				return err
+			}
+		}
+	}
+	f, err := os.Open(out)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	w.Header().Set("Content-Type", "audio/webm")
+	w.Header().Set("Cache-Control", "private, no-store")
+	_, err = io.Copy(w, f)
 	return err
 }

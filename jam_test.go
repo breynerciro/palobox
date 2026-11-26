@@ -391,3 +391,36 @@ func TestServiceWorkerFiles(t *testing.T) {
 		}
 	}
 }
+
+// Descarga compacta para el modo sin conexión: la pista convertida a Opus (WebM), una sola vez.
+func TestOfflineOpus(t *testing.T) {
+	if _, err := exec.LookPath("ffmpeg"); err != nil {
+		t.Skip("sin ffmpeg")
+	}
+	_, data, ana, _ := musicSetup(t)
+	src := filepath.Join(data, "media", "musica", "real.mp3")
+	if out, err := exec.Command("ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=2", "-b:a", "128k", src).CombinedOutput(); err != nil {
+		t.Fatalf("%v %s", err, out)
+	}
+	var first []byte
+	for i := 0; i < 2; i++ {
+		code, _, raw := ana.do("GET", "/api/music/offline?path=real.mp3&fmt=opus", nil)
+		if code != 200 || len(raw) < 1000 || !bytes.HasPrefix(raw, []byte{0x1A, 0x45, 0xDF, 0xA3}) || !bytes.Contains(raw, []byte("OpusHead")) {
+			t.Fatalf("opus: %d, %d bytes", code, len(raw))
+		}
+		if i == 0 {
+			first = raw
+		} else if !bytes.Equal(first, raw) {
+			t.Fatal("la segunda descarga debe salir de la copia en disco, igual a la primera")
+		}
+	}
+	if files, _ := filepath.Glob(filepath.Join(data, ".palobox", "offline-opus", "*")); len(files) != 1 || !strings.HasSuffix(files[0], ".webm") {
+		t.Fatalf("debe quedar una sola copia convertida y ningún archivo a medias: %v", files)
+	}
+	if code, _, _ := ana.do("GET", "/api/music/offline?path=no-existe.mp3&fmt=opus", nil); code != 404 {
+		t.Fatalf("una pista que no existe: %d", code)
+	}
+	if code, _, _ := ana.do("GET", "/api/music/offline?path=../x.mp3&fmt=opus", nil); code != 404 {
+		t.Fatalf("fuera de la biblioteca: %d", code)
+	}
+}

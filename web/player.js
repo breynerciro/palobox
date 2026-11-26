@@ -150,6 +150,7 @@ const dur = () => (deck ? deck.lens[pos] : 0) || queue[pos]?.dur || 0; // el flu
 // un solo audio) el iPhone no lo abría. deck guarda qué tramo es, y dónde empieza y cuánto dura cada pista en él.
 const DECK_SECS = 9000; // 2 h 30 min por tramo: unos 145 MB a 128 kbps
 let deck = null; // { key, url, from, to, starts, lens }: cubre queue[from..to); starts y lens van por índice de la cola
+// (con descargas compactas es otro tipo de deck, con los mismos campos: ver mseOpen)
 let deckBusy = false;
 const deckSpan = (i) => offline.span(queue.map((t) => t.dur), i, DECK_SECS);
 const spanKey = (from, to) => queue.slice(from, to).map((t) => t.path).join('\n');
@@ -159,6 +160,7 @@ const deckTime = () => Math.max(0, audio.currentTime - (deck?.starts[pos] ?? 0))
 // fresh: rearmar el tramo desde esta pista aunque el que hay todavía sirva.
 async function deckOpen(at, play, fresh = false) {
   if (!fresh && deckHas(pos)) audio.currentTime = deck.starts[pos] + at;
+  else if (offline.compact()) return mseOpen(at, play);
   else {
     const [from, to] = deckSpan(pos);
     const key = spanKey(from, to);
@@ -182,9 +184,74 @@ async function deckOpen(at, play, fresh = false) {
   }
   if (play) audio.play().catch(warnPlay);
 }
+// Descargas compactas (Opus, offline.js): esas pistas no se pueden unir en un archivo, pero sí agregarse una tras
+// otra al mismo audio con MediaSource. Para el resto del reproductor es el mismo deck: un solo audio que no cambia
+// de fuente, con starts y lens por pista. Se agrega la pista actual y la que sigue (mseFeed), y lo que ya sonó se
+// suelta, así que la memoria no crece con la cola. deck.mse es la MediaSource y deck.sb su único búfer.
+async function mseOpen(at, play) {
+  const MS = window.MediaSource || window.ManagedMediaSource;
+  const d = { mse: new MS(), from: pos, to: pos, key: '', starts: [], lens: [], moving: true };
+  d.url = URL.createObjectURL(d.mse);
+  if (deck) URL.revokeObjectURL(deck.url);
+  deck = d;
+  audio.disableRemotePlayback = true; // lo exige ManagedMediaSource (iPhone)
+  audio.src = d.url;
+  if (play) audio.play().catch(warnPlay); // dentro del toque; empieza a sonar cuando llegue el audio
+  await new Promise((r) => d.mse.addEventListener('sourceopen', r, { once: true }));
+  if (deck !== d) return; // ya viene otra apertura
+  d.sb = d.mse.addSourceBuffer('audio/webm; codecs="opus"');
+  await mseFeed(d);
+  if (deck !== d) return;
+  if (at > 0) audio.currentTime = at; // la pista actual empieza en cero dentro de este audio
+  d.moving = false;
+}
+const sbDone = (sb) => new Promise((ok, no) => {
+  sb.addEventListener('updateend', ok, { once: true });
+  sb.addEventListener('error', () => no(new Error('El celular no pudo leer una canción descargada.')), { once: true });
+});
+// mseFeed agrega lo que falte hasta tener la pista actual y la siguiente, y suelta lo anterior a la pista previa.
+async function mseFeed(d = deck) {
+  if (!d?.sb || d.busy || deck !== d) return;
+  d.busy = true;
+  try {
+    while (deck === d && d.to < queue.length && d.to <= pos + 1) {
+      const i = d.to, t = queue[i];
+      const [part] = await offline.blobs([t.path]);
+      const buf = await part.blob.arrayBuffer();
+      if (deck !== d || queue[i] !== t) return; // la cola cambió mientras se leía
+      const start = i === d.from ? 0 : d.starts[i - 1] + d.lens[i - 1];
+      d.sb.timestampOffset = start;
+      d.sb.appendBuffer(buf);
+      await sbDone(d.sb);
+      d.starts[i] = start;
+      d.lens[i] = d.sb.buffered.end(d.sb.buffered.length - 1) - start; // lo que de verdad dura, no lo que dice el índice
+      d.to = i + 1;
+      d.key = spanKey(d.from, d.to);
+    }
+    if (deck !== d) return;
+    // Se conserva la pista anterior (para devolverse sin rearmar); lo de antes se suelta.
+    const keep = Math.max(d.from, pos - 1);
+    if (keep > d.from && d.starts[keep] > 0) {
+      d.sb.remove(0, d.starts[keep]);
+      await sbDone(d.sb);
+      d.from = keep;
+      d.key = spanKey(d.from, d.to);
+    }
+    // Con toda la cola agregada se marca el final: así el audio avisa «ended» al acabarse. Si después llega más
+    // música a la cola, agregar vuelve a abrirlo.
+    if (d.to >= queue.length && d.mse.readyState === 'open') d.mse.endOfStream();
+  } catch (e) {
+    toast(e.message || 'No se pudo reproducir la música descargada.', { kind: 'warn', sticky: true });
+  } finally {
+    d.busy = false;
+  }
+}
+audio.addEventListener('waiting', () => deck?.mse && mseFeed()); // se acabó lo agregado antes de tiempo: no hay timeupdate que lo pida
+
 // deckTick sigue al audio unido: cuando pasa solo a la pista siguiente, aquí solo hay que pintarla.
 function deckTick() {
   if (deck.moving) return;
+  if (deck.mse) mseFeed();
   const now = audio.currentTime;
   let k = pos;
   while (k + 1 < deck.to && now >= deck.starts[k + 1] - 0.02) k++;
@@ -201,7 +268,7 @@ function deckTick() {
     // Con la app a la vista y el tramo ya por la mitad, se arma el siguiente desde esta pista: con la pantalla
     // bloqueada el iPhone no siempre deja cargarlo, y así queda música para rato antes de bloquearla.
     const left = deck.starts[deck.to - 1] + deck.lens[deck.to - 1] - now;
-    if (left < DECK_SECS / 2 && deckSpan(k)[1] > deck.to && document.visibilityState === 'visible') return void deckOpen(0, !audio.paused, true);
+    if (!deck.mse && left < DECK_SECS / 2 && deckSpan(k)[1] > deck.to && document.visibilityState === 'visible') return void deckOpen(0, !audio.paused, true);
   }
   const at = deckTime();
   if (!audio.paused && at >= 30) count();

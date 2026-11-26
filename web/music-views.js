@@ -4,7 +4,7 @@ import { href, go, render, route } from './nav.js';
 import { api, userName } from './session.js';
 import * as offline from './offline.js';
 import { playAt, isShuffle, markPlaying } from './player.js';
-import { library, ensureLib, freshLib, liked, newPlaylist, cover, item, card, libRow, trackList, libItems, saveButton, downloadButton, offlineBox, downloadsCover, wipeDownloads } from './music.js';
+import { library, ensureLib, freshLib, liked, newPlaylist, cover, item, card, libRow, trackList, libItems, saveButton, downloadButton, offlineBox, downloadsCover, wipeDownloads, compactDownloads } from './music.js';
 
 const OFFLINE = 'Sin conexión con el servidor.';
 const frag = (...kids) => { const f = document.createDocumentFragment(); f.append(...kids.flat().filter(Boolean)); return f; };
@@ -554,8 +554,10 @@ async function downloadsView() {
   const del = el('button', { className: 'icon-btn' }, icon('trash'));
   del.setAttribute('aria-label', 'Borrar todas las descargas');
   del.onclick = wipeDownloads;
+  // Con descargas en el formato original y un celular que admite el compacto, se ofrece pasarlas (la mitad del espacio).
+  const small = !offline.active && offline.canCompact() && el('button', { className: 'btn ghost', textContent: 'Ahorrar espacio', onclick: compactDownloads });
   return page({
-    label: 'Playlist', title: 'Canciones descargadas', art: downloadsCover(), tracks, actions: [tracks.length > 0 && del],
+    label: 'Playlist', title: 'Canciones descargadas', art: downloadsCover(), tracks, actions: [tracks.length > 0 && del, small],
     meta: [songs(tracks.length), total(tracks), tracks.length > 0 && `${Math.round(offline.bytes() / 1048576)} MB en este celular`],
     body: tracks.length ? trackList(tracks, { covers: true, sub: (t) => joinText(t.artist, t.album) })
       : empty('download', 'Aún no hay descargas', offline.active ? 'Cuando tengas conexión, toca el botón de descarga en un álbum o una playlist.' : 'Toca el botón de descarga en un álbum o una playlist para escucharlos sin conexión.'),
