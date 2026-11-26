@@ -56,8 +56,6 @@ a { color: inherit; }
 .sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
 svg { width: 22px; height: 22px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
 :focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
-.tv :focus-visible { outline-offset: -3px; } /* televisor (tv.js): por fuera lo recortan las listas con desplazamiento y no se ve dónde está el foco */
-.tv #volume, .tv .player-right > svg { display: none; } /* el volumen es el del televisor */
 /* Los paneles se enfocan a sí mismos al abrir (autofocus): sin esto Safari pinta un anillo en la X de cerrar */
 dialog:focus-visible { outline: none; }
 
@@ -862,3 +860,82 @@ a.chip { display: inline-flex; align-items: center; text-decoration: none; }
   .np-controls .play-big { width: 64px; min-height: 64px; }
   .np-controls .play-big svg { width: 28px; height: 28px; }
 }
+
+/* ---- Televisor (tv.js pone .tv en <html>) ----
+   Se maneja con las flechas del control y se ve desde el sofá. Arriba, una sola barra fija: a la izquierda lo que
+   suena (abre «Reproduciendo»), al centro las secciones y a la derecha la cuenta. Sin barra lateral ni reproductor
+   abajo: los controles viven en «Reproduciendo», que ocupa toda la pantalla. El foco se ve de lejos: aro blanco, y
+   las tarjetas crecen. Va con :focus y no :focus-visible: el foco que pone tv.js al abrir una página también se debe ver. */
+.tv { --gutter: 48px; --top-h: 68px; }
+.tv .side, .tv #back, .tv :is(#jam-link, #admin-link, #logout, #add, #mkdir), .tv .shelf-arrow, .tv .player-tab, .tv .player-grip,
+.tv #player :is(.player-mid, .player-right, .icon-btn) { display: none !important; }
+.tv body.music :is(.topbar, #view) { margin-left: 0; }
+.tv #view { padding-bottom: 48px !important; }
+.tv .topbar { position: static; padding: calc(var(--top-h) + 4px) var(--gutter) 8px; background: none; backdrop-filter: none; -webkit-backdrop-filter: none; -webkit-mask-image: none; mask-image: none; }
+.tv .topbar-row { min-height: 0; }
+.tv #me-btn, .tv #me-btn[hidden] { display: grid !important; position: fixed; z-index: 7; top: 10px; right: var(--gutter); cursor: pointer; }
+.tv #dock { top: 0; bottom: auto; height: var(--top-h); display: flex; align-items: center; gap: 0; padding: 0 var(--gutter); background: linear-gradient(var(--bg) 78%, transparent); }
+.tv #player:not([hidden]) { display: flex !important; order: -1; width: 204px; height: 48px; margin: 0; padding: 0; border: 0; border-radius: 8px; overflow: hidden; box-shadow: none;
+  background: color-mix(in srgb, var(--amb) 60%, var(--surface-2)); }
+.tv .player-open { height: 100%; padding-right: 12px; }
+.tv #player-cover { width: 48px; height: 48px; border-radius: 0; }
+.tv .tabs:not([hidden]) { display: flex !important; position: absolute; left: 50%; translate: -50%; height: 48px; padding: 0; gap: 4px; background: none; border: 0; backdrop-filter: none; -webkit-backdrop-filter: none; }
+.tv .tabs a { flex: none; flex-direction: row; gap: 10px; padding: 0 18px; font-size: 1rem; border-radius: 999px; }
+.tv .tabs a[aria-current] { color: var(--text); background: var(--glass); }
+.tv #toast { position: fixed; left: 50%; bottom: 32px; translate: -50%; margin: 0; max-width: 60vw; }
+.tv #upbar { position: fixed; right: var(--gutter); bottom: 32px; }
+.tv #offline-bar { position: fixed; inset: auto 0 0; margin: 0; background: var(--bg); }
+
+.tv .section-title { font-size: 1.25rem; margin-top: 28px; }
+.tv .shelf-wrap { --card-w: 150px; }
+.tv .shelf { gap: 16px; padding-block: 12px 16px; scroll-padding-inline: var(--gutter); }
+.tv .quick { gap: 12px; }
+.tv .quick-tile { min-height: 64px; font-size: 1rem; }
+.tv .quick-tile .cover.small { width: 64px; height: 64px; }
+
+.tv :focus { outline: 3px solid #fff; outline-offset: -3px; } /* por dentro: por fuera lo recortan las listas con desplazamiento */
+.tv :is(.card, .quick-tile, .top-result, .tile):focus { position: relative; z-index: 1; outline-offset: 3px; border-radius: var(--radius); scale: 1.05; }
+.tv :is(.card, .quick-tile, .top-result, .tile) { transition: scale var(--fast) var(--ease); }
+.tv :is(.btn, .icon-btn, .chip, .tabs a, .avatar, #player):focus, .tv #player:has(:focus) { outline: 3px solid #fff; outline-offset: 2px; border-radius: 999px; }
+.tv #player:has(:focus) { border-radius: 8px; }
+.tv .player-open:focus { outline: none; }
+.tv :is(.row, .menu-item):focus { background: rgb(255 255 255 / .12); border-radius: 8px; }
+.tv .seek { height: 28px; }
+.tv .seek::-webkit-slider-runnable-track { height: 5px; }
+.tv .seek::-webkit-slider-thumb { margin-top: -5px; background: #fff; }
+.tv .seek:focus { outline: none; }
+.tv .seek:focus::-webkit-slider-thumb { opacity: 1; box-shadow: 0 0 0 4px rgb(255 255 255 / .3); }
+
+/* «Reproduciendo» en el televisor: la carátula desenfocada de fondo, abajo a la izquierda carátula y título grandes,
+   el botón de reproducir junto a la barra de avance y debajo el resto de botones. Las cajas que agrupan los botones
+   en el celular se disuelven (display: contents) y cada botón va a su celda. */
+.tv #np { isolation: isolate; overflow: clip; padding: 28px var(--gutter) 40px; background: var(--bg); }
+.tv #np::before { content: ""; position: absolute; inset: -48px; z-index: -1; background: var(--np-art, none) center / cover; filter: blur(40px) brightness(.35) saturate(1.3); }
+.tv #np[open] { display: grid; grid-template-columns: repeat(4, 56px) 1fr repeat(3, auto); grid-template-rows: auto 1fr auto auto; gap: 16px 12px; align-items: center; }
+.tv #np > * { width: auto; margin: 0; }
+.tv :is(.np-bar, .np-controls, .np-foot) { display: contents; }
+.tv #np-close { display: none; }
+.tv #np-where { grid-area: 1 / 1 / 2 / -1; align-self: start; justify-self: start; font-size: .95rem; font-weight: 600; }
+.tv #np .np-cover { grid-area: 2 / 1 / 3 / 4; align-self: end; width: 100%; }
+.tv .np-head { grid-area: 2 / 4 / 3 / -1; align-self: end; gap: 24px; padding-left: 8px; }
+.tv .np-text p:first-child { font-size: 2.5rem; font-weight: 800; line-height: 1.1; letter-spacing: -.02em; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.tv #np-sub { margin-top: 8px; font-size: 1.25rem; font-weight: 600; color: var(--text); }
+.tv #np > div:has(> #np-seek) { grid-area: 3 / 2 / 4 / -1; margin-left: 20px; }
+.tv .np-times { font-size: .9rem; }
+.tv #np .icon-btn { width: 56px; min-height: 56px; background: rgb(255 255 255 / .1); }
+.tv #np .icon-btn svg { width: 24px; height: 24px; }
+.tv #np #np-play { grid-area: 3 / 1; width: 72px; min-height: 72px; background: var(--text); color: var(--bg); }
+.tv #np #np-play svg { width: 30px; height: 30px; }
+.tv #np-prev { grid-area: 4 / 1; }
+.tv #np-next { grid-area: 4 / 2; }
+.tv #np [data-act=shuffle] { grid-area: 4 / 3; }
+.tv #np [data-act=repeat] { grid-area: 4 / 4; }
+.tv #np [data-act=queue] { grid-area: 4 / 6; }
+.tv #np [data-act=jam] { grid-area: 4 / 7; }
+.tv #np-more { grid-area: 4 / 8; }
+/* Con su nombre al lado, como rótulo: de lejos un ícono solo no dice qué hace. */
+.tv #np :is([data-act=queue], [data-act=jam], .like) { width: auto; padding: 0 22px; gap: 10px; white-space: nowrap; }
+.tv #np :is([data-act=queue], [data-act=jam], .like)::after { content: attr(aria-label); }
+/* Sin tocar el control un rato (tv.js pone .idle) quedan solo la carátula y el título. */
+.tv #np :is(.icon-btn, #np-where, .np-times, .seek) { transition: opacity var(--med); }
+.tv #np.idle :is(.icon-btn, #np-where, .np-times, .seek) { opacity: 0; }

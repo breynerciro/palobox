@@ -306,7 +306,18 @@ function positionState() {
   if (!navigator.mediaSession?.setPositionState || !(total > 0 && total < Infinity)) return;
   const at = deck ? deckTime() : room ? roomTime() : resume;
   try { navigator.mediaSession.setPositionState({ duration: total, position: Math.max(0, Math.min(at, total)), playbackRate: audio.playbackRate || 1 }); } catch {}
+  tvNow();
 }
+// La app del televisor (android/tv/TvActivity.java) corre en un WebView, que no le cuenta al sistema qué suena: se lo
+// pasa esto, y así el inicio del televisor muestra la canción y las teclas de medios del control llegan (window.paloTv).
+function tvNow() {
+  const t = queue[pos];
+  if (!window.PaloTv || !t) return;
+  const at = deck ? deckTime() : room ? roomTime() : resume;
+  window.PaloTv.now(JSON.stringify({ title: t.title, artist: t.artist, album: t.album, art: new URL(thumbUrl('musica', t.albumPath), location.href).href,
+    playing: playing(), pos: Math.round(at * 1000) || 0, dur: Math.round(dur() * 1000) || 0 }));
+}
+window.paloTv = (cmd, arg) => ({ play: () => !playing() && toggle(), pause: () => playing() && toggle(), next: () => next(), prev, seek: () => seekTo(arg) })[cmd]?.();
 for (const ev of ['loadedmetadata', 'playing', 'pause', 'seeked', 'ratechange']) audio.addEventListener(ev, positionState);
 const mix = (a) => {
   for (let i = a.length - 1; i > 0; i--) {
@@ -356,6 +367,7 @@ function present(t, at) {
       title: t.title, artist: t.artist, album: t.album, artwork: [{ src: thumbUrl('musica', t.albumPath), sizes: '400x400', type: 'image/jpeg' }],
     });
   }
+  if (tv) $('#np').style.setProperty('--np-art', `url("${thumbUrl('musica', t.albumPath)}")`); // el fondo de «Reproduciendo» (style.css)
   mediaActions();
   markLikes();
   syncPlayButton();
@@ -553,6 +565,7 @@ function syncPlayButton() {
     b.setAttribute('aria-label', on ? 'Pausar' : 'Reproducir');
   }
   if ('mediaSession' in navigator) navigator.mediaSession.playbackState = on ? 'playing' : 'paused';
+  tvNow();
   markPlaying();
 }
 audio.onplay = syncPlayButton;
