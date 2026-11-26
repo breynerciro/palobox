@@ -159,7 +159,7 @@ const deckHas = (i) => !!deck && i >= deck.from && i < deck.to && spanKey(deck.f
 const deckTime = () => Math.max(0, audio.currentTime - (deck?.starts[pos] ?? 0)); // segundo dentro de la pista actual
 // fresh: rearmar el tramo desde esta pista aunque el que hay todavía sirva.
 async function deckOpen(at, play, fresh = false) {
-  if (!fresh && deckHas(pos)) audio.currentTime = deck.starts[pos] + at;
+  if (!fresh && deckHas(pos) && (!deck.mse || mseHas(deck.starts[pos] + at))) audio.currentTime = deck.starts[pos] + at;
   else if (offline.compact()) return mseOpen(at, play);
   else {
     const [from, to] = deckSpan(pos);
@@ -186,11 +186,15 @@ async function deckOpen(at, play, fresh = false) {
 }
 // Descargas compactas (Opus, offline.js): esas pistas no se pueden unir en un archivo, pero sí agregarse una tras
 // otra al mismo audio con MediaSource. Para el resto del reproductor es el mismo deck: un solo audio que no cambia
-// de fuente, con starts y lens por pista. Se agrega la pista actual y la que sigue (mseFeed), y lo que ya sonó se
-// suelta, así que la memoria no crece con la cola. deck.mse es la MediaSource y deck.sb su único búfer.
+// de fuente, con starts y lens por pista. El audio se agrega por trozos, unos dos minutos por delante de lo que
+// suena (mseFeed): el navegador limita cuánto cabe en el búfer y él mismo suelta lo que ya sonó, así que la memoria
+// no crece con la cola ni con una pista de una hora. deck.mse es la MediaSource y deck.sb su único búfer.
+const MSE_SLICE = 1 << 20; // bytes por trozo: unos dos minutos a 64 kbps
+const MSE_AHEAD = 120; // segundos por delante de lo que suena que se mantienen agregados
 async function mseOpen(at, play) {
   const MS = window.MediaSource || window.ManagedMediaSource;
-  const d = { mse: new MS(), from: pos, to: pos, key: '', starts: [], lens: [], moving: true };
+  // from..to: pistas ya empezadas a agregar; end: hasta qué segundo del audio hay agregado; part: la pista a medio agregar.
+  const d = { mse: new MS(), from: pos, to: pos, key: '', starts: [], lens: [], moving: true, end: 0, part: null, fullAt: 0 };
   d.url = URL.createObjectURL(d.mse);
   if (deck) URL.revokeObjectURL(deck.url);
   deck = d;
@@ -200,46 +204,62 @@ async function mseOpen(at, play) {
   await new Promise((r) => d.mse.addEventListener('sourceopen', r, { once: true }));
   if (deck !== d) return; // ya viene otra apertura
   d.sb = d.mse.addSourceBuffer('audio/webm; codecs="opus"');
+  // La pista actual empieza en cero dentro de este audio. Se salta ya a donde iba, antes de agregar nada: así lo
+  // anterior a ese punto cuenta como ya sonado y el navegador lo puede ir soltando mientras se agrega hasta ahí
+  // (si no, con una pista muy larga el búfer se llena antes de llegar). La duración se declara larga para que
+  // deje saltar más allá de lo agregado; el final real lo pone endOfStream.
+  d.mse.duration = 1e6;
+  if (at > 0) audio.currentTime = at;
   await mseFeed(d);
-  if (deck !== d) return;
-  if (at > 0) audio.currentTime = at; // la pista actual empieza en cero dentro de este audio
-  d.moving = false;
+  if (deck === d) d.moving = false;
 }
 const sbDone = (sb) => new Promise((ok, no) => {
   sb.addEventListener('updateend', ok, { once: true });
   sb.addEventListener('error', () => no(new Error('El celular no pudo leer una canción descargada.')), { once: true });
 });
-// mseFeed agrega lo que falte hasta tener la pista actual y la siguiente, y suelta lo anterior a la pista previa.
+// mseHas: ese segundo del audio está en memoria (lo ya sonado el navegador lo puede haber soltado, y de una pista
+// larga puede no haberse agregado todavía lo de más adelante).
+const mseHas = (t) => { for (let k = 0; k < audio.buffered.length; k++) if (t >= audio.buffered.start(k) - 0.1 && t < audio.buffered.end(k)) return true; return false; };
+// mseFeed agrega trozos, pista tras pista, hasta ir MSE_AHEAD segundos por delante de lo que suena.
 async function mseFeed(d = deck) {
   if (!d?.sb || d.busy || deck !== d) return;
   d.busy = true;
   try {
-    while (deck === d && d.to < queue.length && d.to <= pos + 1) {
-      const i = d.to, t = queue[i];
-      const [part] = await offline.blobs([t.path]);
-      const buf = await part.blob.arrayBuffer();
-      if (deck !== d || queue[i] !== t) return; // la cola cambió mientras se leía
-      const start = i === d.from ? 0 : d.starts[i - 1] + d.lens[i - 1];
-      d.sb.timestampOffset = start;
-      d.sb.appendBuffer(buf);
+    while (deck === d && d.end < audio.currentTime + MSE_AHEAD) {
+      if (Date.now() - d.fullAt < 3000) return; // el búfer estaba lleno hace un momento: se reintenta luego
+      if (!d.part) {
+        if (d.to >= queue.length) {
+          // Toda la cola agregada: se marca el final, así el audio avisa «ended» al acabarse. Si después llega
+          // más música a la cola, agregar vuelve a abrirlo.
+          if (d.mse.readyState === 'open') d.mse.endOfStream();
+          return;
+        }
+        const i = d.to, t = queue[i];
+        const [got] = await offline.blobs([t.path]);
+        const buf = await got.blob.arrayBuffer();
+        if (deck !== d || queue[i] !== t || d.to !== i) return; // la cola cambió mientras se leía
+        d.part = { buf, off: 0 };
+        d.starts[i] = d.end;
+        d.sb.timestampOffset = d.end;
+        d.to = i + 1;
+        d.key = spanKey(d.from, d.to);
+      }
+      const { buf, off } = d.part;
+      try { d.sb.appendBuffer(buf.slice(off, off + MSE_SLICE)); } catch (e) {
+        // Lleno de audio que todavía no suena: no hay qué soltar. Se espera a que avance la reproducción.
+        if (e.name !== 'QuotaExceededError') throw e;
+        d.fullAt = Date.now();
+        return;
+      }
       await sbDone(d.sb);
-      d.starts[i] = start;
-      d.lens[i] = d.sb.buffered.end(d.sb.buffered.length - 1) - start; // lo que de verdad dura, no lo que dice el índice
-      d.to = i + 1;
-      d.key = spanKey(d.from, d.to);
+      if (deck !== d) return;
+      d.part.off += MSE_SLICE;
+      d.end = Math.max(d.end, d.sb.buffered.end(d.sb.buffered.length - 1));
+      if (d.part.off >= buf.byteLength) { // pista completa: ahora sí se sabe lo que de verdad dura
+        d.lens[d.to - 1] = d.end - d.starts[d.to - 1];
+        d.part = null;
+      }
     }
-    if (deck !== d) return;
-    // Se conserva la pista anterior (para devolverse sin rearmar); lo de antes se suelta.
-    const keep = Math.max(d.from, pos - 1);
-    if (keep > d.from && d.starts[keep] > 0) {
-      d.sb.remove(0, d.starts[keep]);
-      await sbDone(d.sb);
-      d.from = keep;
-      d.key = spanKey(d.from, d.to);
-    }
-    // Con toda la cola agregada se marca el final: así el audio avisa «ended» al acabarse. Si después llega más
-    // música a la cola, agregar vuelve a abrirlo.
-    if (d.to >= queue.length && d.mse.readyState === 'open') d.mse.endOfStream();
   } catch (e) {
     toast(e.message || 'No se pudo reproducir la música descargada.', { kind: 'warn', sticky: true });
   } finally {
@@ -274,8 +294,9 @@ function deckTick() {
   if (!audio.paused && at >= 30) count();
   if (Date.now() - savedAt > 5000) { saveAt(); positionState(); } // y se corrige la deriva cada 5 s
   if (seeking) return;
-  for (const s of seeks) setSeek(s, deck.lens[pos] ? at / deck.lens[pos] : 0);
-  paintTimes(at, deck.lens[pos]);
+  const len = dur(); // de una pista compacta a medio agregar aún no se sabe la duración exacta: vale la del índice
+  for (const s of seeks) setSeek(s, len ? at / len : 0);
+  paintTimes(at, len);
 }
 const warnPlay = (e) => console.warn('El navegador no dejó reproducir:', e?.name, e?.message);
 // Posición en la pantalla de bloqueo y la notificación; sin esto Android puede dar la sesión por inactiva.
@@ -593,7 +614,11 @@ function setVolume(v) {
 $('#volume').oninput = (e) => { setVolume(e.target.value / 100); save(); };
 
 function seekTo(at) {
-  if (deck) return void (audio.currentTime = deck.starts[pos] + Math.max(0, at));
+  if (deck) {
+    const to = deck.starts[pos] + Math.max(0, at);
+    if (deck.mse && !mseHas(to)) return void deckOpen(Math.max(0, at), !audio.paused, true); // ya se soltó de memoria: se rearma ahí
+    return void (audio.currentTime = to);
+  }
   if (streaming()) return streamDo('seek', { at });
   if (room) return void jam.send('seek', { at });
   resume = at; // cola restaurada, aún sin sala: arrancará desde aquí
