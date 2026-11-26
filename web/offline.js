@@ -41,21 +41,9 @@ const canOpus = () => {
     return !!MS && MS.isTypeSupported(OPUS);
   } catch { return false; }
 };
-// compact: lo que hay descargado en este celular está en la versión compacta. Todo lo descargado va en un mismo formato.
+// compact: lo que hay descargado en este celular está en la versión compacta. Todo lo descargado va en un mismo
+// formato: quien ya tenía descargas en el original las conserva así, y lo nuevo que baje va igual.
 export const compact = () => state.fmt === 'opus';
-// canCompact: hay descargas en el formato original y este celular podría tenerlas en el compacto.
-export const canCompact = () => !compact() && count() > 0 && canOpus();
-// toCompact suelta el audio descargado y deja todas las pistas pendientes de bajar en la versión compacta; las devuelve.
-export async function toCompact() {
-  const ts = all().map(slim);
-  try { await caches.delete(AUDIO); } catch {}
-  held.clear();
-  state.tracks = {};
-  state.fmt = 'opus';
-  state.pending = ts;
-  store();
-  return ts;
-}
 export const audioUrl = (path) => `/api/music/offline?path=${encodeURIComponent(path)}`;
 const thumb = (dir) => `/api/media/thumb?lib=musica&path=${encodeURIComponent(dir)}`;
 export const enabled = () => !!state.user; // quién puede descargar: cualquiera que inició sesión en este celular

@@ -143,7 +143,6 @@ test('el audio unido cubre un tramo de la cola: una antes, la actual y lo que qu
 
 test('donde hay MediaSource con Opus, lo que se descarga con el celular vacío va en el formato compacto', async () => {
   await off.wipe();
-  assert.equal(off.canCompact(), false); // sin descargas no hay nada que pasar
   await off.download([A]); // este «navegador» aún no tiene MediaSource: formato original
   assert.equal(off.compact(), false);
   const asked = [];
@@ -152,15 +151,11 @@ test('donde hay MediaSource con Opus, lo que se descarga con el celular vacío v
   globalThis.fetch = async (url) => { if (String(url).includes('/api/music/offline')) asked.push(String(url)); return String(url).includes('fmt=opus') ? new Response(webm) : before(url); };
   globalThis.MediaSource = { isTypeSupported: (t) => t.includes('opus') };
   try {
-    assert.equal(off.canCompact(), true); // hay descargas viejas y el celular ya admite el compacto
-    await off.download([B]); // pero mientras no se pasen todas, lo nuevo sigue en el formato de las demás
+    await off.download([B]); // con descargas en el formato original, lo nuevo sigue en ese formato
     assert.equal(off.compact(), false);
     assert.ok(!asked.at(-1).includes('fmt=opus'));
-    const ts = await off.toCompact();
-    assert.deepEqual(ts.map((t) => t.path).sort(), [A.path, B.path].sort());
-    assert.equal(off.count(), 0);
-    assert.equal(off.pending().length, 2);
-    await off.download(ts);
+    await off.wipe(); // con el celular vacío sí se elige el compacto
+    await off.download([A, B]);
     assert.equal(off.compact(), true);
     assert.equal(off.bytes(), 2 * 2000);
     assert.ok(asked.slice(-2).every((u) => u.includes('fmt=opus')));

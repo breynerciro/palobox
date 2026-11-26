@@ -213,14 +213,6 @@ async function fetchOffline(tracks, playlist) {
   if (!failed && queued.length && canDownload()) return fetchOffline(queued);
   render();
 }
-// compactDownloads vuelve a bajar todo lo descargado en la versión compacta (offline.js): la mitad del espacio.
-export async function compactDownloads() {
-  if (downloading) return void toast('Espera a que termine la descarga en curso.');
-  if (!(await ask({ heading: '¿Ahorrar espacio?', text: 'Se vuelve a descargar toda tu música en un formato que ocupa la mitad, con una pérdida de calidad pequeña. Necesitas conexión hasta que termine; con conexión todo sigue sonando en la calidad original.', ok: 'Volver a descargar' }))) return;
-  const ts = await offline.toCompact();
-  purge();
-  fetchOffline(ts);
-}
 // downloadButton descarga (o quita) todas las pistas de un álbum o una playlist.
 export function downloadButton(tracks, playlist) {
   if (!tracks.length || !(offline.enabled() || offline.active)) return null;
