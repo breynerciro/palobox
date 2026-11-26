@@ -9,6 +9,7 @@ import android.media.session.MediaSession;
 import android.media.session.PlaybackState;
 import android.net.Uri;
 import android.os.Bundle;
+import android.view.KeyEvent;
 import android.webkit.CookieManager;
 import android.webkit.JavascriptInterface;
 import android.webkit.WebView;
@@ -64,6 +65,16 @@ public class TvActivity extends WebViewFallbackActivity {
             @Override public void onSeekTo(long ms) { js("seek", ms / 1000.0); }
         });
         web.addJavascriptInterface(this, "PaloTv");
+    }
+
+    // Con la app a la vista las teclas de medios del control le llegan también al WebView, que pausa por su cuenta
+    // mientras el sistema, que aún ve la sesión sonando o ya en pausa según quién llegue primero, puede volver a darle
+    // play: van directo a la sesión, por un solo camino.
+    @Override
+    public boolean dispatchKeyEvent(KeyEvent e) {
+        if (session == null || !KeyEvent.isMediaSessionKey(e.getKeyCode())) return super.dispatchKeyEvent(e);
+        session.getController().dispatchMediaButtonEvent(e);
+        return true;
     }
 
     private void js(String cmd, double arg) {
