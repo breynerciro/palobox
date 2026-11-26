@@ -123,7 +123,7 @@ func (h *Hub) Stream(w http.ResponseWriter, r *http.Request, hu httpx.User) erro
 	}()
 
 	// Sin Content-Length ni rangos: para el reproductor es una emisión en vivo, no un archivo.
-	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Content-Type", "audio/aac")
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Accept-Ranges", "none")
 	w.WriteHeader(200)

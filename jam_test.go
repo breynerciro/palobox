@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/binary"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -173,25 +174,42 @@ func TestJam(t *testing.T) {
 	}
 }
 
+// fakeM4A arma un M4A mínimo: n cuadros de size bytes rellenos con fill (mdat) y el índice que los describe (moov)
+// como AAC-LC a 44,1 kHz en estéreo. Es lo que lee internal/music/m4a.go.
+func fakeM4A(fill byte, n, size int) []byte {
+	u32 := func(v int) []byte { return binary.BigEndian.AppendUint32(nil, uint32(v)) }
+	box := func(kind string, parts ...[]byte) []byte {
+		body := bytes.Join(parts, nil)
+		return append(append(u32(8+len(body)), kind...), body...)
+	}
+	zero := func(k int) []byte { return make([]byte, k) }
+	ftyp := box("ftyp", []byte("M4A "), u32(0), []byte("M4A mp42"))
+	mdat := box("mdat", bytes.Repeat([]byte{fill}, n*size))
+	esds := box("esds", u32(0), []byte{3, 25, 0, 1, 0, 4, 17, 0x40, 0x15}, zero(11), []byte{5, 2, 0x12, 0x10, 6, 1, 2})
+	mp4a := box("mp4a", zero(6), []byte{0, 1}, zero(8), []byte{0, 2, 0, 16}, zero(4), u32(44100<<16), esds)
+	sizes := []byte{}
+	for i := 0; i < n; i++ {
+		sizes = append(sizes, u32(size)...)
+	}
+	stbl := box("stbl",
+		box("stsd", u32(0), u32(1), mp4a),
+		box("stsz", u32(0), u32(0), u32(n), sizes),
+		box("stsc", u32(0), u32(1), u32(1), u32(n), u32(1)),
+		box("stco", u32(0), u32(1), u32(len(ftyp)+8)))
+	hdlr := box("hdlr", u32(0), u32(0), []byte("soun"), zero(12), []byte{0})
+	moov := box("moov", box("trak", box("mdia", hdlr, box("minf", stbl))))
+	return bytes.Join([][]byte{ftyp, mdat, moov}, nil)
+}
+
 // Flujo continuo: el audio de la sala por una sola respuesta, sin etiquetas, y el servidor avanza la cola.
 func TestJamStream(t *testing.T) {
 	a, data, ana, _ := musicSetup(t)
-	// MP3 de mentira con la forma de uno real: etiqueta ID3v2 (30 bytes), el cuadro de información de LAME
-	// (384 bytes, declara la duración del archivo) y cuadros de 384 bytes a 128 kbps y 48 kHz.
-	frame := func(fill byte) []byte {
-		b := bytes.Repeat([]byte{fill}, 384)
-		copy(b, []byte{0xFF, 0xFB, 0x94, 0x00})
-		return b
-	}
+	// M4A de mentira con la forma de uno real (fakeM4A): 40 cuadros AAC que, ya con su cabecera ADTS, miden 384 bytes.
 	for i, name := range []string{"uno", "dos"} {
-		id3 := append([]byte{'I', 'D', '3', 4, 0, 0, 0, 0, 0, 20}, make([]byte, 20)...)
-		info := frame(0)
-		copy(info[36:], "Info")
-		body := bytes.Repeat(frame('a'+byte(i)), 40) // 15 360 bytes
-		os.WriteFile(filepath.Join(data, "media", "musica", name+".mp3"), append(append(id3, info...), body...), 0o644)
+		os.WriteFile(filepath.Join(data, "media", "musica", name+".m4a"), fakeM4A('a'+byte(i), 40, 377), 0o644)
 	}
 	ana.do("GET", "/api/music", nil)
-	a.music.DB.Exec(`UPDATE tracks SET dur = 1 WHERE path IN ('uno.mp3', 'dos.mp3')`) // un segundo cada una
+	a.music.DB.Exec(`UPDATE tracks SET dur = 1 WHERE path IN ('uno.m4a', 'dos.m4a')`) // un segundo cada una
 	a.jam.Lead = 300 * time.Millisecond                                               // el colchón real (6 s) es más largo que estas pistas
 
 	if code, _, _ := ana.do("GET", "/api/jam/stream?device=anatelefono", nil); code != 409 {
@@ -202,7 +220,7 @@ func TestJamStream(t *testing.T) {
 		_, m, _ := ana.do("POST", "/api/jam", mustJSON(v))
 		return m
 	}
-	cmd(map[string]any{"op": "start", "paths": []string{"uno.mp3", "dos.mp3"}, "pos": 0, "playing": true})
+	cmd(map[string]any{"op": "start", "paths": []string{"uno.m4a", "dos.m4a"}, "pos": 0, "playing": true})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
@@ -212,7 +230,7 @@ func TestJamStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	if res.Header.Get("Content-Type") != "audio/mpeg" || res.ContentLength != -1 {
+	if res.Header.Get("Content-Type") != "audio/aac" || res.ContentLength != -1 {
 		t.Fatalf("debe ser una emisión sin tamaño: %q %d", res.Header.Get("Content-Type"), res.ContentLength)
 	}
 	// Llegan los dos cuerpos seguidos por la misma conexión: primero «uno» y después «dos». Son 80 cuadros; el
@@ -221,11 +239,11 @@ func TestJamStream(t *testing.T) {
 	if n, err := io.ReadFull(res.Body, got); err != nil {
 		t.Fatalf("el flujo se cortó antes de mandar las dos pistas: %v (llegaron %d bytes)", err, n)
 	}
-	if bytes.Contains(got, []byte("ID3")) || bytes.Contains(got, []byte("Info")) {
-		t.Fatal("las etiquetas y el cuadro de información no deben ir en el flujo")
+	if bytes.Contains(got, []byte("moov")) || bytes.Contains(got, []byte("ftyp")) || got[0] != 0xFF || got[1] != 0xF1 {
+		t.Fatal("por el flujo solo van cuadros ADTS, no las cajas del archivo")
 	}
 	na, nb, cambio := bytes.Count(got, []byte{'a'}), bytes.Count(got, []byte{'b'}), bytes.IndexByte(got, 'b')
-	if na < 39*380 || nb < 39*380 || bytes.IndexByte(got[cambio:], 'a') >= 0 {
+	if na < 39*370 || nb < 39*370 || bytes.IndexByte(got[cambio:], 'a') >= 0 {
 		t.Fatalf("deben llegar las dos pistas completas y en orden: %d de la primera, %d de la segunda", na, nb)
 	}
 	// El servidor avanzó la sala por su cuenta: nadie mandó «ended».
@@ -234,10 +252,10 @@ func TestJamStream(t *testing.T) {
 	}
 
 	// Descarga para escuchar sin conexión: el mismo audio limpio, completo y solo con sesión.
-	if code, _, raw := ana.do("GET", "/api/music/offline?path=uno.mp3", nil); code != 200 || len(raw) != 40*384 || bytes.Contains(raw, []byte("Info")) || bytes.Contains(raw, []byte("ID3")) {
+	if code, _, raw := ana.do("GET", "/api/music/offline?path=uno.m4a", nil); code != 200 || len(raw) != 40*384 || bytes.Contains(raw, []byte("moov")) || raw[0] != 0xFF {
 		t.Fatalf("offline: %d, %d bytes", code, len(raw))
 	}
-	if code, _, _ := (client{t, ana.base, &http.Client{}}).do("GET", "/api/music/offline?path=uno.mp3", nil); code != 401 {
+	if code, _, _ := (client{t, ana.base, &http.Client{}}).do("GET", "/api/music/offline?path=uno.m4a", nil); code != 401 {
 		t.Fatalf("offline sin sesión: %d", code)
 	}
 	if code, _, _ := ana.do("GET", "/api/music/offline?path=../x.mp3", nil); code != 404 {
@@ -252,7 +270,7 @@ func TestJamStream(t *testing.T) {
 	cmd(map[string]any{"op": "jump", "index": 0})
 	cmd(map[string]any{"op": "cut"})
 	more := make([]byte, 10*384)
-	if _, err := io.ReadFull(res.Body, more); err != nil || bytes.Count(more[5*384:], []byte{'a'}) < 4*380 {
+	if _, err := io.ReadFull(res.Body, more); err != nil || bytes.Count(more[5*384:], []byte{'a'}) < 4*370 {
 		t.Fatalf("tras «cut» debe llegar de nuevo la primera pista: %v %q", err, more[len(more)-8:])
 	}
 
@@ -277,7 +295,7 @@ func TestJamStream(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	if _, err := io.ReadFull(res.Body, got); err != nil || bytes.IndexByte(got, 'b') >= 0 || bytes.Count(got, []byte{'a'}) < 78*380 {
+	if _, err := io.ReadFull(res.Body, got); err != nil || bytes.IndexByte(got, 'b') >= 0 || bytes.Count(got, []byte{'a'}) < 78*370 {
 		t.Fatalf("con repetir esta canción debe sonar dos veces la primera: %v", err)
 	}
 	room := func(m map[string]any) map[string]any { return m["room"].(map[string]any) }
@@ -289,14 +307,14 @@ func TestJamStream(t *testing.T) {
 	}
 	// Repetir toda la cola: después de la última vuelve la primera, sin sugerencias.
 	res.Body.Close()
-	cmd(map[string]any{"op": "queue", "paths": []string{"uno.mp3", "dos.mp3"}, "pos": 1}) // sin las sugerencias de antes
+	cmd(map[string]any{"op": "queue", "paths": []string{"uno.m4a", "dos.m4a"}, "pos": 1}) // sin las sugerencias de antes
 	cmd(map[string]any{"op": "repeat", "repeat": 1})
 	req, _ = http.NewRequestWithContext(ctx, "GET", ana.base+"/api/jam/stream?device=anatelefono", nil)
 	if res, err = ana.c.Do(req); err != nil {
 		t.Fatal(err)
 	}
 	defer res.Body.Close()
-	if _, err := io.ReadFull(res.Body, got); err != nil || bytes.Count(got, []byte{'a'}) < 39*380 || bytes.IndexByte(got, 'a') < bytes.IndexByte(got, 'b') {
+	if _, err := io.ReadFull(res.Body, got); err != nil || bytes.Count(got, []byte{'a'}) < 39*370 || bytes.IndexByte(got, 'a') < bytes.IndexByte(got, 'b') {
 		t.Fatalf("repetir la cola: tras la última debe llegar la primera: %v", err)
 	}
 	if r := room(cmd(map[string]any{"op": "state"})); len(r["queue"].([]any)) != 2 || r["playing"] != true {
