@@ -159,7 +159,7 @@ func (a *app) routes() http.Handler {
 		w.Header().Set("Cache-Control", "private, no-cache")
 		// Los archivos incrustados no tienen fecha: sin ETag el navegador no puede revalidar y baja todo en cada apertura.
 		w.Header().Set("ETag", `"`+version+`"`)
-		static.ServeHTTP(w, r)
+		static.ServeHTTP(noStoreErrors{w}, r)
 	})
 	// CSRF: rechaza con 403 cualquier POST/PUT/PATCH/DELETE que el navegador marque como
 	// de otro sitio (Sec-Fetch-Site, o Origin distinto del Host en navegadores viejos).
@@ -178,6 +178,17 @@ func (a *app) routes() http.Handler {
 		}
 		guarded.ServeHTTP(w, r)
 	})
+}
+
+// noStoreErrors marca los errores de la interfaz (un 404) para que nadie los guarde. Go les quita Cache-Control, y
+// sin él Cloudflare les ponía sus 4 h: quien pidiera un archivo nuevo antes del despliegue se quedaba sin la app.
+type noStoreErrors struct{ http.ResponseWriter }
+
+func (w noStoreErrors) WriteHeader(code int) {
+	if code >= 400 {
+		w.Header().Set("Cache-Control", "no-store")
+	}
+	w.ResponseWriter.WriteHeader(code)
 }
 
 func main() {

@@ -55,7 +55,7 @@ android {
     namespace "org.dpdns.palobox.twa"
     defaultConfig {
         applicationId "org.dpdns.palobox.twa"
-        minSdkVersion 24
+        minSdkVersion 29
         targetSdkVersion 36
         versionCode 1
         versionName ""

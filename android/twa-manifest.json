@@ -29,6 +29,6 @@
   "isChromeOSOnly": false,
   "isMetaQuest": false,
   "fullScopeUrl": "https://palobox.dpdns.org/",
-  "minSdkVersion": 24,
+  "minSdkVersion": 29,
   "orientation": "default"
 }

@@ -15,10 +15,15 @@
  */
 package org.dpdns.palobox.twa;
 
+import android.content.Intent;
 import android.content.pm.ActivityInfo;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+
+import com.google.androidbrowserhelper.trusted.LauncherActivityMetadata;
+import com.google.androidbrowserhelper.trusted.TwaLauncher;
+import com.google.androidbrowserhelper.trusted.WebViewFallbackActivity;
 
 
 
@@ -40,6 +45,16 @@ public class LauncherActivity
         } else {
             setRequestedOrientation(ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED);
         }
+    }
+
+    // Sin un navegador con TWA (el televisor) la app abre en un WebView: se usa la actividad propia, TvActivity.
+    @Override
+    protected TwaLauncher.FallbackStrategy getFallbackStrategy() {
+        return (context, builder, providerPackage, done) -> {
+            Intent i = WebViewFallbackActivity.createLaunchIntent(context, builder.getUri(), LauncherActivityMetadata.parse(context));
+            context.startActivity(i.setClass(context, TvActivity.class));
+            if (done != null) done.run();
+        };
     }
 
     @Override

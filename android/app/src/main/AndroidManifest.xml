@@ -32,7 +32,7 @@
 
     
 
-    <uses-feature android:name="android.software.leanback" android:required="false"/><uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/><uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PLAYBACK"/><uses-feature android:name="android.software.leanback" android:required="false"/><uses-feature android:name="android.hardware.touchscreen" android:required="false"/>
     <application
         android:name="Application"
         android:allowBackup="true"
@@ -147,7 +147,7 @@
 
         <activity android:name="com.google.androidbrowserhelper.trusted.FocusActivity" />
 
-        <activity android:name="com.google.androidbrowserhelper.trusted.WebViewFallbackActivity" android:launchMode="singleTask"
+        <activity android:name="com.google.androidbrowserhelper.trusted.WebViewFallbackActivity"
             android:configChanges="orientation|screenSize" />
 
         <provider
@@ -176,5 +176,6 @@
         
 
         
+    <activity android:name=".TvActivity" android:configChanges="orientation|screenSize" android:launchMode="singleTask"/><service android:name=".PlaybackService" android:exported="false" android:foregroundServiceType="mediaPlayback"/>
     </application>
 </manifest>

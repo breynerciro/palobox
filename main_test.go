@@ -257,6 +257,15 @@ func TestInterfazRevalida(t *testing.T) {
 	if res.StatusCode != 304 {
 		t.Fatalf("con la misma huella debe responder 304, no %d", res.StatusCode)
 	}
+	// Un archivo que no existe (todavía) no se guarda: Cloudflare dejaba ese 404 cuatro horas en el navegador.
+	res, err = http.Get(srv.URL + "/no-existe.js")
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	if cc := res.Header.Get("Cache-Control"); res.StatusCode != 404 || cc != "no-store" {
+		t.Fatalf("un archivo que no existe: %d con Cache-Control %q, debe ser 404 y no-store", res.StatusCode, cc)
+	}
 }
 
 // Control del administrador: usuarios, sesiones y registro de entradas.
