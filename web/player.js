@@ -38,7 +38,7 @@ function unlock() {
   document.removeEventListener('click', unlock, true);
   if (!audio.paused) return;
   audio.play().catch(() => {});
-  audio.pause();
+  halt();
 }
 document.addEventListener('touchend', unlock, true);
 document.addEventListener('click', unlock, true);
@@ -56,6 +56,18 @@ let counted = false; // la pista actual ya se anotó en el historial
 let savedAt = 0;
 let resume = 0; // posición restaurada que el audio aún no ha cargado
 let pausedAt = 0; // cuándo se pausó el audio: un flujo que lleva rato en pausa pudo cerrarse sin avisar
+// Otra app que empieza a sonar (un video, una llamada, una nota de voz) hace que el sistema pause este audio. Eso se
+// respeta: la sala queda en pausa, como si se hubiera pausado a mano. Si no, la sala seguiría «sonando», cada foto
+// suya volvería a darle play y las dos apps se quitarían el sonido una a otra. Cuando la otra termina, el navegador
+// reanuda el audio por su cuenta si la interrupción era pasajera, y entonces la sala vuelve a sonar.
+let ownPause = 0; // cuándo pausó la app misma: una pausa que no viene de ahí es del sistema
+let held = false; // en pausa por el sistema, a la espera de que devuelva el sonido
+const halt = () => { ownPause = Date.now(); audio.pause(); }; // toda pausa de la app pasa por aquí
+// Si la otra app se quedó con el sonido del todo (un video, otra app de música), el navegador no reanuda solo ni avisa
+// cuándo terminó: la música vuelve al regresar a PaloBox. No antes: reanudar a ciegas sería volver a pelear el sonido.
+document.addEventListener('visibilitychange', () => {
+  if (held && document.visibilityState === 'visible' && audio.paused && streaming() && !room.playing) toggle();
+});
 
 // Sala de reproducción (jam.js): con sala, la cola y la posición son las del servidor y este reproductor
 // las refleja; cada acción se manda como comando en vez de cambiar el estado local. Hay sala cuando elijo
@@ -110,7 +122,7 @@ function toNormal(edit, keep = true) {
   const at = deck ? deckTime() : resume;
   const on = !!deck && !audio.paused;
   local = false;
-  audio.pause();
+  halt();
   audio.removeAttribute('src');
   if (deck) URL.revokeObjectURL(deck.url);
   deck = null;
@@ -133,7 +145,7 @@ function keepDownloaded(at, play) {
   order = order.filter((t) => offline.has(t.path));
   const i = queue.indexOf(now);
   if (queue.length) return load(Math.max(0, i), { play: play && i >= 0, at: i < 0 ? 0 : at });
-  audio.pause(); // nada de la cola está descargado: el reproductor se guarda
+  halt(); // nada de la cola está descargado: el reproductor se guarda
   audio.removeAttribute('src');
   if (deck) URL.revokeObjectURL(deck.url);
   deck = null;
@@ -568,8 +580,21 @@ function syncPlayButton() {
   tvNow();
   markPlaying();
 }
-audio.onplay = syncPlayButton;
-audio.onpause = () => { pausedAt = Date.now(); syncPlayButton(); save(); };
+audio.onplay = () => {
+  if (held && streaming() && !room.playing) jam.send('play'); // el sistema devolvió el sonido
+  held = false;
+  syncPlayButton();
+};
+audio.onpause = () => {
+  pausedAt = Date.now();
+  // Ni la app (ownPause) ni el final del audio ni un cambio de fuente (readyState 0): lo pausó el sistema.
+  if (Date.now() - ownPause > 1000 && !audio.ended && audio.readyState > 0 && streaming() && room.playing) {
+    held = true;
+    jam.send('pause');
+  }
+  syncPlayButton();
+  save();
+};
 audio.onended = () => {
   if (deck) { // se acabó el audio unido: el tramo, o toda la cola
     count();
@@ -639,7 +664,8 @@ function seekTo(at) {
   paintTimes(at, dur());
 }
 export function toggle() {
-  if (local) return audio.paused ? audio.play().catch(warnPlay) : audio.pause();
+  held = false; // lo que se decida a mano manda sobre lo que haga el sistema después
+  if (local) return audio.paused ? audio.play().catch(warnPlay) : halt();
   if (!room) return void (pos >= 0 && startRoom({ playing: true })); // cola restaurada: arranca en una sala
   if (!here && !devices.some((d) => d.active)) { // el dispositivo donde sonaba se desconectó: reproducir aquí lo toma
     here = true;
@@ -649,7 +675,7 @@ export function toggle() {
     // Pausar y reanudar no sueltan el flujo: el teléfono guarda su colchón y sigue con el mismo audio, dentro del
     // propio toque (o del botón de la pantalla bloqueada), que es lo único que iOS deja hacer sin la app abierta.
     if (!audio.paused) {
-      audio.pause();
+      halt();
       return void jam.send('pause');
     }
     // El flujo en pausa pudo cerrarse (Cloudflare corta una conexión que pasa un rato sin datos): se abre otro
@@ -798,7 +824,7 @@ export function restore(name) {
 
 // reset vacía el reproductor al salir: la cola de un usuario no le queda al siguiente.
 export function reset() {
-  audio.pause();
+  halt();
   audio.removeAttribute('src');
   jam.close();
   if (deck) URL.revokeObjectURL(deck.url);
@@ -835,7 +861,7 @@ function applyJam(s) {
     save();
     stream = null;
     const on = was.playing && !audio.paused;
-    audio.pause();
+    halt();
     if (on) startRoom({ playing: true });
   }
   syncPlayButton();
@@ -859,7 +885,7 @@ function syncRoom() {
   repeat = room.repeat ?? repeat; // el de la sala: así dos dispositivos no discrepan sobre qué sigue
   const t = queue[room.pos];
   if (!t) { // sala recién creada sin música
-    audio.pause();
+    halt();
     pos = -1;
     $('#player').hidden = true;
     document.body.classList.remove('has-player');
@@ -870,7 +896,7 @@ function syncRoom() {
     else if (rev !== savedRev) save();
     savedRev = rev;
     if (!here) {
-      audio.pause();
+      halt();
       stream = null;
     } else syncStream(t);
   }
@@ -886,7 +912,7 @@ function syncRoom() {
 // cargar un audio nuevo, y es el servidor el que cambia lo que manda por el mismo (se oye al acabarse el colchón).
 function syncStream(t) {
   if (!room.playing) {
-    if (!audio.paused) audio.pause();
+    if (!audio.paused) halt();
     if (stream) stream.held = room.at; // dónde quedó: al reanudar ahí mismo, el flujo abierto sigue sirviendo
     return;
   }

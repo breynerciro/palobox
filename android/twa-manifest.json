@@ -25,7 +25,7 @@
   "fallbackType": "webview",
   "features": {},
   "alphaDependencies": { "enabled": false },
-  "enableSiteSettingsShortcut": false,
+  "enableSiteSettingsShortcut": true,
   "isChromeOSOnly": false,
   "isMetaQuest": false,
   "fullScopeUrl": "https://palobox.dpdns.org/",
