@@ -168,3 +168,45 @@ test('donde hay MediaSource con Opus, lo que se descarga con el celular vacío v
     await off.wipe();
   }
 });
+
+test('lo ya descargado pasa al formato compacto sin perderse si se interrumpe', async () => {
+  await off.wipe();
+  await off.download([A, B]); // sin MediaSource: formato original
+  const webm = new Uint8Array(2000); webm.set([0x1A, 0x45, 0xDF, 0xA3]);
+  const before = globalThis.fetch;
+  let fail = true;
+  const asked = [];
+  globalThis.fetch = async (url) => {
+    if (!String(url).includes('fmt=opus')) return before(url);
+    asked.push(String(url));
+    if (fail && String(url).includes(encodeURIComponent(B.path))) throw new TypeError('sin red');
+    return new Response(webm);
+  };
+  globalThis.MediaSource = { isTypeSupported: (t) => t.includes('opus') };
+  try {
+    assert.equal(off.needsCompact(), true);
+    await assert.rejects(off.toCompact()); // se cae la red en la segunda pista
+    assert.equal(off.compact(), false); // nada cambió: sigue sonando lo original
+    assert.equal(off.bytes(), 2 * 3 * 384);
+    assert.equal((await off.blobs([A.path]))[0].blob.size, 3 * 384);
+    fail = false;
+    await off.toCompact(); // la próxima vez sigue donde iba: la primera pista no se vuelve a pedir
+    assert.equal(asked.filter((u) => u.includes(encodeURIComponent(A.path))).length, 1);
+    assert.equal(off.compact(), true);
+    assert.equal(off.needsCompact(), false);
+    assert.equal(off.count(), 2);
+    assert.equal(off.bytes(), 2 * 2000);
+    const [x] = await off.blobs([B.path]);
+    assert.equal(x.blob.size, 2000);
+    assert.equal(x.secs, B.dur);
+    assert.equal(stores.get('palobox-offline-audio').has(off.audioUrl(A.path)), false); // las originales se soltaron
+    await off.remove([A.path]);
+    assert.equal(stores.get('palobox-offline-opus').has(off.audioUrl(A.path)), false);
+    await off.wipe();
+    assert.equal(stores.has('palobox-offline-opus'), false);
+  } finally {
+    delete globalThis.MediaSource;
+    globalThis.fetch = before;
+    await off.wipe();
+  }
+});

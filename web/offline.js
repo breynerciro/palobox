@@ -9,6 +9,7 @@
 //   pero armado solo con lo descargado. Las pantallas no cambian: reciben menos música.
 // Jam, Connect, descargas de Spotify y cualquier cambio (me gusta, playlists) necesitan conexión.
 const AUDIO = 'palobox-offline-audio';
+const COMPACT = 'palobox-offline-opus'; // el audio en la versión compacta va en su propia caché (ver toCompact)
 const KEY = 'palobox.offline';
 const HZ = 48000; // todo lo descargado es MPEG-1 capa III a 48 kHz en estéreo (StreamHz en el servidor)
 const FRAME = 1152 / HZ; // segundos de cada cuadro MP3
@@ -23,6 +24,7 @@ try {
     state = { ...blank(), user: kept.user ?? '' };
     localStorage.setItem(KEY, JSON.stringify(state));
     caches.delete(AUDIO);
+    caches.delete(COMPACT);
   }
 } catch {}
 // store guarda el estado y dice si se pudo: el cupo de localStorage se puede llenar.
@@ -40,6 +42,42 @@ const canOpus = () => {
 // compact: lo que hay descargado en este celular está en la versión compacta. Todo lo descargado va en un mismo
 // formato: quien ya tenía descargas en el original las conserva así, y lo nuevo que baje va igual.
 export const compact = () => state.fmt === 'opus';
+// shelf: la caché donde está (o va) el audio según el formato.
+const shelf = (small = compact()) => caches.open(small ? COMPACT : AUDIO);
+const isWebm = (buf) => { const h = new Uint8Array(buf, 0, Math.min(4, buf.byteLength)); return buf.byteLength > 1000 && h[0] === 0x1A && h[1] === 0x45 && h[2] === 0xDF && h[3] === 0xA3; };
+// needsCompact: hay descargas en el formato original y este celular admite el compacto.
+export const needsCompact = () => !compact() && count() > 0 && canOpus();
+// toCompact pasa lo descargado al formato compacto sin dejar al usuario sin su música mientras tanto: baja la copia
+// compacta de cada pista a su propia caché y, solo cuando están todas, cambia de formato de un golpe y suelta las
+// originales. Si se interrumpe (se cerró la app, se fue la red), la próxima vez sigue donde iba.
+// shortcut: mientras dura hacen falta las dos copias (vez y media el espacio); si no caben, falla y se reintenta
+// en cada apertura sin avanzar. Si llega a pasar, pasar las pistas por tandas.
+export async function toCompact() {
+  if (!needsCompact()) return;
+  const next = await caches.open(COMPACT);
+  const sizes = {};
+  for (const path of Object.keys(state.tracks)) {
+    const had = await next.match(audioUrl(path));
+    if (had) { sizes[path] = (await had.blob()).size; continue; }
+    const r = await fetch(audioUrl(path) + '&fmt=opus');
+    if (r.status === 404) continue; // ya no está en la biblioteca: se suelta al cambiar
+    const buf = r.ok ? await r.arrayBuffer() : new ArrayBuffer(0);
+    if (!isWebm(buf)) throw new Error('El servidor no entregó la versión compacta.');
+    await next.put(audioUrl(path), new Response(buf, { headers: { 'Content-Type': 'audio/webm' } }));
+    sizes[path] = buf.byteLength;
+  }
+  const before = JSON.stringify(state);
+  const paths = Object.keys(state.tracks);
+  for (const path of paths) {
+    if (sizes[path] == null) delete state.tracks[path];
+    else state.tracks[path] = { ...state.tracks[path], frames: 1, bytes: sizes[path], dur: state.tracks[path].t.dur || state.tracks[path].dur };
+  }
+  state.fmt = 'opus';
+  if (!store()) { state = JSON.parse(before); return; } // no cupo la anotación: todo queda como estaba
+  held.clear();
+  const old = await caches.open(AUDIO);
+  for (const path of paths) await old.delete(audioUrl(path));
+}
 export const audioUrl = (path) => `/api/music/offline?path=${encodeURIComponent(path)}`;
 const thumb = (dir) => `/api/media/thumb?lib=musica&path=${encodeURIComponent(dir)}`;
 export const enabled = () => !!state.user; // quién puede descargar: cualquiera que inició sesión en este celular
@@ -71,7 +109,7 @@ export async function wipe() {
   state = blank();
   held.clear();
   store();
-  try { await caches.delete(AUDIO); } catch {}
+  try { await caches.delete(AUDIO); await caches.delete(COMPACT); } catch {}
 }
 
 // countFrames cuenta los cuadros de un MP3 ya limpio: con eso se sabe su duración exacta dentro del audio unido.
@@ -100,7 +138,7 @@ export function queue(tracks) {
 // download guarda en el celular las pistas que falten y avisa el avance (hechas, total). Devuelve cuántas no se
 // pudieron bajar porque el servidor no las tiene o llegaron dañadas; esas no se reintentan.
 export async function download(tracks, onProgress = () => {}) {
-  const c = await caches.open(AUDIO);
+  const c = await caches.open(AUDIO); // las carátulas (sw.js las sirve desde aquí)
   let done = 0;
   let bad = 0;
   // Fallos aún sin soltar: 5 seguidos no son canciones perdidas sino el servidor sin música (disco desmontado).
@@ -113,6 +151,7 @@ export async function download(tracks, onProgress = () => {}) {
   };
   if (!count()) state.fmt = canOpus() ? 'opus' : ''; // con el celular vacío se elige el formato; después todo va igual
   const small = compact();
+  const audioCache = await shelf(small);
   queue(tracks);
   for (const t of tracks) {
     if (!state.tracks[t.path]) {
@@ -121,8 +160,7 @@ export async function download(tracks, onProgress = () => {}) {
       if (r.status === 401 || r.status >= 500) throw new Error(`No se pudo descargar «${t.title}».`);
       const buf = r.ok ? await r.arrayBuffer() : new ArrayBuffer(0);
       // El compacto es un WebM: se reconoce por su marca; su duración es la del índice del servidor.
-      const head = new Uint8Array(buf, 0, Math.min(4, buf.byteLength));
-      const frames = small ? +(buf.byteLength > 1000 && head[0] === 0x1A && head[1] === 0x45 && head[2] === 0xDF && head[3] === 0xA3) : countFrames(new Uint8Array(buf));
+      const frames = small ? +isWebm(buf) : countFrames(new Uint8Array(buf));
       if (!frames) { // el servidor ya no la tiene o llegó dañada: se suelta para que no frene a las demás en cada reintento
         lost.push(t.path);
         if (lost.length >= 5) throw new Error('El servidor no está entregando la música.');
@@ -130,7 +168,7 @@ export async function download(tracks, onProgress = () => {}) {
         continue;
       }
       drop();
-      await c.put(audioUrl(t.path), new Response(buf, { headers: { 'Content-Type': small ? 'audio/webm' : 'audio/mpeg' } }));
+      await audioCache.put(audioUrl(t.path), new Response(buf, { headers: { 'Content-Type': small ? 'audio/webm' : 'audio/mpeg' } }));
       if (t.albumPath && !(await c.match(thumb(t.albumPath)))) { // la carátula, para verla sin conexión (sw.js la sirve)
         const img = await fetch(thumb(t.albumPath)).catch(() => null);
         if (img?.ok) await c.put(thumb(t.albumPath), img);
@@ -139,7 +177,7 @@ export async function download(tracks, onProgress = () => {}) {
       state.pending = state.pending.filter((x) => x.path !== t.path);
       if (!store()) { // no cupo la anotación: sin ella el audio quedaría ocupando espacio sin poderse usar
         delete state.tracks[t.path];
-        await c.delete(audioUrl(t.path));
+        await audioCache.delete(audioUrl(t.path));
         throw new DOMException('No hay espacio para anotar la descarga.', 'QuotaExceededError');
       }
     }
@@ -150,11 +188,12 @@ export async function download(tracks, onProgress = () => {}) {
   return bad;
 }
 export async function remove(paths) {
-  const c = await caches.open(AUDIO);
+  const c = await caches.open(AUDIO), k = await caches.open(COMPACT);
   for (const p of paths) {
     delete state.tracks[p];
     held.delete(p);
     await c.delete(audioUrl(p));
+    await k.delete(audioUrl(p));
   }
   for (const id of Object.keys(state.playlists)) if (!state.playlists[id].paths.some(has)) delete state.playlists[id];
   store();
@@ -186,12 +225,12 @@ export function remember(lib) {
 
 // blobs entrega el audio guardado de cada ruta y lo que dura, para unirlo en un solo audio.
 export async function blobs(paths) {
-  const c = await caches.open(AUDIO);
+  const c = await shelf(), first = await caches.open(AUDIO); // first: lo compacto bajado antes de tener caché propia
   const want = new Set(paths);
   for (const p of held.keys()) if (!want.has(p)) held.delete(p); // lo que ya no entra en el audio unido no se queda en memoria
   return Promise.all(paths.map(async (p) => {
     if (!held.has(p)) {
-      const r = await c.match(audioUrl(p));
+      const r = await c.match(audioUrl(p)) ?? await first.match(audioUrl(p));
       if (!r) { // el sistema lo borró para liberar espacio
         delete state.tracks[p];
         store();
