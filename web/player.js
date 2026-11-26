@@ -63,6 +63,11 @@ let pausedAt = 0; // cuándo se pausó el audio: un flujo que lleva rato en paus
 let ownPause = 0; // cuándo pausó la app misma: una pausa que no viene de ahí es del sistema
 let held = false; // en pausa por el sistema, a la espera de que devuelva el sonido
 const halt = () => { ownPause = Date.now(); audio.pause(); }; // toda pausa de la app pasa por aquí
+// Si la otra app se quedó con el sonido del todo (un video, otra app de música), el navegador no reanuda solo ni avisa
+// cuándo terminó: la música vuelve al regresar a PaloBox. No antes: reanudar a ciegas sería volver a pelear el sonido.
+document.addEventListener('visibilitychange', () => {
+  if (held && document.visibilityState === 'visible' && audio.paused && streaming() && !room.playing) toggle();
+});
 
 // Sala de reproducción (jam.js): con sala, la cola y la posición son las del servidor y este reproductor
 // las refleja; cada acción se manda como comando en vez de cambiar el estado local. Hay sala cuando elijo
