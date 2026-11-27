@@ -3,7 +3,7 @@ package music
 // Audio para el flujo continuo (jam.Stream): iOS deja que una página siga sonando en segundo plano mientras sea
 // el mismo audio, pero a veces bloquea cargar uno nuevo, que es lo que pasa al terminar cada canción. En el flujo
 // el servidor manda las canciones una tras otra por una sola respuesta, como una emisora. Aquí se prepara cada
-// canción para ir en medio de ese flujo: solo cuadros MP3, todos del mismo tipo.
+// canción para ir en medio de ese flujo: solo cuadros AAC (ADTS), todos del mismo tipo.
 
 import (
 	"bytes"
@@ -22,59 +22,12 @@ import (
 	"palobox/internal/httpx"
 )
 
-// StreamRate son los bytes por segundo de lo que sale de ffmpeg (MP3 a 128 kbps).
-const StreamRate = 16000.0
+// StreamRate son los bytes por segundo de lo que sale de ffmpeg: AAC a 128 kbps más la cabecera de cada cuadro.
+const StreamRate = 16000.0 + 7*StreamHz/aacFrame
 
-// StreamHz es la frecuencia de todo lo que va por el flujo continuo o se descarga para escuchar sin conexión.
-const StreamHz = 48000
-
-// frameLen es el tamaño del cuadro MP3 cuya cabecera está en b (MPEG-1 capa III a 48 kHz y en estéreo, lo único
-// que entra al flujo sin convertir), o 0 si b no empieza con una cabecera así. Todo lo que va por un mismo flujo
-// tiene que ser del mismo tipo: un cambio de frecuencia o de mono a estéreo a mitad de camino rompe el audio.
-// 48 kHz es lo que deja spotDL (el audio de YouTube viene así): con ese estándar la biblioteca sale tal cual.
-func frameLen(b []byte) int64 {
-	kbps := [16]int64{0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320}
-	if len(b) < 4 || b[0] != 0xFF || b[1]&0xFE != 0xFA || b[2]>>4 == 0 || b[2]>>4 == 15 || (b[2]>>2)&3 != 1 || b[3]>>6 == 3 {
-		return 0
-	}
-	return 144000*kbps[b[2]>>4]/StreamHz + int64((b[2]>>1)&1)
-}
-
-// mp3Body delimita el audio de un MP3: después de la etiqueta ID3v2 (con la carátula) y del cuadro de
-// información de LAME, y antes de la etiqueta ID3v1. Ese cuadro no trae audio: declara cuántos cuadros tiene el
-// archivo, y un reproductor que le crea daría el flujo por terminado al llegar a la duración de la primera
-// canción. ok es falso si el archivo no es MPEG-1 capa III a 48 kHz en estéreo: ese hay que convertirlo.
-func mp3Body(f *os.File, size int64) (start, end int64, ok bool) {
-	var h [10]byte
-	if _, err := f.ReadAt(h[:], 0); err == nil && string(h[:3]) == "ID3" {
-		start = 10 + (int64(h[6]&0x7f)<<21 | int64(h[7]&0x7f)<<14 | int64(h[8]&0x7f)<<7 | int64(h[9]&0x7f))
-		if h[5]&0x10 != 0 { // con pie de etiqueta
-			start += 10
-		}
-	}
-	var b [48]byte // cabecera (4) + datos laterales (hasta 32) + la marca
-	if _, err := f.ReadAt(b[:], start); err != nil {
-		return 0, 0, false
-	}
-	n := frameLen(b[:])
-	if n == 0 {
-		return 0, 0, false
-	}
-	if bytes.Contains(b[4:], []byte("Xing")) || bytes.Contains(b[4:], []byte("Info")) {
-		start += n
-	}
-	end = size
-	var tag [3]byte
-	if _, err := f.ReadAt(tag[:], size-128); err == nil && string(tag[:]) == "TAG" {
-		end = size - 128
-	}
-	return start, end, end > start
-}
-
-type sectionCloser struct {
-	io.Reader
-	io.Closer
-}
+// StreamHz es la frecuencia de todo lo que va por el flujo continuo o se descarga para escuchar sin conexión: la del
+// AAC que entrega la fuente de la música (44,1 kHz), para que la biblioteca salga tal cual.
+const StreamHz = 44100
 
 type procCloser struct {
 	io.ReadCloser
@@ -98,25 +51,11 @@ const maxConv = 40
 
 var convSlots = make(chan struct{}, maxConv)
 
-// frameAt busca desde off el primer cuadro MP3 seguido de otro (una cabecera suelta puede ser casualidad dentro
-// del audio) y dice dónde empieza, o -1 si no hay ninguno cerca.
-func frameAt(f *os.File, off, end int64) int64 {
-	b := make([]byte, 8<<10) // caben varios cuadros: el más largo (320 kbps) mide 961 bytes
-	n, _ := f.ReadAt(b[:min(int64(len(b)), max(end-off, 0))], off)
-	for i := 0; i+4 < n; i++ {
-		if k := int(frameLen(b[i:n])); k > 0 && i+k+4 <= n && frameLen(b[i+k:n]) > 0 {
-			return off + int64(i)
-		}
-	}
-	return -1
-}
-
 // OpenStream abre el audio de una pista desde el segundo at para el flujo continuo y dice a cuántos bytes por
-// segundo va. Desde el principio, un MP3 del tipo común sale tal cual. Lo demás lo convierte ffmpeg sobre la
-// marcha: otros formatos (FLAC, M4A, MP3 a 44,1 kHz), porque en un mismo flujo no se puede cambiar de formato, y
-// cualquier pista que se abre a mitad de camino (adelantar, reabrir el flujo), porque cada cuadro MP3 usa datos
-// del anterior y empezar en uno suelto suena como un ruido; ffmpeg entrega un comienzo limpio. Con maxConv
-// conversiones ya en curso, el MP3 común sale tal cual desde ese cuadro suelto.
+// segundo va. La biblioteca es AAC en M4A (AAC-LC, 44,1 kHz, estéreo): sus cuadros salen tal cual, desde el
+// principio o desde cualquier segundo, sin convertir nada (un cuadro AAC no depende del anterior como en MP3). Lo
+// que no sea de ese tipo (otro formato, otra frecuencia) lo convierte ffmpeg sobre la marcha, porque en un mismo
+// flujo no se puede cambiar de formato; con maxConv conversiones ya en curso esa también se hace, sin cupo.
 func (l *Library) OpenStream(path string, dur, at float64) (io.ReadCloser, float64, error) {
 	full := httpx.Safe(l.musicRoot(), path)
 	f, err := os.Open(full)
@@ -128,13 +67,13 @@ func (l *Library) OpenStream(path string, dur, at float64) (io.ReadCloser, float
 		f.Close()
 		return nil, 0, os.ErrNotExist
 	}
-	start, end, plain := mp3Body(f, st.Size())
-	plain = plain && dur > 0 && strings.EqualFold(filepath.Ext(path), ".mp3")
 	// Menos de una décima de segundo es «desde el principio»: el flujo se abre un instante después del salto.
 	if at < 0.1 {
 		at = 0
-		if plain {
-			return sectionCloser{io.NewSectionReader(f, start, end-start), f}, float64(end-start) / dur, nil
+	}
+	if strings.EqualFold(filepath.Ext(path), ".m4a") {
+		if m, err := readM4A(f); err == nil && m.plain() {
+			return &adts{f: f, m: m, next: min(int(at*StreamHz/aacFrame), len(m.sizes))}, m.rate(), nil
 		}
 	}
 	release := func() {}
@@ -142,19 +81,11 @@ func (l *Library) OpenStream(path string, dur, at float64) (io.ReadCloser, float
 	case convSlots <- struct{}{}:
 		release = func() { <-convSlots }
 	default:
-		// Sin cupo: el archivo sale tal cual desde el cuadro más cercano. El primer instante puede sonar sucio,
-		// pero el servidor no se satura. Lo que ffmpeg tiene que convertir sí o sí (otro formato) pasa sin cupo.
-		if plain {
-			rate := float64(end-start) / dur
-			if off := frameAt(f, start+int64(at*rate), end); off >= 0 {
-				return sectionCloser{io.NewSectionReader(f, off, end-off), f}, rate, nil
-			}
-		}
 	}
 	f.Close()
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(ctx, "ffmpeg", "-v", "error", "-nostdin", "-ss", strconv.FormatFloat(at, 'f', 3, 64), "-i", full,
-		"-vn", "-map_metadata", "-1", "-ac", "2", "-ar", strconv.Itoa(StreamHz), "-b:a", "128k", "-write_xing", "0", "-id3v2_version", "0", "-f", "mp3", "-")
+		"-vn", "-map_metadata", "-1", "-ac", "2", "-ar", strconv.Itoa(StreamHz), "-c:a", "aac", "-b:a", "128k", "-f", "adts", "-")
 	out, err := cmd.StdoutPipe()
 	if err == nil {
 		err = cmd.Start()
@@ -190,7 +121,7 @@ func (l *Library) Offline(w http.ResponseWriter, r *http.Request, u httpx.User) 
 		return err
 	}
 	defer src.Close()
-	w.Header().Set("Content-Type", "audio/mpeg")
+	w.Header().Set("Content-Type", "audio/aac")
 	w.Header().Set("Cache-Control", "private, no-store")
 	_, err = io.Copy(w, src)
 	return err

@@ -5,7 +5,7 @@ La app Go no ejecuta spotDL: le manda el enlace a este servicio y consulta la co
 Aquí viven el estado (SQLite propia), el proceso de spotDL y su cancelación, así que
 un reinicio del contenedor no pierde los trabajos pendientes.
 
-Solo usa la biblioteca estándar, más mutagen para leer etiquetas MP3 (llega con spotDL):
+Solo usa la biblioteca estándar, más mutagen para leer etiquetas M4A (llega con spotDL):
 menos dependencias y una imagen más liviana.
 El puerto no se publica; únicamente lo alcanza la app por la red de compose, y toda
 petición debe traer el token del módulo (Authorization: Bearer) y la identidad del
@@ -28,7 +28,7 @@ import threading
 import time
 import urllib.parse
 
-from library import drop_partial, filter_plan, index_library, playlist_tracks
+from library import drop_partial, filter_plan, index_library, join_artists, playlist_tracks
 from results import Feed, failures_from, outcome, song_names
 from store import Store
 
@@ -287,7 +287,7 @@ class Runner:
         temps = (errfile, savefile, planfile, todofile)
         remove(temps)
         # shortcut: tras un corte de luz solo se conocen las canciones de una playlist (set_songs); de un álbum o
-        # una canción suelta, el MP3 a medias queda. Guardar el plan de todo trabajo si eso llega a pasar.
+        # una canción suelta, el M4A a medias queda. Guardar el plan de todo trabajo si eso llega a pasar.
         drop_partial(self.s.music_dir, job["created"], [t for _, t in self.store.songs(jid)])  # de una corrida anterior
         cookie = ["--cookie-file", self.s.cookie_file] if self.s.cookie_file else []
         # Las credenciales de Spotify las lee spotDL de su config.json (Settings.write_spotify_config).
@@ -344,10 +344,10 @@ class Runner:
             rc = self.spotdl(jid, [
                 "download", *query,
                 "--output", os.path.join(self.s.music_dir, "{artist}/{album}/{title}.{output-ext}"),
-                "--format", "mp3",
-                "--bitrate", "128k",
-                # El formato del flujo continuo de la app (StreamHz): así cada canción sale tal cual, sin convertir.
-                "--ffmpeg-args", "-ar 48000 -ac 2",
+                # El AAC de la fuente tal cual, sin recodificar (AAC-LC a 44,1 kHz): es el formato del flujo continuo
+                # de la app (StreamHz), así cada canción sale por él sin convertir y sin perder calidad.
+                "--format", "m4a",
+                "--bitrate", "disable",
                 # Sin proveedores de letras: la app no las muestra y buscarlas costaba unos 7 s por canción en tres
                 # sitios que casi siempre responden con un rechazo.
                 "--lyrics",
@@ -361,6 +361,7 @@ class Runner:
             ], feed, started)
             if rc is None:
                 return
+            join_artists(self.s.music_dir, job["created"])
             if rc:
                 self.settle(jid, failed, True)
             else:
@@ -710,7 +711,7 @@ def main():
         httpd.serve_forever()
     finally:
         service.stop()
-        # El trabajador borra al salir los MP3 a medias: sin esperarlo quedaban y al reanudar se daban por hechos.
+        # El trabajador borra al salir los M4A a medias: sin esperarlo quedaban y al reanudar se daban por hechos.
         service.runner.thread.join(timeout=8)  # Docker da 10 s
         httpd.server_close()
 

@@ -186,7 +186,7 @@ async function deckOpen(at, play, fresh = false) {
     const starts = [], lens = [];
     let total = 0;
     parts.forEach((p, k) => { starts[from + k] = total; lens[from + k] = p.secs; total += p.secs; });
-    deck = { key, from, to, url: URL.createObjectURL(new Blob(parts.map((p) => p.blob), { type: 'audio/mpeg' })), starts, lens };
+    deck = { key, from, to, url: URL.createObjectURL(new Blob(parts.map((p) => p.blob), { type: 'audio/aac' })), starts, lens };
     audio.src = deck.url;
     const target = deck.starts[pos] + at;
     // moving: el audio nuevo arranca en cero y solo después salta a su sitio; mientras tanto deckTick no debe

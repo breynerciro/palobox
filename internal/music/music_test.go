@@ -2,6 +2,7 @@ package music
 
 import (
 	"bytes"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -33,34 +34,60 @@ func TestEtiquetas(t *testing.T) {
 	}
 }
 
-// Con el cupo de conversiones lleno, una pista a mitad de camino sale tal cual desde un cuadro entero, sin ffmpeg.
-func TestFlujoSinCupo(t *testing.T) {
-	frame := make([]byte, 384) // MPEG-1 capa III, 128 kbps, 48 kHz, estéreo
-	copy(frame, []byte{0xFF, 0xFB, 0x94, 0x00})
+// Una pista de la biblioteca (M4A del tipo del flujo) sale tal cual desde cualquier segundo, sin ffmpeg ni cupo.
+func TestFlujoDirecto(t *testing.T) {
 	l := &Library{Data: t.TempDir()}
 	os.MkdirAll(l.musicRoot(), 0o755)
-	os.WriteFile(filepath.Join(l.musicRoot(), "a.mp3"), bytes.Repeat(frame, 10), 0o644)
-	for len(convSlots) < cap(convSlots) {
-		convSlots <- struct{}{}
-	}
-	defer func() {
-		for len(convSlots) > 0 {
-			<-convSlots
-		}
-	}()
-	// 10 cuadros en 0,24 s son 16000 bytes por segundo; el segundo 0,13 cae dentro del sexto cuadro.
-	src, rate, err := l.OpenStream("a.mp3", 0.24, 0.13)
+	os.WriteFile(filepath.Join(l.musicRoot(), "a.m4a"), fakeM4A('a', 10, 377), 0o644)
+	// 10 cuadros de 384 bytes (con cabecera) duran 10 × 1024 / 44100 s; el segundo 0,13 cae dentro del sexto cuadro.
+	src, rate, err := l.OpenStream("a.m4a", 0.24, 0.13)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer src.Close()
 	b, _ := io.ReadAll(src)
-	if rate != 16000 || len(b) != 4*384 || b[0] != 0xFF {
-		t.Fatalf("rate=%v bytes=%d", rate, len(b))
+	if want := 384 * StreamHz / 1024.0; rate != want || len(b) != 5*384 || b[0] != 0xFF || b[1] != 0xF1 || b[7] != 'a' {
+		t.Fatalf("rate=%v (se esperaba %v) bytes=%d", rate, want, len(b))
 	}
-	if len(convSlots) != cap(convSlots) {
-		t.Fatal("el paso directo no debe tocar el cupo")
+	if len(convSlots) != 0 {
+		t.Fatal("el paso directo no debe tocar el cupo de conversiones")
 	}
+	// Más allá del final no hay nada que mandar, pero tampoco es un error.
+	end, _, err := l.OpenStream("a.m4a", 0.24, 99)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer end.Close()
+	if b, _ := io.ReadAll(end); len(b) != 0 {
+		t.Fatalf("después del final llegaron %d bytes", len(b))
+	}
+}
+
+// fakeM4A arma un M4A mínimo: n cuadros de size bytes rellenos con fill y el índice que los describe como AAC-LC
+// a 44,1 kHz en estéreo (el mismo de jam_test.go, en el paquete principal).
+func fakeM4A(fill byte, n, size int) []byte {
+	u32 := func(v int) []byte { return binary.BigEndian.AppendUint32(nil, uint32(v)) }
+	box := func(kind string, parts ...[]byte) []byte {
+		body := bytes.Join(parts, nil)
+		return append(append(u32(8+len(body)), kind...), body...)
+	}
+	zero := func(k int) []byte { return make([]byte, k) }
+	ftyp := box("ftyp", []byte("M4A "), u32(0), []byte("M4A mp42"))
+	mdat := box("mdat", bytes.Repeat([]byte{fill}, n*size))
+	esds := box("esds", u32(0), []byte{3, 25, 0, 1, 0, 4, 17, 0x40, 0x15}, zero(11), []byte{5, 2, 0x12, 0x10, 6, 1, 2})
+	mp4a := box("mp4a", zero(6), []byte{0, 1}, zero(8), []byte{0, 2, 0, 16}, zero(4), u32(44100<<16), esds)
+	sizes := []byte{}
+	for i := 0; i < n; i++ {
+		sizes = append(sizes, u32(size)...)
+	}
+	stbl := box("stbl",
+		box("stsd", u32(0), u32(1), mp4a),
+		box("stsz", u32(0), u32(0), u32(n), sizes),
+		box("stsc", u32(0), u32(1), u32(1), u32(n), u32(1)),
+		box("stco", u32(0), u32(1), u32(len(ftyp)+8)))
+	hdlr := box("hdlr", u32(0), u32(0), []byte("soun"), zero(12), []byte{0})
+	moov := box("moov", box("trak", box("mdia", hdlr, box("minf", stbl))))
+	return bytes.Join([][]byte{ftyp, mdat, moov}, nil)
 }
 
 // Si ffprobe no alcanza a correr, la pista no entra al índice y se reintenta; si corre y falla (archivo corrupto),

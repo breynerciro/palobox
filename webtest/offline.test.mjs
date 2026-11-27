@@ -20,13 +20,13 @@ globalThis.caches = {
 };
 globalThis.location = { origin: 'http://palobox.test' };
 globalThis.document = { body: { classList: { add() {} } } };
-// Un MP3 limpio de n cuadros: MPEG-1 capa III, 128 kbps, 48 kHz (384 bytes por cuadro), como lo entrega el servidor.
-const mp3 = (n) => {
+// Un audio limpio de n cuadros AAC con cabecera ADTS (384 bytes por cuadro), como lo entrega el servidor.
+const aac = (n) => {
   const b = new Uint8Array(384 * n);
-  for (let i = 0; i < n; i++) b.set([0xFF, 0xFB, 0x94, 0x00], 384 * i);
+  for (let i = 0; i < n; i++) b.set([0xFF, 0xF1, 0x50, 0x80, 0x30, 0x1F, 0xFC], 384 * i); // cabecera ADTS de un cuadro de 384 bytes
   return b;
 };
-globalThis.fetch = async (url) => (String(url).includes('/api/music/offline') ? new Response(mp3(3)) : new Response('', { status: 404 }));
+globalThis.fetch = async (url) => (String(url).includes('/api/music/offline') ? new Response(aac(3)) : new Response('', { status: 404 }));
 
 const track = (n, title, artist, album) => ({ path: `${artist}/${album}/${n}.mp3`, title, artist, album, albumPath: `${artist}/${album}`, artistPath: artist, year: 2020, num: n, dur: 1 });
 const A = track(1, 'Amor eterno', 'Alcolirykoz', 'Servicios');
@@ -37,9 +37,9 @@ const json = (r) => r.json();
 const off = await import('../web/offline.js');
 await off.login({ name: 'ana', musicOnly: true });
 
-test('cuenta los cuadros de un MP3 limpio y salta lo que no es cuadro', () => {
-  assert.equal(off.countFrames(mp3(5)), 5);
-  assert.equal(off.countFrames(new Uint8Array([1, 2, 3, ...mp3(2)])), 2);
+test('cuenta los cuadros de un audio limpio y salta lo que no es cuadro', () => {
+  assert.equal(off.countFrames(aac(5)), 5);
+  assert.equal(off.countFrames(new Uint8Array([1, 2, 3, ...aac(2)])), 2);
   assert.equal(off.countFrames(new Uint8Array(100)), 0);
 });
 
@@ -59,7 +59,7 @@ test('descarga, lista y responde como el servidor solo con lo descargado', async
   assert.equal(off.handle('/api/photos').status, 503);
   const [x] = await off.blobs([A.path]);
   assert.equal(x.blob.size, 3 * 384);
-  assert.ok(Math.abs(x.secs - 3 * 1152 / 48000) < 1e-9);
+  assert.ok(Math.abs(x.secs - 3 * 1024 / 44100) < 1e-9);
 });
 
 // Los mismos casos de internal/music/search_test.go: la búsqueda sin conexión no se puede desviar de la del servidor.
