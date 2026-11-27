@@ -818,7 +818,6 @@ export function restore(name) {
   shuffle = !!s.shuffle;
   repeat = [0, 1, 2].includes(s.repeat) ? s.repeat : 0;
   load(at, { play: false, at: s.at });
-  if (tv && !$('#np').open) $('#np').showModal(); // en el televisor «Reproduciendo» es la pantalla principal
   ensureLib().catch(() => {}); // para pintar el me gusta de la pista restaurada
 }
 
