@@ -27,6 +27,7 @@ import (
 	"palobox/internal/music"
 	"palobox/internal/photos"
 	"palobox/internal/spotdl"
+	"palobox/internal/push"
 	"palobox/internal/store"
 	"palobox/internal/uploads"
 )
@@ -66,7 +67,7 @@ func open(data string) (*app, error) {
 		uploads: uploads.New(db, data, cloudThumbs),
 		music:   lib,
 		spotdl:  &spotdl.Handler{Full: lib.Full, Playlist: lib.ImportPlaylist},
-		jam:     &jam.Hub{Lookup: lib.ByPaths, More: lib.Random, Audio: lib.OpenStream, Alive: au.Alive},
+		jam:     &jam.Hub{Lookup: lib.ByPaths, More: lib.Random, Audio: lib.OpenStream, Alive: au.Alive, DB: db},
 	}, nil
 }
 
@@ -208,6 +209,13 @@ func main() {
 		log.Fatal(err)
 	}
 	a.spotdl.Module = module.Load("SPOTDL", "El servicio de descargas")
+	// Push: despierta la app de Android cuando le pasan la música (internal/jam/sleep.go). Sin la cuenta de servicio
+	// de Firebase en PUSH_KEY_FILE la app solo se entera de eso mientras está despierta.
+	if f, err := push.Load(); err != nil {
+		log.Printf("push apagado: %v", err)
+	} else if f != nil {
+		a.jam.Push = func(token string) error { return f.Send(token, map[string]string{"op": "play"}) }
+	}
 	if g := gemini.Load(); g != nil { // sin llave: no se clasifican artistas nuevos ni hay playlists por descripción
 		a.music.Ask = g.Ask
 	}

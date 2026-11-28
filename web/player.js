@@ -338,8 +338,11 @@ function tvNow() {
   if (!window.PaloTv || !t) return;
   const at = deck ? deckTime() : room ? roomTime() : resume;
   window.PaloTv.now(JSON.stringify({ title: t.title, artist: t.artist, album: t.album, art: new URL(thumbUrl('musica', t.albumPath), location.href).href,
-    playing: playing(), pos: Math.round(at * 1000) || 0, dur: Math.round(dur() * 1000) || 0 }));
+    playing: playing(), here, pos: Math.round(at * 1000) || 0, dur: Math.round(dur() * 1000) || 0 }));
 }
+// paloWake: la app de Android se despertó con un push («suena aquí»): la página pudo estar congelada y su flujo de
+// eventos, muerto. Se reconecta aunque no esté a la vista; la foto que llega la pone a sonar (syncRoom).
+window.paloWake = () => { if (user && !local) jam.connect(applyJam); };
 window.paloTv = (cmd, arg) => ({ play: () => !playing() && toggle(), pause: () => playing() && toggle(), next: () => next(), prev, seek: () => seekTo(arg) })[cmd]?.();
 for (const ev of ['loadedmetadata', 'playing', 'pause', 'seeked', 'ratechange']) audio.addEventListener(ev, positionState);
 const mix = (a) => {

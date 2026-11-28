@@ -16,6 +16,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"palobox/internal/push"
 )
 
 // Salas de reproducción: elegir dispositivo y jam entre usuarios.
@@ -422,5 +424,69 @@ func TestOfflineOpus(t *testing.T) {
 	}
 	if code, _, _ := ana.do("GET", "/api/music/offline?path=../x.mp3&fmt=opus", nil); code != 404 {
 		t.Fatalf("fuera de la biblioteca: %d", code)
+	}
+}
+
+// Dispositivo dormido: la app de Android deja su token, se desconecta y sigue en la lista; al pasarle la música le
+// llega un push. Un token que Firebase da por vencido se olvida.
+func TestJamSleep(t *testing.T) {
+	a, _, ana, _ := musicSetup(t)
+	ana.do("GET", "/api/music", nil)
+	pushed := make(chan string, 4)
+	gone := false
+	a.jam.Push = func(token string) error {
+		pushed <- token
+		if gone {
+			return push.ErrGone
+		}
+		return nil
+	}
+	cmd := func(v map[string]any) (int, map[string]any) {
+		t.Helper()
+		code, m, _ := ana.do("POST", "/api/jam", mustJSON(v))
+		return code, m
+	}
+	// El Android se conecta, deja su token y se duerme (se cae su flujo de eventos).
+	ctx, cancel := context.WithCancel(context.Background())
+	req, _ := http.NewRequestWithContext(ctx, "GET", ana.base+"/api/jam/events?device=anaandroid0&name=PaloBox%20en%20Android", nil)
+	res, err := ana.c.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bufio.NewReader(res.Body).ReadString('\n')
+	cmd(map[string]any{"device": "anaandroid0", "op": "push", "token": "tok-1"})
+	cancel()
+	res.Body.Close()
+	time.Sleep(100 * time.Millisecond) // que el servidor note la desconexión
+
+	// Desde el iPhone: el Android aparece dormido y se le puede pasar la música.
+	_, m := cmd(map[string]any{"device": "anaiphone00", "op": "start", "paths": []string{"suelta.mp3"}, "playing": true})
+	var found map[string]any
+	for _, d := range m["devices"].([]any) {
+		if d := d.(map[string]any); d["id"] == "anaandroid0" {
+			found = d
+		}
+	}
+	if found == nil || found["asleep"] != true || found["name"] != "PaloBox en Android" {
+		t.Fatalf("el Android dormido no aparece: %v", m["devices"])
+	}
+	if code, m := cmd(map[string]any{"device": "anaiphone00", "op": "here", "target": "anaandroid0"}); code != 200 {
+		t.Fatalf("pasar al dormido: %d %v", code, m)
+	}
+	select {
+	case tok := <-pushed:
+		if tok != "tok-1" {
+			t.Fatalf("push a %q", tok)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("no se mandó el push")
+	}
+	// Token vencido: se olvida y el dispositivo sale de la lista.
+	gone = true
+	cmd(map[string]any{"device": "anaiphone00", "op": "here", "target": "anaandroid0"})
+	<-pushed
+	time.Sleep(100 * time.Millisecond)
+	if code, _ := cmd(map[string]any{"device": "anaiphone00", "op": "here", "target": "anaandroid0"}); code != 409 {
+		t.Fatalf("un token vencido debía olvidarse: %d", code)
 	}
 }
