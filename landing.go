@@ -22,7 +22,7 @@ var landingTmpl = template.Must(template.New("descarga").Parse(landingHTML))
 var apkFile = "/usr/share/palobox/palobox.apk"
 
 // downloaderCode: el código de la app Downloader (go.aftvnews.com) que apunta a /apk; vacío = solo la dirección.
-const downloaderCode = ""
+const downloaderCode = "1374218"
 
 var tvUA = regexp.MustCompile(`(?i)Android TV|GoogleTV|Google TV|SmartTV|BRAVIA|AFT[A-Z]|\bTV\b|leanback`)
 
