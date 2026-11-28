@@ -576,7 +576,7 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 			}
 			if h.reachable(u, in.Target) {
 				u.listen(in.Target, in.Add)
-				h.wake(u)
+				h.wake(u, in.Target)
 			}
 			room.open = room.open || in.Open
 			if room.open {
@@ -655,7 +655,7 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 					}
 				}
 				owner.listen(in.Target, in.Add)
-				h.wake(owner)
+				h.wake(owner, in.Target)
 			case "queue": // alguien puso a sonar otra lista
 				if len(tracks) == 0 {
 					return view{}, httpx.Error(404, "Esa música ya no está en la biblioteca.")

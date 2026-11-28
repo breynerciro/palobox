@@ -58,31 +58,27 @@ func (h *Hub) reachable(u *user, device string) bool {
 	return u.conns[device] != nil || (ok && h.Push != nil)
 }
 
-// wake despierta los dispositivos de u que deben sonar y no están conectados. Se llama con h.mu tomado; el envío
-// va aparte para no frenar la sala mientras responde Firebase.
-func (h *Hub) wake(u *user) {
-	if h.Push == nil {
+// wake despierta el dispositivo de u al que le pasaron la música, si tiene push. Va aunque parezca conectado: tras
+// el túnel de Cloudflare una conexión de una app ya cerrada sigue pareciendo viva varios minutos, y a una despierta
+// el aviso solo la hace reconectarse. Se llama con h.mu tomado; el envío va aparte para no frenar la sala.
+func (h *Hub) wake(u *user, id string) {
+	s, ok := h.sleepers(u)[id]
+	if h.Push == nil || !ok || !u.active[id] {
 		return
 	}
-	for id := range u.active {
-		s, ok := h.sleepers(u)[id]
-		if !ok || u.conns[id] != nil {
-			continue
+	go func() {
+		err := h.Push(s.token)
+		if err == nil {
+			return
 		}
-		go func() {
-			err := h.Push(s.token)
-			if err == nil {
-				return
-			}
-			log.Printf("jam: despertar %q de %s: %v", s.name, u.name, err)
-			if errors.Is(err, push.ErrGone) {
-				h.mu.Lock()
-				delete(u.sleep, id)
-				h.mu.Unlock()
-				h.DB.Exec(`DELETE FROM push_devices WHERE user = ? AND device = ?`, u.name, id)
-			}
-		}()
-	}
+		log.Printf("jam: despertar %q de %s: %v", s.name, u.name, err)
+		if errors.Is(err, push.ErrGone) {
+			h.mu.Lock()
+			delete(u.sleep, id)
+			h.mu.Unlock()
+			h.DB.Exec(`DELETE FROM push_devices WHERE user = ? AND device = ?`, u.name, id)
+		}
+	}()
 }
 
 // asleep: los dispositivos de u que se pueden despertar y no están conectados, para la foto. owner: ver deviceView.User.
