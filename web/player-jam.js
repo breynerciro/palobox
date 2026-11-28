@@ -42,7 +42,7 @@ export function paintJam() {
   out.push(label(room?.open ? 'Dispositivos del jam' : 'Tus dispositivos'));
   out.push(el('ul', { className: 'list' }, devices.map((d) => {
     const b = el('button', { className: `row${on(d) ? ' playing' : ''}` }, el('span', { className: 'type', style: `--tc: var(--t-${on(d) ? 'audio' : 'doc'})` }, icon('cast')),
-      el('div', { className: 'row-text' }, el('p', { textContent: d.name }), el('p', { className: 'muted', textContent: joinText(d.me && 'Este dispositivo', d.user, on(d) ? 'Suena aquí' : 'Toca para que suene aquí') })),
+      el('div', { className: 'row-text' }, el('p', { textContent: d.name }), el('p', { className: 'muted', textContent: joinText(d.me && 'Este dispositivo', d.user, d.asleep && 'En reposo', on(d) ? 'Suena aquí' : 'Toca para que suene aquí') })),
       on(d) && icon('check'));
     if (on(d)) b.setAttribute('aria-current', 'true');
     b.onclick = () => playOn(d);

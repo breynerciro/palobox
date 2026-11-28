@@ -9,6 +9,7 @@ package jam
 
 import (
 	"crypto/rand"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -39,6 +40,10 @@ type Hub struct {
 	// Alive dice si la sesión de la petición sigue vigente: los flujos duran horas y solo se validan al abrirse.
 	// nil = no se vuelve a comprobar.
 	Alive func(r *http.Request) bool
+	// DB guarda los tokens de push de la app de Android y Push manda el aviso que la despierta (sleep.go). Sin
+	// alguno de los dos, un dispositivo que se desconecta sale de la lista como siempre.
+	DB   *sql.DB
+	Push func(token string) error
 
 	mu    sync.Mutex
 	seq   int64 // crece con cada foto enviada: el cliente descarta las que llegan en desorden
@@ -67,6 +72,7 @@ type user struct {
 	marks map[string]chan float64
 	// Último reinicio que el flujo de cada dispositivo hizo por su cuenta, al ver un salto hecho desde otro (stream.go).
 	skips map[string]restart
+	sleep map[string]sleeper // dispositivos con push, conectados o no (sleep.go); nil = aún no se cargan
 }
 
 // restart: el flujo volvió a empezar en el segundo at de lo enviado, con la sala en esa pista y ese instante.
@@ -162,7 +168,8 @@ type deviceView struct {
 	ID     string `json:"id"`
 	Name   string `json:"name"`
 	Active bool   `json:"active"`
-	User   string `json:"user,omitempty"` // en un jam, dueño del dispositivo si es de otra persona
+	User   string `json:"user,omitempty"`   // en un jam, dueño del dispositivo si es de otra persona
+	Asleep bool   `json:"asleep,omitempty"` // no está conectado, pero un push lo despierta si se elige
 }
 type memberView struct {
 	Name   string `json:"name"`
@@ -220,14 +227,16 @@ func (h *Hub) snapshot(u *user, device string, have int) view {
 		v.Skip = &skipView{s.n, s.at}
 	}
 	for _, c := range u.conns {
-		v.Devices = append(v.Devices, deviceView{c.id, c.name, u.active[c.id], ""})
+		v.Devices = append(v.Devices, deviceView{c.id, c.name, u.active[c.id], "", false})
 	}
+	v.Devices = append(v.Devices, h.asleep(u, "")...)
 	if r := u.room; r != nil && r.open { // en un jam se eligen también los dispositivos de los demás
 		for _, m := range r.members {
 			if m != u {
 				for _, c := range m.conns {
-					v.Devices = append(v.Devices, deviceView{c.id, c.name, m.active[c.id], m.name})
+					v.Devices = append(v.Devices, deviceView{c.id, c.name, m.active[c.id], m.name, false})
 				}
+				v.Devices = append(v.Devices, h.asleep(m, m.name)...)
 			}
 		}
 	}
@@ -282,8 +291,8 @@ func (u *user) listen(device string, add bool) {
 	case u.active[device]:
 		delete(u.active, device)
 	default:
-		for id := range u.active { // de paso se olvidan los que ya no están conectados
-			if u.conns[id] == nil {
+		for id := range u.active { // de paso se olvidan los que ya no están conectados (y no se pueden despertar)
+			if _, ok := u.sleep[id]; u.conns[id] == nil && !ok {
 				delete(u.active, id)
 			}
 		}
@@ -524,13 +533,13 @@ func (h *Hub) advance(r *jamRoom, ended bool) {
 // Cmd aplica una acción de un dispositivo y le devuelve la foto resultante.
 func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 	var in struct {
-		Device, Op, Code, Target, Path string
-		User                           string // dueño de Target en un jam; vacío si es mío
-		Paths                          []string
-		Pos, Index, Qrev, Repeat       int
-		Manual                         int
-		At                             float64
-		Playing, Open, Next, Add       bool
+		Device, Op, Code, Target, Path, Token string
+		User                                  string // dueño de Target en un jam; vacío si es mío
+		Paths                                 []string
+		Pos, Index, Qrev, Repeat              int
+		Manual                                int
+		At                                    float64
+		Playing, Open, Next, Add              bool
 	}
 	// Una cola de 500 rutas no cabe en el límite de httpx.ReadJSON.
 	if json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(&in) != nil || !deviceRe.MatchString(in.Device) || len(in.Paths) > maxQueue {
@@ -565,8 +574,9 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 				room.members, u.room = []*user{u}, room
 				u.listen(in.Device, false)
 			}
-			if u.conns[in.Target] != nil {
+			if h.reachable(u, in.Target) {
 				u.listen(in.Target, in.Add)
+				h.wake(u)
 			}
 			room.open = room.open || in.Open
 			if room.open {
@@ -586,6 +596,8 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 		case "leave":
 			h.leave(u)
 			room = nil
+		case "push": // la app de Android deja su token: si se duerme, sigue en la lista y se puede despertar
+			h.remember(u, in.Device, in.Token)
 		case "state": // solo la foto: el teléfono en segundo plano pregunta así cuando pierde el flujo de eventos
 		case "cut":
 			// El dispositivo va a saltarse su colchón (stream.go): su flujo vuelve a empezar en lo que la sala suena
@@ -634,7 +646,7 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 						}
 					}
 				}
-				if owner == nil || owner.conns[in.Target] == nil {
+				if owner == nil || !h.reachable(owner, in.Target) {
 					return view{}, httpx.Error(409, "Ese dispositivo ya no está conectado.")
 				}
 				if !in.Add && room.open { // «solo ahí»: se calla en los dispositivos de todos los del jam
@@ -643,6 +655,7 @@ func (h *Hub) Cmd(w http.ResponseWriter, r *http.Request, hu httpx.User) error {
 					}
 				}
 				owner.listen(in.Target, in.Add)
+				h.wake(owner)
 			case "queue": // alguien puso a sonar otra lista
 				if len(tracks) == 0 {
 					return view{}, httpx.Error(404, "Esa música ya no está en la biblioteca.")

@@ -36,7 +36,12 @@ export function connect(onState) {
   close();
   handler = onState;
   source = new EventSource(`/api/jam/events?device=${deviceId}&name=${encodeURIComponent(deviceName(navigator.userAgent))}`);
-  source.onopen = () => (lastSeq = 0); // tras reconectar (o reiniciarse el servidor) la numeración empieza de nuevo
+  source.onopen = () => {
+    lastSeq = 0; // tras reconectar (o reiniciarse el servidor) la numeración empieza de nuevo
+    // La app de Android deja su token de push: dormida sigue en la lista y un aviso la despierta (internal/jam/sleep.go).
+    const token = window.PaloTv?.token?.();
+    if (token) send('push', { token }, true);
+  };
   source.onmessage = (e) => take(JSON.parse(e.data));
 }
 

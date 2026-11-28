@@ -29,7 +29,9 @@ services:
       # Gemini clasifica el género de los artistas nuevos y arma playlists por descripción; sin la llave, ambas cosas se apagan.
       GEMINI_KEY_FILE: /run/secrets/gemini_key
       GEMINI_PER_DAY: ${GEMINI_PER_DAY:-300} # solicitudes al día entre todas las cuentas
-    secrets: [spotdl_token, gemini_key]
+      # Cuenta de servicio de Firebase (proyecto palobox-app): despierta la app de Android cuando le pasan la música.
+      PUSH_KEY_FILE: /run/secrets/push_key
+    secrets: [spotdl_token, gemini_key, push_key]
     # deploy.sh espera este chequeo (up --wait) antes de borrar la imagen anterior.
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/api/version"]
@@ -102,6 +104,10 @@ secrets:
   # Llave de la API de Gemini (aistudio.google.com); se copia a mano al servidor. Si no existe, deploy.sh deja el archivo vacío.
   gemini_key:
     file: ./secrets/gemini.key
+  # JSON de la cuenta de servicio de Firebase (consola → Configuración del proyecto → Cuentas de servicio); se copia a
+  # mano al servidor. Vacío: la app de Android no se despierta sola.
+  push_key:
+    file: ./secrets/push.json
   # Token del túnel (panel de Cloudflare); se copia a mano al servidor, ver README.
   cloudflared_token:
     file: ./secrets/cloudflared.token

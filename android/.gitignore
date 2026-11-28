@@ -6,3 +6,4 @@ keystore.pass
 build/
 app/build/
 .gradle/
+local.properties

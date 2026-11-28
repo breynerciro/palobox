@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "479904563267",
+    "project_id": "palobox-app",
+    "storage_bucket": "palobox-app.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:479904563267:android:eaf7142a79c619c87e94f6",
+        "android_client_info": {
+          "package_name": "org.dpdns.palobox.twa"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyA9rcgq7x82RqhhDEw048IOlqXWz0SQuBU"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}
