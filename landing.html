@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#090D16">
+<link rel="icon" href="/icon.svg">
+<title>Descarga PaloBox</title>
+<style>
+  :root { color-scheme: dark; --bg: #090D16; --surface: #0f1522; --line: #263145; --text: #f8fafc; --muted: #94a3b8;
+    --accent: #14b8a6; --grad: linear-gradient(135deg, #00b886, #00a6c8); }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 40px 16px 56px; }
+  header { display: flex; align-items: center; gap: 14px; margin-bottom: 28px; }
+  header img { width: 56px; height: 56px; }
+  h1 { font-size: 28px; line-height: 1.15; margin: 0; }
+  header p { margin: 2px 0 0; color: var(--muted); }
+  section { background: var(--surface); border: 1px solid var(--line); border-radius: 16px; padding: 22px 20px; margin-bottom: 16px; }
+  section.main { border-color: var(--accent); }
+  h2 { font-size: 20px; margin: 0 0 6px; }
+  .why { color: var(--muted); margin: 0 0 16px; }
+  ol { margin: 14px 0 0; padding-left: 22px; }
+  li { margin: 6px 0; }
+  .btn { display: block; text-align: center; text-decoration: none; font-weight: 700; padding: 14px 18px; border-radius: 999px;
+    background: var(--grad); color: var(--bg); }
+  .btn.ghost { background: transparent; color: var(--text); border: 1px solid var(--line); }
+  code { background: #18202f; padding: 2px 8px; border-radius: 6px; font-size: 15px; word-break: break-all; }
+  .big { display: block; text-align: center; font-size: 22px; font-weight: 700; color: var(--accent); margin: 12px 0 4px; }
+  small { color: var(--muted); }
+  details { margin-top: 8px; }
+  summary { cursor: pointer; color: var(--muted); padding: 8px 0; }
+  a { color: var(--accent); }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="/icon.svg" alt="">
+    <div><h1>Descarga PaloBox</h1><p>Tu música, fotos y archivos, en todos tus dispositivos.</p></div>
+  </header>
+
+  {{define "android"}}
+  <section class="{{if eq .Device "android"}}main{{end}}">
+    <h2>Android</h2>
+    <p class="why">La app suena con la pantalla bloqueada y empieza sola cuando le pasas la música desde otro dispositivo.</p>
+    <a class="btn" href="/apk" download>Descargar PaloBox para Android</a>
+    {{if .Version}}<p><small>Versión {{.Version}} · {{.Size}}</small></p>{{end}}
+    <ol>
+      <li>Toca <b>Descargar</b> y abre el archivo cuando termine.</li>
+      <li>Si el celular lo pide, permite <b>Instalar apps desconocidas</b> para tu navegador y vuelve atrás.</li>
+      <li>Toca <b>Instalar</b> y entra con tu usuario.</li>
+      <li>Si ya tenías PaloBox instalada desde Chrome, desinstala esa: es la del ícono con la marca de Chrome.</li>
+    </ol>
+  </section>
+  {{end}}
+
+  {{define "tv"}}
+  <section class="{{if eq .Device "tv"}}main{{end}}">
+    <h2>Televisor (Google TV / Android TV)</h2>
+    <p class="why">Cuando le pasas la música desde el celular, el televisor se enciende y suena solo.</p>
+    <ol>
+      <li>En el televisor, instala <b>Downloader</b> (de AFTVnews) desde Google Play.</li>
+      {{if .Code}}<li>Ábrelo y escribe el código:<span class="big">{{.Code}}</span><small>o la dirección palobox.dpdns.org/apk</small></li>
+      {{else}}<li>Ábrelo y escribe esta dirección:<span class="big">palobox.dpdns.org/apk</span></li>{{end}}
+      <li>Si pide permiso, permite <b>Instalar apps desconocidas</b> para Downloader, y luego toca <b>Instalar</b>.</li>
+      <li>Para que se encienda sola: <b>Ajustes → Apps → Acceso especial → Mostrar sobre otras apps → PaloBox</b>.</li>
+    </ol>
+  </section>
+  {{end}}
+
+  {{define "ios"}}
+  <section class="{{if eq .Device "ios"}}main{{end}}">
+    <h2>iPhone y iPad</h2>
+    <p class="why">En el iPhone PaloBox se agrega a la pantalla de inicio desde Safari, sin App Store.</p>
+    <ol>
+      <li>Abre <b>palobox.dpdns.org</b> en <b>Safari</b>.</li>
+      <li>Toca <b>Compartir</b> (el cuadro con la flecha hacia arriba).</li>
+      <li>Elige <b>Agregar a inicio</b> y luego <b>Agregar</b>.</li>
+      <li>Abre PaloBox desde su ícono y entra con tu usuario.</li>
+    </ol>
+    {{if eq .Device "ios"}}<p><a class="btn" href="/">Abrir PaloBox en Safari</a></p>{{end}}
+  </section>
+  {{end}}
+
+  {{define "web"}}
+  <section class="{{if eq .Device "web"}}main{{end}}">
+    <h2>Computador</h2>
+    <p class="why">En el computador PaloBox funciona en el navegador, sin instalar nada.</p>
+    <a class="btn {{if ne .Device "web"}}ghost{{end}}" href="/">Abrir PaloBox</a>
+  </section>
+  {{end}}
+
+  {{if eq .Device "android"}}{{template "android" .}}{{else if eq .Device "tv"}}{{template "tv" .}}{{else if eq .Device "ios"}}{{template "ios" .}}{{else}}{{template "web" .}}{{end}}
+
+  <details>
+    <summary>¿Otro dispositivo?</summary>
+    {{if ne .Device "android"}}{{template "android" .}}{{end}}
+    {{if ne .Device "tv"}}{{template "tv" .}}{{end}}
+    {{if ne .Device "ios"}}{{template "ios" .}}{{end}}
+    {{if ne .Device "web"}}{{template "web" .}}{{end}}
+  </details>
+</main>
+</body>
+</html>

@@ -36,19 +36,26 @@ export async function api(path, opts) {
 const installed = () => matchMedia('(display-mode: standalone)').matches || navigator.standalone;
 const ios = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 let installPrompt = null;
+// En Android se ofrece la app propia (página /app, landing.go), también a quien instaló la de Chrome: solo la app
+// suena con la pantalla bloqueada y se despierta cuando le pasan la música.
+const inApp = /PaloBoxApp\//.test(navigator.userAgent);
+const android = /Android/.test(navigator.userAgent) && !inApp;
 function showInstall() {
-  const show = !installed() && matchMedia('(pointer: coarse)').matches && (!!installPrompt || ios);
+  const show = !inApp && matchMedia('(pointer: coarse)').matches && (android || (!installed() && (!!installPrompt || ios)));
   for (const box of document.querySelectorAll('.install')) {
     box.hidden = !show;
-    box.querySelector('p').textContent = installPrompt
-      ? 'Instala PaloBox en tu celular: abre más rápido, ocupa toda la pantalla y te deja escuchar tu música sin conexión.'
-      : 'Instala PaloBox en tu celular: toca Compartir (el cuadro con la flecha hacia arriba) y luego «Agregar a inicio».';
-    box.querySelector('button').hidden = !installPrompt;
+    box.querySelector('p').textContent = android
+      ? 'Descarga la app de PaloBox para Android: suena con la pantalla bloqueada y empieza sola cuando le pasas la música desde otro dispositivo.'
+      : installPrompt
+        ? 'Instala PaloBox en tu celular: abre más rápido, ocupa toda la pantalla y te deja escuchar tu música sin conexión.'
+        : 'Instala PaloBox en tu celular: toca Compartir (el cuadro con la flecha hacia arriba) y luego «Agregar a inicio».';
+    box.querySelector('button').hidden = !android && !installPrompt;
   }
 }
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); installPrompt = e; showInstall(); });
 window.addEventListener('appinstalled', () => { installPrompt = null; showInstall(); });
 for (const b of document.querySelectorAll('.install button')) b.onclick = async () => {
+  if (android) return void (location.href = '/app');
   const p = installPrompt;
   if (!p) return;
   installPrompt = null; // cada aviso del navegador sirve una sola vez; si lo rechaza, Chrome manda otro más adelante
@@ -249,6 +256,10 @@ export async function start() {
   document.body.classList.toggle('music-only', musicOnly);
   userName = me.name;
   restore(me.name);
+  // App de Android con una versión más vieja que la publicada en /app: se avisa una vez por apertura.
+  if (window.PaloTv?.version) fetch('/app/version').then((r) => r.text()).then((v) => {
+    if (+v > window.PaloTv.version()) toast('Hay una versión nueva de la app de PaloBox.', { sticky: true, action: { label: 'Descargar', run: () => (location.href = '/apk') } });
+  }).catch(() => {});
   goOnline(); // si venía de estar sin conexión
   watch();
   $('#login').hidden = true;

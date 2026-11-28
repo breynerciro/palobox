@@ -11,4 +11,5 @@ BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
 "$BT/zipalign" -f -p 4 app/build/outputs/apk/release/app-release-unsigned.apk app-release-unsigned-aligned.apk
 "$BT/apksigner" sign --ks android.keystore --ks-key-alias palobox --ks-pass env:PASS --key-pass env:PASS \
   --out app-release-signed.apk app-release-unsigned-aligned.apk
+sed -n 's/^ *versionCode \([0-9]*\).*/\1/p' app/build.gradle > app-version # la versión que anuncia /app (landing.go)
 echo "listo: $(pwd)/app-release-signed.apk"

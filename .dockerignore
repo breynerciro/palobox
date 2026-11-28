@@ -7,3 +7,7 @@ compose.yml
 .env
 *.txt
 **/__pycache__
+# De android/ solo hace falta la APK firmada y su versión (gradle deja cientos de MB en build/).
+android
+!android/app-release-signed.apk
+!android/app-version

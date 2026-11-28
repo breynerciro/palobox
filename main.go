@@ -154,6 +154,9 @@ func (a *app) routes() http.Handler {
 	})
 	version := hex.EncodeToString(h.Sum(nil))[:12]
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, version) })
+	mux.HandleFunc("GET /app", landing) // página de descarga, pública (landing.go)
+	mux.HandleFunc("GET /apk", apk)     // corta, para escribirla en el televisor
+	mux.HandleFunc("GET /app/version", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, apkVersion()) })
 	static := http.FileServerFS(web)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		// private: sin él Cloudflare reemplaza no-cache por su «Browser Cache TTL» (4 h) y el celular se queda con la interfaz vieja.
