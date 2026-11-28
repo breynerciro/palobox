@@ -342,7 +342,10 @@ function tvNow() {
 }
 // paloWake: la app de Android se despertó con un push («suena aquí»): la página pudo estar congelada y su flujo de
 // eventos, muerto. Se reconecta aunque no esté a la vista; la foto que llega la pone a sonar (syncRoom).
-window.paloWake = () => { if (user && !local) jam.connect(applyJam); };
+// En el televisor, además, se abre «Reproduciendo» cuando empiece a sonar aquí, como cuando se le manda música por Cast.
+// ?despertar: la app arrancó desde cero por el push (android/…/PushService.java).
+let wakeNp = tv && new URLSearchParams(location.search).has('despertar');
+window.paloWake = () => { wakeNp = tv; if (user && !local) jam.connect(applyJam); };
 window.paloTv = (cmd, arg) => ({ play: () => !playing() && toggle(), pause: () => playing() && toggle(), next: () => next(), prev, seek: () => seekTo(arg) })[cmd]?.();
 for (const ev of ['loadedmetadata', 'playing', 'pause', 'seeked', 'ratechange']) audio.addEventListener(ev, positionState);
 const mix = (a) => {
@@ -866,6 +869,10 @@ function applyJam(s) {
   room = s.room;
   skipMark = s.skip || null;
   here = !room || devices.some((d) => d.me && d.active);
+  if (wakeNp && room?.playing && here) {
+    wakeNp = false;
+    if (!$('#np').open) $('#np').showModal();
+  }
   document.body.classList.toggle('in-room', !!room);
   document.body.classList.toggle('own-stream', !!room && !room.open); // sala propia: no es «compartida»
   if (room) return syncRoom();

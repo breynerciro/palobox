@@ -1,6 +1,7 @@
 package org.dpdns.palobox.twa;
 
 import android.content.Context;
+import android.content.Intent;
 import android.os.Handler;
 import android.os.Looper;
 import android.webkit.WebView;
@@ -44,8 +45,18 @@ public class PushService extends FirebaseMessagingService {
         PlaybackService.start(this);
         new Handler(Looper.getMainLooper()).post(() -> {
             WebView w = Web.peek();
-            if (w == null) Web.get(this); // el proceso se había cerrado: la página arranca y se conecta sola
-            else w.evaluateJavascript("window.paloWake&&window.paloWake()", null);
+            if (w == null) { // el proceso se había cerrado: la página arranca y se conecta sola
+                Web.woken = true;
+                Web.get(this);
+            } else w.evaluateJavascript("window.paloWake&&window.paloWake()", null);
+            // En el televisor, como Spotify por Cast: se enciende y muestra lo que suena. Con la pantalla apagada Google
+            // TV no deja sonar a nadie. Abrir una pantalla desde segundo plano exige «Mostrar sobre otras apps».
+            if (Web.tv(this)) {
+                try {
+                    startActivity(new Intent(this, LauncherActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra(LauncherActivity.WAKE, true));
+                } catch (Exception ignored) { // sin el permiso: suena solo si el televisor ya estaba encendido
+                }
+            }
         });
     }
 }

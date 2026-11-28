@@ -24,6 +24,7 @@ import android.window.OnBackInvokedDispatcher;
  */
 public class LauncherActivity extends Activity {
     private static final int PICK = 1;
+    static final String WAKE = "despertar"; // abierta por un push en el televisor: enciende la pantalla
     private WebView web;
     private FrameLayout root;
     private ValueCallback<Uri[]> picked;
@@ -86,6 +87,10 @@ public class LauncherActivity extends Activity {
 
     // Un enlace de PaloBox (una invitación, un jam) abre aquí, en la página ya cargada.
     private void open(Intent i) {
+        if (i != null && i.getBooleanExtra(WAKE, false)) {
+            setTurnScreenOn(true);
+            setShowWhenLocked(true);
+        }
         Uri u = i == null ? null : i.getData();
         if (u != null && BuildConfig.HOST.equals(u.getHost())) web.loadUrl(u.toString());
     }

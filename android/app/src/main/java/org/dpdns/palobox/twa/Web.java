@@ -19,6 +19,7 @@ import android.webkit.WebViewClient;
  */
 final class Web {
     private static WebView view;
+    static boolean woken; // la crea un push: la página lo sabe por ?despertar (abre «Reproduciendo» en el televisor)
     private static MutableContextWrapper ctx; // se pasa a la pantalla mientras está abierta: diálogos y selectores la necesitan
 
     static WebView get(Context c) {
@@ -61,8 +62,11 @@ final class Web {
 
     /** En el televisor la app abre con ?tv (web/tv.js); en el teléfono, en el inicio de siempre. */
     static String home(Context c) {
-        boolean tv = c.getSystemService(UiModeManager.class).getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
-        return "https://" + BuildConfig.HOST + (tv ? "/?tv" : "/");
+        return "https://" + BuildConfig.HOST + (tv(c) ? "/?tv" + (woken ? "&despertar" : "") : "/");
+    }
+
+    static boolean tv(Context c) {
+        return c.getSystemService(UiModeManager.class).getCurrentModeType() == Configuration.UI_MODE_TYPE_TELEVISION;
     }
 
     /** Manda un comando del sistema (notificación, pantalla bloqueada, control remoto) a la página: web/player.js. */
