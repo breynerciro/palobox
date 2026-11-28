@@ -5,6 +5,8 @@ set -euo pipefail
 cd "$(dirname "$0")"
 export JAVA_HOME=${JAVA_HOME_17:-$(mise where java@temurin-17)}
 export ANDROID_HOME=${ANDROID_HOME:-$HOME/Android/Sdk}
+# Configuración de Firebase (push), fuera de git: npx firebase-tools apps:sdkconfig ANDROID 1:479904563267:android:eaf7142a79c619c87e94f6 --project palobox-app -o app/google-services.json
+[ -f app/google-services.json ] || { echo "build: falta app/google-services.json (ver el comentario de arriba)" >&2; exit 1; }
 export PASS=$(cat keystore.pass)
 BT=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)
 ./gradlew -q assembleRelease

@@ -8,3 +8,4 @@ app/build/
 .gradle/
 local.properties
 app-version
+app/google-services.json
