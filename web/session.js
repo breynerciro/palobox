@@ -118,9 +118,10 @@ function enterOffline() {
   isAdmin = false;
   document.body.classList.add('music-only');
   // Volvió el servidor: la app vuelve al modo normal en el acto, sin recargar; lo que suena no se corta (goOnline).
+  // También en segundo plano: si no, con la pantalla bloqueada la sala no se entera de que le pasaron la música.
   let busy = false;
   const back = async () => {
-    if (busy || document.visibilityState !== 'visible') return;
+    if (busy) return;
     busy = true;
     if (!(await reachable())) return void (busy = false);
     clearInterval(timer);

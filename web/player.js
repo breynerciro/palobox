@@ -266,6 +266,7 @@ async function mseFeed(d = deck) {
       }
       await sbDone(d.sb);
       if (deck !== d) return;
+      hop(); // si ya estaba trabado en el hueco antes de que llegara la pista siguiente
       d.part.off += MSE_SLICE;
       d.end = Math.max(d.end, d.sb.buffered.end(d.sb.buffered.length - 1));
       if (d.part.off >= buf.byteLength) { // pista completa: ahora sí se sabe lo que de verdad dura
@@ -279,7 +280,17 @@ async function mseFeed(d = deck) {
     d.busy = false;
   }
 }
-audio.addEventListener('waiting', () => deck?.mse && mseFeed()); // se acabó lo agregado antes de tiempo: no hay timeupdate que lo pida
+// hop: cada WebM Opus empieza 7 ms antes de cero (retardo del códec), así que entre una pista y la siguiente queda
+// un hueco de milisegundos. Chrome lo salta solo; Safari se queda quieto ahí hasta que uno mueve el tiempo.
+function hop() {
+  const b = audio.buffered, t = audio.currentTime;
+  for (let k = 0; k < b.length; k++) {
+    if (t >= b.start(k) && t < b.end(k)) return;
+    if (b.start(k) > t && b.start(k) - t < 0.5) return void (audio.currentTime = b.start(k));
+  }
+}
+// se acabó lo agregado antes de tiempo, o se trabó en un hueco: no hay timeupdate que lo pida
+audio.addEventListener('waiting', () => { if (deck?.mse) { hop(); mseFeed(); } });
 
 // deckTick sigue al audio unido: cuando pasa solo a la pista siguiente, aquí solo hay que pintarla.
 function deckTick() {
