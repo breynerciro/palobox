@@ -22,6 +22,14 @@ final class Bridge {
     @JavascriptInterface
     public String token() { return PushService.token(app); }
 
+    /** Nombre del equipo para la lista de dispositivos: el que le puso su dueño en Ajustes (el mismo que muestra
+     *  Spotify, como «CiroTV»), o el modelo. */
+    @JavascriptInterface
+    public String name() {
+        String n = android.provider.Settings.Global.getString(app.getContentResolver(), "device_name");
+        return n == null || n.isBlank() ? android.os.Build.MODEL : n.trim();
+    }
+
     @JavascriptInterface
     public int version() { return BuildConfig.VERSION_CODE; }
 }

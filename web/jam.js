@@ -35,7 +35,8 @@ function take(s) {
 export function connect(onState) {
   close();
   handler = onState;
-  source = new EventSource(`/api/jam/events?device=${deviceId}&name=${encodeURIComponent(deviceName(navigator.userAgent))}`);
+  const name = window.PaloTv?.name?.() || deviceName(navigator.userAgent); // la app de Android dice el nombre del equipo
+  source = new EventSource(`/api/jam/events?device=${deviceId}&name=${encodeURIComponent(name)}`);
   source.onopen = () => {
     lastSeq = 0; // tras reconectar (o reiniciarse el servidor) la numeración empieza de nuevo
     // La app de Android deja su token de push: dormida sigue en la lista y un aviso la despierta (internal/jam/sleep.go).
