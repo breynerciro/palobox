@@ -84,16 +84,18 @@ final class Player {
             if (art != null) meta.putBitmap(MediaMetadata.METADATA_KEY_ALBUM_ART, art);
             session.setMetadata(meta.build());
             boolean now = o.optBoolean("playing");
+            boolean here = now && o.optBoolean("here", true);
+            // «Reproduciendo» solo si el sonido sale de aquí: si no, el inicio del televisor mostraría PaloBox sonando en
+            // silencio y quien decide qué cerrar por memoria (el launcher del televisor) la creería en uso.
             session.setPlaybackState(new PlaybackState.Builder()
                     .setActions(PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE | PlaybackState.ACTION_PLAY_PAUSE
                             | PlaybackState.ACTION_SKIP_TO_NEXT | PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_SEEK_TO)
-                    .setState(now ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED, o.optLong("pos"), now ? 1f : 0f)
+                    .setState(here ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED, o.optLong("pos"), here ? 1f : 0f)
                     .build());
             // Android avisa a quien muestra lo que suena (el inicio del televisor) cuando una sesión se activa, no
             // cuando empieza a sonar: al arrancar se vuelve a activar para que pase a mostrar esta y no la de otra app.
-            if (now && !playing) session.setActive(false);
+            if (here && !sounding) session.setActive(false);
             session.setActive(true);
-            boolean here = now && o.optBoolean("here", true);
             if (!here && sounding) silentSince = System.currentTimeMillis();
             playing = now;
             sounding = here;
