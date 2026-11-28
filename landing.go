@@ -53,7 +53,7 @@ func apkVersion() string {
 func landing(w http.ResponseWriter, r *http.Request) {
 	size := ""
 	if st, err := os.Stat(apkFile); err == nil {
-		size = fmt.Sprintf("%.1f MB", float64(st.Size())/1e6)
+		size = strings.Replace(fmt.Sprintf("%.1f MB", float64(st.Size())/1e6), ".", ",", 1) // coma decimal, como se escribe aquí
 	}
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "private, no-cache")
