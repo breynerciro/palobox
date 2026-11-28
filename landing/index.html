@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#090D16">
+<link rel="icon" href="/icon.svg">
+<link rel="preload" href="/app/archivo.woff2" as="font" type="font/woff2" crossorigin>
+<title>Descarga PaloBox</title>
+<style>
+  @font-face { font-family: Archivo; src: url(/app/archivo.woff2) format("woff2"); font-weight: 100 900; font-stretch: 62% 125%; font-display: swap; }
+  :root {
+    color-scheme: dark;
+    --noche: #090D16; --capa: #121A2B; --borde: #263145; --tinta: #F8FAFC; --niebla: #94A3B8;
+    --menta: #00F5A0; --cian: #00F2FE; --ola: linear-gradient(135deg, var(--menta), var(--cian));
+  }
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body { margin: 0; background: var(--noche); color: var(--tinta); font: 400 17px/1.5 Archivo, system-ui, sans-serif; overflow-x: hidden; }
+  main { max-width: 620px; margin: 0 auto; padding: 0 20px 64px; }
+  a { color: inherit; }
+  :focus-visible { outline: 3px solid var(--cian); outline-offset: 3px; }
+
+  /* Encabezado: el ecualizador del logo, en grande. Es lo único que se mueve: sube una vez al cargar. */
+  .marca { display: flex; align-items: center; gap: 10px; padding: 24px 0 0; font-weight: 700; font-size: 18px; text-decoration: none; }
+  .marca img { width: 32px; height: 32px; }
+  .hero { position: relative; padding: 36px 0 32px; }
+  .eq { display: flex; align-items: flex-end; gap: 10px; height: 132px; margin-bottom: 26px; }
+  .eq i { display: block; width: 30px; border-radius: 15px; background: var(--ola); transform-origin: bottom; animation: sube .9s cubic-bezier(.2, .9, .25, 1.15) both; }
+  .eq i:nth-child(1) { height: 132px; }
+  .eq i:nth-child(2) { height: 90px; animation-delay: .12s; background: var(--tinta); }
+  .eq i:nth-child(3) { height: 56px; animation-delay: .24s; }
+  @keyframes sube { from { transform: scaleY(.08); } }
+  @media (prefers-reduced-motion: reduce) { .eq i { animation: none; } }
+  h1 { margin: 0; font-weight: 900; font-stretch: 62%; font-size: clamp(64px, 19vw, 112px); line-height: .86; letter-spacing: -.01em; }
+  .hero p { max-width: 30ch; margin: 20px 0 0; color: var(--niebla); font-size: 18px; }
+
+  /* Un botón por dispositivo. El del equipo que abre la página va primero y con el degradado del logo. */
+  .equipos { display: grid; align-content: start; align-self: start; gap: 12px; margin: 8px 0 0; padding: 0; list-style: none; }
+  .equipo { display: flex; align-items: center; gap: 16px; min-height: 84px; padding: 14px 20px; border-radius: 22px;
+    background: var(--capa); border: 1px solid var(--borde); text-decoration: none; transition: border-color .15s; }
+  .equipo:hover { border-color: var(--niebla); }
+  .equipo svg { flex: none; width: 30px; height: 30px; }
+  .equipo b { display: block; font-weight: 800; font-stretch: 75%; font-size: 26px; line-height: 1.05; }
+  .equipo span { display: block; color: var(--niebla); font-size: 15px; }
+  .equipo.tuyo { background: var(--ola); border: 0; color: var(--noche); }
+  .equipo.tuyo span { color: #0b2a33; }
+  .equipo .codigo { display: inline-block; margin-left: 4px; padding: 0 10px; border-radius: 8px; background: var(--noche); color: var(--menta);
+    font-weight: 800; font-stretch: 100%; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
+  .equipo.tuyo .codigo { color: var(--menta); }
+
+  /* Pasos: son una secuencia, por eso van numerados. */
+  .pasos { margin-top: 48px; scroll-margin-top: 16px; }
+  .pasos h2 { margin: 0 0 4px; font-weight: 900; font-stretch: 62%; font-size: 44px; line-height: 1; }
+  .pasos > p { margin: 0 0 18px; color: var(--niebla); }
+  ol { margin: 0; padding: 0; list-style: none; counter-reset: paso; }
+  ol li { counter-increment: paso; position: relative; padding: 14px 0 14px 56px; border-top: 1px solid var(--borde); }
+  ol li::before { content: counter(paso); position: absolute; left: 0; top: 6px; width: 40px; text-align: center;
+    font-weight: 900; font-stretch: 62%; font-size: 38px; line-height: 1; background: var(--ola); -webkit-background-clip: text; background-clip: text; color: transparent; }
+  .grande { display: block; margin: 6px 0 2px; font-weight: 900; font-stretch: 75%; font-size: 40px; line-height: 1.1; color: var(--menta); font-variant-numeric: tabular-nums; letter-spacing: .03em; }
+  .ruta { color: var(--tinta); font-weight: 700; }
+  .nota { color: var(--niebla); font-size: 15px; }
+  footer { margin-top: 56px; padding-top: 20px; border-top: 1px solid var(--borde); color: var(--niebla); font-size: 15px; }
+  footer a { color: var(--menta); }
+
+  /* Televisor: se ve de lejos y se maneja con flechas. */
+  @media (min-width: 900px) {
+    main { max-width: 1040px; padding: 0 48px 64px; display: grid; grid-template-columns: 1.1fr 1fr; column-gap: 64px; }
+    .marca, .hero { grid-column: 1 / -1; }
+    .hero { min-height: 340px; padding-right: 300px; }
+    .eq { position: absolute; right: 40px; bottom: 32px; height: 300px; gap: 14px; margin: 0; }
+    .eq i { width: 50px; border-radius: 25px; }
+    .eq i:nth-child(1) { height: 300px; } .eq i:nth-child(2) { height: 205px; } .eq i:nth-child(3) { height: 125px; }
+    .pasos { margin-top: 8px; }
+    footer { grid-column: 1 / -1; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <a class="marca" href="/"><img src="/icon.svg" alt="">PaloBox</a>
+
+  <section class="hero">
+    <div class="eq" aria-hidden="true"><i></i><i></i><i></i></div>
+    <h1>Tu música,<br>en todas<br>tus pantallas.</h1>
+    <p>Escúchala en el celular, el televisor o el computador, y pásala de uno a otro con un toque.</p>
+  </section>
+
+  {{define "android"}}<li><a class="equipo{{if eq .Device "android"}} tuyo{{end}}" href="/apk" download>
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.6 9.48l1.84-3.18a.38.38 0 0 0-.66-.38l-1.86 3.23a11.43 11.43 0 0 0-9.84 0L5.22 5.92a.38.38 0 0 0-.66.38l1.84 3.18A10.8 10.8 0 0 0 1 18h22a10.8 10.8 0 0 0-5.4-8.52zM7 15.25a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5zm10 0a1.25 1.25 0 1 1 0-2.5 1.25 1.25 0 0 1 0 2.5z"/></svg>
+    <div><b>Descargar para Android</b><span>App para el celular{{if .Size}}, {{.Size}}{{end}}</span></div></a></li>{{end}}
+
+  {{define "tv"}}<li><a class="equipo{{if eq .Device "tv"}} tuyo{{end}}" href="#tv">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="2" y="4" width="20" height="13" rx="2"/><path d="M8 21h8"/></svg>
+    <div><b>Instalar en el televisor</b><span>{{if .Code}}Downloader <span class="codigo">{{.Code}}</span>{{else}}Google TV y Android TV{{end}}</span></div></a></li>{{end}}
+
+  {{define "ios"}}<li><a class="equipo{{if eq .Device "ios"}} tuyo{{end}}" href="#iphone">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="6" y="2" width="12" height="20" rx="3"/><path d="M11 18h2"/></svg>
+    <div><b>Instalar en iPhone</b><span>Desde Safari, sin App Store</span></div></a></li>{{end}}
+
+  {{define "web"}}<li><a class="equipo{{if eq .Device "web"}} tuyo{{end}}" href="/">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M1 20h22"/></svg>
+    <div><b>Abrir en el navegador</b><span>En el computador no hay que instalar nada</span></div></a></li>{{end}}
+
+  <ul class="equipos">
+    {{if eq .Device "android"}}{{template "android" .}}{{else if eq .Device "tv"}}{{template "tv" .}}{{else if eq .Device "ios"}}{{template "ios" .}}{{else}}{{template "web" .}}{{end}}
+    {{if ne .Device "android"}}{{template "android" .}}{{end}}
+    {{if ne .Device "tv"}}{{template "tv" .}}{{end}}
+    {{if ne .Device "ios"}}{{template "ios" .}}{{end}}
+    {{if ne .Device "web"}}{{template "web" .}}{{end}}
+  </ul>
+
+  {{define "pasos-android"}}<section class="pasos" id="android">
+    <h2>En Android</h2>
+    <p>Suena con la pantalla bloqueada y empieza sola cuando le pasas la música desde otro equipo.</p>
+    <ol>
+      <li>Toca <span class="ruta">Descargar para Android</span> y abre el archivo cuando termine.</li>
+      <li>Si el celular lo pide, permite <span class="ruta">Instalar apps desconocidas</span> para tu navegador y vuelve atrás.</li>
+      <li>Toca <span class="ruta">Instalar</span> y entra con tu usuario.</li>
+      <li>Si tenías PaloBox instalada desde Chrome, desinstala esa: es la que tiene la marca de Chrome en el ícono.</li>
+    </ol>
+  </section>{{end}}
+
+  {{define "pasos-tv"}}<section class="pasos" id="tv">
+    <h2>En el televisor</h2>
+    <p>Cuando le pasas la música desde el celular, el televisor se enciende y suena solo.</p>
+    <ol>
+      <li>Instala <span class="ruta">Downloader</span> desde Google Play y ábrelo.</li>
+      {{if .Code}}<li>Escribe este código y toca <span class="ruta">Go</span>:<span class="grande">{{.Code}}</span><span class="nota">O la dirección palobox.dpdns.org/apk</span></li>
+      {{else}}<li>Escribe esta dirección:<span class="grande">palobox.dpdns.org/apk</span></li>{{end}}
+      <li>Si lo pide, permite <span class="ruta">Instalar apps desconocidas</span> para Downloader y toca <span class="ruta">Instalar</span>.</li>
+      <li>Para que se encienda solo, activa <span class="ruta">Ajustes › Apps › Acceso especial › Mostrar sobre otras apps › PaloBox</span>.</li>
+    </ol>
+  </section>{{end}}
+
+  {{define "pasos-ios"}}<section class="pasos" id="iphone">
+    <h2>En iPhone</h2>
+    <p>PaloBox se agrega a la pantalla de inicio desde Safari.</p>
+    <ol>
+      <li>Abre <span class="ruta">palobox.dpdns.org</span> en Safari.</li>
+      <li>Toca <span class="ruta">Compartir</span>, el cuadro con la flecha hacia arriba.</li>
+      <li>Elige <span class="ruta">Agregar a inicio</span> y luego <span class="ruta">Agregar</span>.</li>
+      <li>Abre PaloBox desde su ícono y entra con tu usuario.</li>
+    </ol>
+  </section>{{end}}
+
+  <div>
+    {{if eq .Device "tv"}}{{template "pasos-tv" .}}{{template "pasos-android" .}}{{template "pasos-ios" .}}
+    {{else if eq .Device "ios"}}{{template "pasos-ios" .}}{{template "pasos-android" .}}{{template "pasos-tv" .}}
+    {{else}}{{template "pasos-android" .}}{{template "pasos-tv" .}}{{template "pasos-ios" .}}{{end}}
+  </div>
+
+  <footer>¿Ya la tienes? <a href="/">Abre PaloBox</a>{{if .Version}}. App de Android, versión {{.Version}}.{{end}}</footer>
+</main>
+</body>
+</html>

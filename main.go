@@ -26,8 +26,8 @@ import (
 	"palobox/internal/module"
 	"palobox/internal/music"
 	"palobox/internal/photos"
-	"palobox/internal/spotdl"
 	"palobox/internal/push"
+	"palobox/internal/spotdl"
 	"palobox/internal/store"
 	"palobox/internal/uploads"
 )
@@ -156,6 +156,7 @@ func (a *app) routes() http.Handler {
 	mux.HandleFunc("GET /api/version", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, version) })
 	mux.HandleFunc("GET /app", landing) // página de descarga, pública (landing.go)
 	mux.HandleFunc("GET /apk", apk)     // corta, para escribirla en el televisor
+	mux.HandleFunc("GET /app/archivo.woff2", landingFontHandler)
 	mux.HandleFunc("GET /app/version", func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, apkVersion()) })
 	static := http.FileServerFS(web)
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {

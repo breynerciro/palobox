@@ -13,8 +13,13 @@ import (
 // Página de descarga (/app): la app de Android para el celular y el televisor, y los pasos para el iPhone y el
 // computador. Es pública: se abre antes de tener la app o la sesión. Muestra primero lo del dispositivo que la abre.
 
-//go:embed landing.html
+//go:embed landing/index.html
 var landingHTML string
+
+// La letra de la página (Archivo, ver landing/FUENTE): va en el binario porque la página no carga nada de afuera (CSP).
+//
+//go:embed landing/archivo.woff2
+var landingFont []byte
 var landingTmpl = template.Must(template.New("descarga").Parse(landingHTML))
 
 // apkFile: la APK firmada, que viaja en la imagen (Dockerfile); a su lado, apkFile+".version" con su versionCode
@@ -53,6 +58,12 @@ func landing(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Header().Set("Cache-Control", "private, no-cache")
 	landingTmpl.Execute(w, map[string]string{"Device": device(r.UserAgent()), "Version": apkVersion(), "Size": size, "Code": downloaderCode})
+}
+
+func landingFontHandler(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "font/woff2")
+	w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+	w.Write(landingFont)
 }
 
 // apk entrega la app de Android. private, no-cache: si no, Cloudflare la guarda 4 h y una versión nueva tardaría en llegar.

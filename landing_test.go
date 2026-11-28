@@ -30,18 +30,18 @@ func TestLanding(t *testing.T) {
 		}
 		return res, b.String()
 	}
-	first := func(body string) string { // la primera sección es la del dispositivo
-		i := strings.Index(body, "<section")
-		return body[i : i+strings.Index(body[i:], "</section>")]
+	first := func(body string) string { // el primer botón es el del dispositivo, y lleva el degradado
+		i := strings.Index(body, "<li>")
+		return body[i : i+strings.Index(body[i:], "</li>")]
 	}
 	for ua, want := range map[string]string{
-		"Mozilla/5.0 (Linux; Android 12; TECNO CH7n) Chrome/140 Mobile":             "Descargar PaloBox para Android",
+		"Mozilla/5.0 (Linux; Android 12; TECNO CH7n) Chrome/140 Mobile":              "Descargar para Android",
 		"Mozilla/5.0 (Linux; Android 14; onn. Full HD Streaming Device; Android TV)": "Downloader",
-		"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/604.1":        "Agregar a inicio",
-		"Mozilla/5.0 (X11; Linux x86_64) Chrome/140":                                 "Abrir PaloBox",
+		"Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) Safari/604.1":        "Instalar en iPhone",
+		"Mozilla/5.0 (X11; Linux x86_64) Chrome/140":                                 "Abrir en el navegador",
 	} {
 		res, body := get("/app", ua) // sin sesión
-		if res.StatusCode != 200 || !strings.Contains(first(body), want) {
+		if res.StatusCode != 200 || !strings.Contains(first(body), want) || !strings.Contains(first(body), "tuyo") {
 			t.Errorf("%s: %d, primera sección sin %q", ua, res.StatusCode, want)
 		}
 	}
