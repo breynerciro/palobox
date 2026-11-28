@@ -17,39 +17,41 @@
   * { box-sizing: border-box; }
   html { -webkit-text-size-adjust: 100%; }
   body { margin: 0; background: var(--noche); color: var(--tinta); font: 400 17px/1.5 Archivo, system-ui, sans-serif; overflow-x: hidden; }
-  main { max-width: 620px; margin: 0 auto; padding: 0 20px 64px; }
+  main { max-width: 620px; margin: 0 auto; padding: 0 20px 24px; }
   a { color: inherit; }
   :focus-visible { outline: 3px solid var(--cian); outline-offset: 3px; }
 
-  /* Encabezado: el ecualizador del logo, en grande. Es lo único que se mueve: sube una vez al cargar. */
-  .marca { display: flex; align-items: center; gap: 10px; padding: 24px 0 0; font-weight: 700; font-size: 18px; text-decoration: none; }
-  .marca img { width: 32px; height: 32px; }
-  .hero { position: relative; padding: 28px 0 26px; }
-  .eq { display: flex; align-items: flex-end; gap: 8px; height: 76px; margin-bottom: 20px; }
-  .eq i { display: block; width: 22px; border-radius: 11px; background: var(--ola); transform-origin: bottom; animation: sube .9s cubic-bezier(.2, .9, .25, 1.15) both; }
-  .eq i:nth-child(1) { height: 76px; }
-  .eq i:nth-child(2) { height: 52px; animation-delay: .12s; background: var(--tinta); }
-  .eq i:nth-child(3) { height: 32px; animation-delay: .24s; }
+  /* Todo cabe en la pantalla del celular sin deslizar: los tamaños siguen al alto de la pantalla (svh) además del ancho. */
+  .marca { display: flex; align-items: center; gap: 10px; padding: 16px 0 0; font-weight: 700; font-size: 17px; text-decoration: none; }
+  .marca img { width: 28px; height: 28px; }
+  /* Encabezado: el titular y, a su lado, el ecualizador del logo. Es lo único que se mueve: sube una vez al cargar. */
+  .hero { display: grid; grid-template-columns: 1fr auto; align-items: end; column-gap: 12px; padding: clamp(14px, 3svh, 32px) 0 clamp(14px, 2.6svh, 28px); }
+  h1, .eq { grid-row: 1; font-size: min(13vw, 6.2svh, 96px); }
+  h1 { grid-column: 1; margin: 0; font-weight: 900; font-stretch: 62%; line-height: .88; letter-spacing: -.01em; }
+  .eq { grid-column: 2; display: flex; align-items: flex-end; gap: .14em; padding-bottom: .1em; }
+  .eq i { display: block; width: .4em; border-radius: .2em; background: var(--ola); transform-origin: bottom; animation: sube .9s cubic-bezier(.2, .9, .25, 1.15) both; }
+  .eq i:nth-child(1) { height: 2.5em; }
+  .eq i:nth-child(2) { height: 1.7em; animation-delay: .12s; background: var(--tinta); }
+  .eq i:nth-child(3) { height: 1.05em; animation-delay: .24s; }
   @keyframes sube { from { transform: scaleY(.08); } }
   @media (prefers-reduced-motion: reduce) { .eq i { animation: none; } }
-  h1 { margin: 0; font-weight: 900; font-stretch: 62%; font-size: clamp(52px, 15vw, 96px); line-height: .88; letter-spacing: -.01em; }
-  .hero p { max-width: 32ch; margin: 14px 0 0; color: var(--niebla); font-size: 18px; }
+  .hero p { grid-column: 1 / -1; margin: 10px 0 0; color: var(--niebla); font-size: 17px; }
 
   /* Un botón por dispositivo. El del equipo que abre la página va primero y con el degradado del logo. */
-  .equipos { display: grid; align-content: start; align-self: start; gap: 12px; margin: 8px 0 0; padding: 0; list-style: none; }
-  .equipo { display: flex; align-items: center; gap: 16px; min-height: 84px; padding: 14px 20px; border-radius: 22px;
+  .equipos { display: grid; align-content: start; gap: clamp(8px, 1.4svh, 12px); margin: 0; padding: 0; list-style: none; }
+  .equipo { display: flex; align-items: center; gap: 14px; min-height: clamp(60px, 9.4svh, 84px); padding: 8px 18px; border-radius: 20px;
     background: var(--capa); border: 1px solid var(--borde); text-decoration: none; transition: border-color .15s; }
   .equipo:hover { border-color: var(--niebla); }
-  .equipo svg { flex: none; width: 30px; height: 30px; }
-  .equipo b { display: block; font-weight: 800; font-stretch: 75%; font-size: 26px; line-height: 1.05; }
-  .equipo span { display: block; color: var(--niebla); font-size: 15px; }
+  .equipo svg { flex: none; width: 28px; height: 28px; }
+  .equipo b { display: block; font-weight: 800; font-stretch: 75%; font-size: 24px; line-height: 1.05; }
+  .equipo span { display: block; color: var(--niebla); font-size: 14px; }
   .equipo.tuyo { background: var(--ola); border: 0; color: var(--noche); }
   .equipo.tuyo span { color: #0b2a33; }
   .equipo .codigo { display: inline-block; margin-left: 4px; padding: 0 10px; border-radius: 8px; background: var(--noche); color: var(--menta);
     font-weight: 800; font-stretch: 100%; font-variant-numeric: tabular-nums; letter-spacing: .04em; }
   .equipo.tuyo .codigo { color: var(--menta); }
 
-  .equipos .ayudame { display: block; margin: 8px 0 0 20px; color: var(--niebla); font-size: 15px; }
+  .equipos .ayudame { display: block; margin: 6px 0 0 18px; color: var(--niebla); font-size: 15px; }
 
   /* Ayuda de cada equipo: una hoja que se abre sobre la página (con :target, sin JavaScript, para el televisor). */
   .ayuda { display: none; position: fixed; inset: 0; z-index: 2; align-items: flex-end; justify-content: center;
@@ -65,16 +67,13 @@
   .nota { margin: -8px 0 20px; color: var(--niebla); font-size: 15px; }
   .listo { display: block; padding: 14px; border-radius: 999px; background: var(--ola); color: var(--noche); text-align: center; font-weight: 800; text-decoration: none; }
   b.r { font-weight: 700; }
-  footer { margin-top: 40px; color: var(--niebla); font-size: 15px; }
+  footer { margin-top: clamp(14px, 3svh, 40px); color: var(--niebla); font-size: 15px; }
   footer a { color: var(--menta); }
 
   /* Televisor y computador: el ecualizador va al lado del titular y la hoja de ayuda, al centro. */
+  /* Televisor y computador: más ancho, y la hoja de ayuda al centro. */
   @media (min-width: 900px) {
     main { max-width: 760px; }
-    .hero { padding-right: 260px; }
-    .eq { position: absolute; right: 0; bottom: 30px; height: 220px; gap: 14px; margin: 0; }
-    .eq i { width: 44px; border-radius: 22px; }
-    .eq i:nth-child(1) { height: 220px; } .eq i:nth-child(2) { height: 150px; } .eq i:nth-child(3) { height: 92px; }
     .ayuda { align-items: center; }
     .hoja { border-radius: 26px; }
   }
@@ -87,7 +86,7 @@
   <section class="hero">
     <div class="eq" aria-hidden="true"><i></i><i></i><i></i></div>
     <h1>Tu música,<br>en todas<br>tus pantallas.</h1>
-    <p>Elige tu equipo y en un minuto estás escuchando.</p>
+    <p>Elige tu equipo y empieza a escuchar.</p>
   </section>
 
   {{define "android"}}<li><a class="equipo{{if eq .Device "android"}} tuyo{{end}}" href="/apk" download>
@@ -105,7 +104,7 @@
 
   {{define "web"}}<li><a class="equipo{{if eq .Device "web"}} tuyo{{end}}" href="/">
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M1 20h22"/></svg>
-    <div><b>Abrir en el navegador</b><span>En el computador no hay que instalar nada</span></div></a></li>{{end}}
+    <div><b>Abrir en el navegador</b><span>En el computador, sin instalar nada</span></div></a></li>{{end}}
 
   <ul class="equipos">
     {{if eq .Device "android"}}{{template "android" .}}{{else if eq .Device "tv"}}{{template "tv" .}}{{else if eq .Device "ios"}}{{template "ios" .}}{{else}}{{template "web" .}}{{end}}
